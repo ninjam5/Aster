@@ -117,6 +117,64 @@ def release_whisper_model() -> None:
     print("[Aster Ears] Faster-Whisper unloaded from VRAM.")
 
 
+# ── one-shot transcription for the Telegram voice-note path ───────────────────
+# A CPU instance is used when no LiveKit call is active so a voice note never
+# competes with llama-server for VRAM. Lazy-loaded and kept resident.
+_cpu_whisper: WhisperModel | None = None
+_cpu_whisper_lock = threading.Lock()
+
+
+def _get_cpu_whisper() -> WhisperModel:
+    """Lazily load (once) a CPU Whisper model for voice notes outside a call.
+
+    Kept resident after the first voice note (~1.5 GB RAM, zero VRAM) so
+    subsequent notes skip the cold-load cost. Used only when no LiveKit call
+    is holding the CUDA instance."""
+    global _cpu_whisper
+    if _cpu_whisper is None:
+        with _cpu_whisper_lock:
+            if _cpu_whisper is None:
+                print("[Aster Ears] Booting CPU Faster-Whisper (medium.en, 8-bit) for voice notes...")
+                _cpu_whisper = WhisperModel(
+                    WHISPER_MODEL_PATH,
+                    device="cpu",
+                    compute_type="int8",
+                )
+    return _cpu_whisper
+
+
+def format_transcript(text: str, speaker: str | None = None,
+                      mood: str | None = None) -> str:
+    """Attach the canonical [Speaker: X] / [Mood: Y] tags in front of a transcript."""
+    tags = ""
+    if speaker:
+        tags += f"[Speaker: {speaker}] "
+    if mood:
+        tags += f"[Mood: {mood}] "
+    return f"{tags}{text}".strip()
+
+
+def transcribe_file(path: str) -> str:
+    """Transcribe a 16 kHz mono WAV file to text.
+
+    Reuses the resident CUDA model when a LiveKit call holds it; otherwise a
+    lazy CPU instance keeps the voice-note path at zero extra VRAM.
+    """
+    model = _shared_whisper if _shared_whisper is not None else _get_cpu_whisper()
+    segments, _ = model.transcribe(
+        path,
+        beam_size=5,
+        language="en",
+        condition_on_previous_text=False,
+        initial_prompt="Aster is an AI assistant.",
+    )
+    text = " ".join(segment.text for segment in segments).strip()
+    # Whisper commonly mishears "Aster" as "Esther" — correct it.
+    text = re.sub(r'\bEsther\b', 'Aster', text)
+    text = re.sub(r'\besther\b', 'aster', text)
+    return text
+
+
 class LocalWhisperSTT(stt.STT):
     def __init__(self):
         super().__init__(
@@ -180,12 +238,11 @@ class LocalWhisperSTT(stt.STT):
             text = re.sub(r'\bEsther\b', 'Aster', text)
             text = re.sub(r'\besther\b', 'aster', text)
             transcript = text  # clean words — fed to the text-emotion fusion below
+            speaker = None
             try:
                 from tools.voice_recognition import identify_and_maybe_learn
                 speaker = identify_and_maybe_learn(audio, sample_rate=16000)
-                if speaker:
-                    text = f"[Speaker: {speaker}] {text}"
-                else:
+                if not speaker:
                     _notify_unknown_livekit_voice(audio)
             except Exception:
                 pass
@@ -193,18 +250,13 @@ class LocalWhisperSTT(stt.STT):
             # STT's outer acquire) + transcript content (Tier 0, CPU).  Confident
             # text content overrides prosody so high-arousal anger isn't misread
             # as 'happy' (see emotion_recognition.fuse_moods).
+            mood = None
             try:
                 from tools.emotion_recognition import detect_combined_emotion
                 mood = detect_combined_emotion(audio, transcript, sample_rate=16000)
-                # Insert [Mood: X] after [Speaker: X] if present, else at front.
-                if text.startswith("[Speaker:"):
-                    tag_end = text.index("]") + 1
-                    text = text[:tag_end] + f" [Mood: {mood}]" + text[tag_end:]
-                else:
-                    text = f"[Mood: {mood}] {text}"
             except Exception:
                 pass
-            return text
+            return format_transcript(text, speaker=speaker, mood=mood)
 
         loop = asyncio.get_running_loop()
         text = await loop.run_in_executor(self._pool, _transcribe)

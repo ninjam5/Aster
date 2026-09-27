@@ -122,12 +122,6 @@ def _execute_llm_completion(messages: list[dict], temperature: float = None, n_p
                         url = item.get("image_url", {}).get("url", "")
                         if len(url) > 60:
                             item["image_url"]["url"] = url[:40] + "... [TRUNCATED FOR LOGS]"
-                    elif isinstance(item, dict) and item.get("type") == "input_audio":
-                        data = item.get("input_audio", {}).get("data", "")
-                        if len(data) > 60:
-                            item["input_audio"]["data"] = (
-                                f"[{len(data)} B64 chars TRUNCATED FOR LOGS]"
-                            )
         print("\n=== [ASTER DEBUG: CHAT COMPLETIONS PAYLOAD] ===")
         print(json.dumps(debug_payload, indent=2))
         print("==================================================\n")
@@ -2329,29 +2323,13 @@ _IMAGE_TOMBSTONE = (
     "Original Caption: "
 )
 
-# Tombstone left behind once an audio tensor is purged. Carries a Gemma-written
-# one-sentence summary of what the voice note was about, captured at injection
-# time via a focused side-completion against the live audio tensor (no Whisper —
-# Faster-Whisper is reserved for the LiveKit voice call path). This is the
-# audio analogue of the image tombstone's cold-storage path: a compact handle
-# Aster can read on future turns to remember WHAT was said, even though the
-# raw audio is gone from VRAM.
-_AUDIO_TOMBSTONE = (
-    "[System Audio Memory: The user sent a voice note here. The raw audio has "
-    "been flushed to save VRAM, but the gist is preserved below.]\n"
-    "Voice note gist: {summary}"
-)
-_VN_SUMMARY_MARKER_RE = re.compile(
-    r'\[VN_SUMMARY:\s*(.*?)\s*\]', flags=re.DOTALL
-)
-
 
 def purge_media_cache():
-    """Surgically removes Base64 image and audio tensors from history to free VRAM.
+    """Surgically removes Base64 image tensors from history to free VRAM.
 
     Images are archived to cold storage before deletion. The tombstone includes
     the saved file path so re_examine_image can retrieve visual data on demand.
-    Scans OpenAI multipart content lists for image_url / input_audio blocks.
+    Scans OpenAI multipart content lists for image_url blocks.
     """
     global messages
     purged = False
@@ -2361,7 +2339,6 @@ def purge_media_cache():
             continue
 
         has_image = any(p.get("type") == "image_url" for p in content)
-        has_audio = any(p.get("type") == "input_audio" for p in content)
 
         if has_image:
             text_parts = [p.get("text", "") for p in content if p.get("type") == "text"]
@@ -2379,36 +2356,9 @@ def purge_media_cache():
 
             msg["content"] = _IMAGE_TOMBSTONE.format(saved_filepath=saved_path) + original_caption
             purged = True
-        elif has_audio:
-            # The audio injector embedded a Gemma-written one-sentence summary
-            # inline as `[VN_SUMMARY: ...]`. Pull it back out so the tombstone
-            # carries semantic memory of what the voice note was about, then
-            # strip the live-turn caption boilerplate so only Mohamed's optional
-            # Telegram caption (if any) survives as `extra`.
-            text_parts = [p.get("text", "") for p in content if p.get("type") == "text"]
-            full_text = " ".join(text_parts).strip()
-            m = _VN_SUMMARY_MARKER_RE.search(full_text)
-            summary = m.group(1).strip() if m else "(summary unavailable)"
-            extra = _VN_SUMMARY_MARKER_RE.sub("", full_text)
-            # Strip the whole live-turn instruction block (persona note + [Mood:]
-            # explanation + Esther note) through "...your name." — the [Mood:]
-            # *tag* itself sits before this block and is preserved into the tomb.
-            extra = re.sub(
-                r'The user just sent you a voice note.*?your name\.?',
-                '', extra, flags=re.DOTALL,
-            )
-            extra = re.sub(
-                r'^\s*Additional note from the user:\s*', '', extra,
-            ).strip()
-            tomb = _AUDIO_TOMBSTONE.format(summary=summary)
-            msg["content"] = (tomb + "\n" + extra) if extra else tomb
-            purged = True
 
     # Second pass: strip stale [Image Memory: ...] from assistant messages
     # so old descriptions don't compete with live mmproj vision tensors.
-    # (`re` is already imported at module top — do NOT re-import locally here,
-    # or it shadows the module-level name and breaks the audio branch above
-    # with UnboundLocalError.)
     for msg in messages:
         if msg.get("role") != "assistant":
             continue
@@ -2732,9 +2682,8 @@ def _maybe_tag_text_mood(user_text: str) -> str:
     """Prepend [Mood: <state>] to user_text using the Tier-0 text detector.
 
     Rules (in priority order):
-    - Skip if emotion detection is disabled, text is a system nudge, already
-      carries a [Mood:] tag, or starts with [NATIVE_AUDIO_PAYLOAD:] (voice path
-      already tagged by Tier 1 at the audio capture site).
+    - Skip if emotion detection is disabled, text is a system nudge, or already
+      carries a [Mood:] tag.
     - For [NATIVE_IMAGE_PAYLOAD:…] — detect on the caption (text after the ']')
       and insert the tag immediately after the ']' so the payload prefix is intact.
     - For plain text / [Speaker:]-prefixed text — detect on the human text only
@@ -2747,8 +2696,6 @@ def _maybe_tag_text_mood(user_text: str) -> str:
         return user_text
     if "[Mood:" in text:
         return user_text       # already tagged (voice path)
-    if text.startswith("[NATIVE_AUDIO_PAYLOAD:"):
-        return user_text       # voice note — Tier 1 handles it upstream
 
     try:
         from tools.emotion_recognition import (detect_text_emotion, fuse_face,
@@ -2806,9 +2753,7 @@ def _log_turn_mood(tagged_text: str) -> None:
         mood = m.group(1).lower()
 
         # Short human-readable context snippet, payload-blob aware.
-        if text.startswith("[NATIVE_AUDIO_PAYLOAD:"):
-            context = "(voice note)"
-        elif text.startswith("[NATIVE_IMAGE_PAYLOAD:"):
+        if text.startswith("[NATIVE_IMAGE_PAYLOAD:"):
             bracket_end = text.find("]")
             context = text[bracket_end + 1:] if bracket_end != -1 else ""
         else:
@@ -2938,174 +2883,8 @@ def process_user_input(user_text, status_callback=None):
             except Exception as _ac_e:
                 print(f"[Aster Internal: auto-compaction skipped: {_ac_e}]")
 
-        # Check if the input is a native audio payload
-        if user_text.startswith("[NATIVE_AUDIO_PAYLOAD:"):
-            # Strip optional caption suffix: format is [NATIVE_AUDIO_PAYLOAD:<b64>]<caption>
-            bracket_end = user_text.find("]")
-            if bracket_end == -1:
-                audio_b64 = user_text.split(":", 1)[1]
-                user_caption = ""
-            else:
-                audio_b64 = user_text[22:bracket_end]
-                user_caption = user_text[bracket_end + 1:].strip()
-            # Sanitize Base64 — strip any data-URI prefix, newlines and stray
-            # whitespace that break the libmtmd audio decoder.
-            clean_audio_b64 = audio_b64.split(",", 1)[-1] if "," in audio_b64 else audio_b64
-            clean_audio_b64 = clean_audio_b64.replace("\n", "").replace("\r", "").strip()
-
-            # ── Generate a Gemma-written tombstone summary ────────────────────
-            # Gemma 4's audio head will be flushed by purge_media_cache after
-            # this turn. We do a focused side-completion *now* — same audio
-            # tensor, dedicated "summarize what was said" prompt — and embed
-            # the result inline in the live caption as [VN_SUMMARY: ...]. After
-            # purge, the audio block is dropped but the summary text remains
-            # inside the message, where purge_media_cache extracts it into the
-            # _AUDIO_TOMBSTONE. No Whisper, no extra model VRAM cost.
-            #
-            # We POST directly (not via _execute_llm_completion) because Gemma
-            # 4 routinely emits short factual answers into `reasoning_content`
-            # instead of `content` — we need to read both fields and fall back.
-            # Neutral default — must NEVER imply the audio is missing, or the
-            # main model distrusts the tensor and hallucinates (see the gist
-            # guard below).
-            vn_summary = "(voice note — content is in the attached audio)"
-            try:
-                summary_payload = {
-                    "model": "local",
-                    "messages": [
-                        {"role": "system", "content": (
-                            "You transcribe and summarise voice notes. An audio "
-                            "clip IS attached to the next message. In ONE short "
-                            "factual sentence, state what the speaker said or "
-                            "asked. Output only that sentence — no reasoning, no "
-                            "steps, no preamble, no quotes, no meta commentary "
-                            "about the task. If the audio sounds like 'Esther', "
-                            "it means 'Aster' (the assistant's name)."
-                        )},
-                        {"role": "user", "content": [
-                            {"type": "input_audio", "input_audio": {"data": clean_audio_b64, "format": "wav"}},
-                            {"type": "text", "text": (
-                                "Summarise what is said in this attached audio in "
-                                "one short sentence. Reply with the sentence only."
-                            )},
-                        ]},
-                    ],
-                    "temperature": 0.2,
-                    # Generous budget so Gemma finishes any internal reasoning AND
-                    # emits the actual summary into `content`; 160 was too small —
-                    # the reasoning preamble alone consumed it, leaving `content`
-                    # empty and only task-analysis in `reasoning_content`.
-                    "max_tokens": 512,
-                    "stream": False,
-                }
-                vn_resp = requests.post(
-                    "http://localhost:8080/v1/chat/completions",
-                    json=summary_payload, timeout=60,
-                )
-                vn_resp.raise_for_status()
-                vn_msg = vn_resp.json()["choices"][0]["message"]
-                raw = (vn_msg.get("content") or "").strip()
-                if not raw:
-                    raw = (vn_msg.get("reasoning_content") or "").strip()
-                if raw:
-                    # Gemma 4 often answers into `reasoning_content`, which opens
-                    # with a scaffold header ("Thinking Process:", "Analysis:", …)
-                    # and numbered task-analysis steps ("1. **Analyze the
-                    # Request:** ..."). Naively taking the first line captured that
-                    # meta-reasoning as the gist — which (a) wiped the content half
-                    # of the mood fusion and (b) when it said things like "voice
-                    # note not provided", POISONED the main prompt so the model
-                    # ignored the audio tensor and hallucinated. So: skip scaffold
-                    # headers, numbered steps, and any meta-task line; take the
-                    # first genuine summary sentence; and if none survives, fall
-                    # back to the neutral default rather than emit meta-reasoning.
-                    _scaffold_re = re.compile(
-                        r'^(thinking process|thinking|thought process|thoughts?|'
-                        r'reasoning|analysis|summary|gist|answer|response|'
-                        r'step\s*\d*)\s*:\s*',
-                        re.IGNORECASE,
-                    )
-                    _meta_re = re.compile(
-                        r'(transcription assistant|not provided|analy[sz]e the '
-                        r'request|no persona|no preamble|factual sentence|the user '
-                        r'wants me to|as a transcription|one short.{0,15}sentence|'
-                        r'i (need|have|want) to summar|act as)',
-                        re.IGNORECASE,
-                    )
-                    summary_line = ""
-                    for ln in raw.splitlines():
-                        ln = ln.strip()
-                        if not ln:
-                            continue
-                        stripped = _scaffold_re.sub("", ln).strip()
-                        if not stripped:                       # bare header → skip
-                            continue
-                        if re.match(r'^[\d#*\-•.\s]*\d+[.):]\s', stripped):
-                            continue                           # numbered task-step
-                        if _meta_re.search(stripped):
-                            continue                           # meta-task chatter
-                        summary_line = stripped
-                        break
-                    # Guard: never let meta-reasoning through to the main prompt.
-                    if summary_line and not _meta_re.search(summary_line):
-                        cleaned = summary_line.replace("[", "(").replace("]", ")")
-                        cleaned = re.sub(r'\bEsther\b', 'Aster', cleaned)
-                        cleaned = re.sub(r'\besther\b', 'aster', cleaned)
-                        if cleaned:
-                            vn_summary = cleaned
-                    # else: keep the neutral default (audio-is-attached) so the
-                    # main model still trusts the tensor.
-                print(f"[Aster Internal: Voice note gist captured — \"{vn_summary}\"]")
-            except Exception as _e:
-                print(f"[Aster Internal: Voice note summary side-call failed — {_e}]")
-
-            # Gemma 4 E4B's audio head is ASR/AST-trained (per the HF model card).
-            # The proven-good shape for llama-server is the OpenAI-style input_audio
-            # block (the gemma4a projector — clip.audio.projector_type — consumes it
-            # and the chat template emits <|audio|>). The summary marker rides
-            # inside the text caption so it survives purge_media_cache.
-            # ── Fused mood for the voice note ─────────────────────────────────
-            # Gemma 4 E4B's audio head is ASR/AST only (per the model card) — it
-            # turns speech into words but does NOT reliably read *tone*. So we
-            # recover prosody ourselves with the SpeechBrain voice model and fuse
-            # it with the content emotion read off the gist (no Whisper needed —
-            # the gist IS the content signal).  Confident content wins; prosody
-            # fills in when the words read neutral.  Result is injected as a
-            # [Mood:] tag the persona already knows how to consume.
-            vn_mood = "neutral"
-            try:
-                import base64 as _b64
-                from tools.emotion_recognition import (
-                    detect_voice_emotion, detect_text_emotion, fuse_moods,
-                )
-                _prosody = detect_voice_emotion(_b64.b64decode(clean_audio_b64))
-                _content = detect_text_emotion(vn_summary)
-                vn_mood = fuse_moods(_content, _prosody)
-                print(f"[Aster Internal: Voice-note mood — content={_content}, "
-                      f"prosody={_prosody} → {vn_mood}]")
-            except Exception as _e:
-                print(f"[Aster Internal: Voice-note mood detection failed — {_e}]")
-
-            caption_text = (
-                f"[VN_SUMMARY: {vn_summary}]\n"
-                f"[Mood: {vn_mood}]\n"
-                "The user just sent you a voice note (you have the audio "
-                "tensor in context). Respond to its content in your normal "
-                "Aster persona. The [Mood:] tag above is their detected vocal "
-                "tone — let it shape your reply. Note: if the audio sounds like "
-                "'Esther', the user is saying 'Aster' — your name."
-            )
-            if user_caption:
-                caption_text += f" Additional note from the user: {user_caption}"
-            messages.append({
-                "role": "user",
-                "content": [
-                    {"type": "input_audio", "input_audio": {"data": clean_audio_b64, "format": "wav"}},
-                    {"type": "text", "text": caption_text},
-                ],
-            })
         # Check if the input is a native Telegram image payload
-        elif user_text.startswith("[NATIVE_IMAGE_PAYLOAD:"):
+        if user_text.startswith("[NATIVE_IMAGE_PAYLOAD:"):
             payload_end = user_text.find("]")
             img_b64 = user_text[22:payload_end]
             caption = user_text[payload_end+1:].strip()

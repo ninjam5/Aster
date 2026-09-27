@@ -163,11 +163,6 @@ DIAGNOSTICS_MODE = False     # Set by /diagnostics on|off — forwards stdout to
 # when only one model is loaded, but the field is required by the OpenAI schema).
 MODEL_NAME = "gemma-e4b-q4km"
 
-# Audio routing: "native" = OpenAI input_audio block, "whisper" = Faster-Whisper STT
-# NOTE: Native audio is bypassed in main.py (`if False:`) to prevent GPU inference stalls.
-# AUDIO_MODE is kept for config compatibility but has no runtime effect.
-AUDIO_MODE = "whisper"
-
 # Context window ceiling — must match llama-server's --ctx-size.
 # Kept at 128k to leave VRAM headroom for the multimodal image pipeline.
 N_CTX = int(_cfg("runtime", "context_window", default=131072))

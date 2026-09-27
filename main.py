@@ -280,8 +280,8 @@ if config.bot:
             with open(temp_audio_path, 'wb') as new_file:
                 new_file.write(downloaded_file)
 
-            # 2. Transcode .ogg -> 16kHz mono PCM WAV for Gemma native audio
-            print("\n[Aster Internal: Processing incoming voice transmission via native audio...]")
+            # 2. Transcode .ogg -> 16kHz mono PCM WAV for Faster-Whisper
+            print("\n[Aster Internal: Processing incoming voice transmission via Whisper...]")
             subprocess.run(
                 ["ffmpeg", "-y", "-i", temp_audio_path,
                  "-ar", "16000", "-ac", "1", "-f", "wav", temp_pcm_path],
@@ -301,26 +301,34 @@ if config.bot:
             if speaker is None:
                 with open(_voice_rec.TEMP_VOICE_PATH, "wb") as vf:
                     vf.write(pcm_bytes)
-                speaker_tag = "[Speaker: Unknown] "
-            else:
-                speaker_tag = f"[Speaker: {speaker}] "
 
-            # 4. No separate mood detection here.  This path sends the raw audio
-            #    to Gemma natively, and Gemma reasons about the speaker's emotion
-            #    from prosody + content at least as well as a dedicated model
-            #    would (the voice-note prompt in core/brain.py explicitly reminds
-            #    it to).  Running our own detectors here is redundant — and the
-            #    IEMOCAP model misreads high-arousal anger as 'happy', which would
-            #    only mislead.  Mood tagging stays where Gemma is blind: typed text
-            #    (Tier 0) and LiveKit calls (Whisper strips tone → fusion in
-            #    local_stt.py recovers it).
-            mood_tag = ""
+            # 4. Transcribe the clip, then fuse prosody + transcript content into
+            #    the [Mood:] tag — the same shape the LiveKit path produces in
+            #    local_stt.py. The engine has no audio input, so the transcript IS
+            #    the turn.
+            from local_stt import transcribe_file, format_transcript
+            transcript = transcribe_file(temp_pcm_path)
+            if not transcript:
+                _dispatch_telegram_response(
+                    message,
+                    "I could not make out any speech in that voice note, Sir.",
+                )
+                return
+            mood = None
+            try:
+                from tools.emotion_recognition import (
+                    detect_voice_emotion, detect_text_emotion, fuse_moods,
+                )
+                mood = fuse_moods(detect_text_emotion(transcript),
+                                  detect_voice_emotion(pcm_bytes))
+            except Exception:
+                pass
 
-            audio_b64 = base64.b64encode(pcm_bytes).decode("utf-8")
             caption = message.caption if message.caption else ""
-            response_text = process_user_input(
-                f"[NATIVE_AUDIO_PAYLOAD:{audio_b64}]{speaker_tag}{mood_tag}{caption}", None
-            )
+            user_text = format_transcript(transcript, speaker=speaker, mood=mood)
+            if caption:
+                user_text += f"\n\n[User caption: {caption}]"
+            response_text = process_user_input(user_text, None)
             if speaker is None:
                 response_text = (response_text or "").rstrip() + \
                     "\n\n_(Voice unrecognised — use /enroll <name> to save this profile.)_"

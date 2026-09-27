@@ -534,7 +534,7 @@ class TestContextWindowManagement:
 # ============================================================================
 
 class TestMultimodalPayloadFormatting:
-    """Tests for image and audio base64 payload structure."""
+    """Tests for image base64 payload structure and voice-note transcript tagging."""
 
     def test_image_payload_format(self):
         """Image base64 is correctly structured in message array."""
@@ -556,30 +556,6 @@ class TestMultimodalPayloadFormatting:
         assert image_part["image_url"]["url"].startswith("data:image/jpeg;base64,")
         assert message["content"][1]["text"] == caption
 
-    def test_audio_payload_format_ogg(self):
-        """OGG audio base64 is correctly structured for Telegram voice notes."""
-        audio_b64 = base64.b64encode(b"fake_ogg_audio_data").decode("utf-8")
-        message = {
-            "role": "user",
-            "content": [
-                {"type": "audio_url", "audio_url": {"url": f"data:audio/ogg;base64,{audio_b64}"}},
-                {"type": "text", "text": "Listen to this voice note."},
-            ],
-        }
-        assert message["content"][0]["audio_url"]["url"].startswith("data:audio/ogg;base64,")
-
-    def test_audio_payload_format_pcm(self):
-        """PCM audio base64 is correctly structured for LiveKit WebRTC."""
-        audio_b64 = base64.b64encode(b"fake_pcm_audio_data").decode("utf-8")
-        message = {
-            "role": "user",
-            "content": [
-                {"type": "audio_url", "audio_url": {"url": f"data:audio/pcm;base64,{audio_b64}"}},
-                {"type": "text", "text": "Live audio input."},
-            ],
-        }
-        assert "audio/pcm" in message["content"][0]["audio_url"]["url"]
-
     def test_image_payload_with_empty_caption(self):
         """Default caption is used when none is provided."""
         img_b64 = base64.b64encode(b"fake_image_data").decode("utf-8")
@@ -600,11 +576,14 @@ class TestMultimodalPayloadFormatting:
         decoded = base64.b64decode(encoded)
         assert decoded == original
 
-    def test_native_audio_payload_tag_extraction(self):
-        """[NATIVE_AUDIO_PAYLOAD:...] tag is parsed correctly."""
-        user_input = "[NATIVE_AUDIO_PAYLOAD:YXVkaW9fZGF0YQ==]"
-        audio_b64 = user_input.split(":", 1)[1][:-1]
-        assert audio_b64 == "YXVkaW9fZGF0YQ=="
+    def test_voice_note_transcript_tagging(self):
+        """Voice-note transcripts carry [Speaker:] / [Mood:] tags for the engine."""
+        from local_stt import format_transcript
+
+        assert format_transcript("hello there", speaker="Mohamed", mood="calm") == \
+            "[Speaker: Mohamed] [Mood: calm] hello there"
+        assert format_transcript("hello there") == "hello there"
+        assert format_transcript("hello", mood="happy") == "[Mood: happy] hello"
 
     def test_native_image_payload_tag_extraction(self):
         """[NATIVE_IMAGE_PAYLOAD:...] tag is parsed correctly."""

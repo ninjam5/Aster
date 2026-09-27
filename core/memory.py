@@ -264,7 +264,7 @@ def log_raw_turn(user_text: str, assistant_text: str) -> None:
     Independent of the ChromaDB/memory.md fact pipeline above — this keeps the
     full raw exchange rather than extracted facts, so a failed recall_memory()
     query has something to grep as a last resort. Skips system-internal
-    nudges; native audio/image payloads are collapsed to a short placeholder
+    nudges; native image payloads are collapsed to a short placeholder
     instead of dumping base64 into the file.
     """
     try:
@@ -272,9 +272,7 @@ def log_raw_turn(user_text: str, assistant_text: str) -> None:
         if text.startswith("[System Internal"):
             return
 
-        if text.startswith("[NATIVE_AUDIO_PAYLOAD:"):
-            user_display = "(voice note)"
-        elif text.startswith("[NATIVE_IMAGE_PAYLOAD:"):
+        if text.startswith("[NATIVE_IMAGE_PAYLOAD:"):
             bracket_end = text.find("]")
             user_display = text[bracket_end + 1:].strip() if bracket_end != -1 else "(image)"
         else:
