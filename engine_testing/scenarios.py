@@ -18,7 +18,7 @@ SCENARIOS = [
 
     # ══════════════════════════════════════════════════════════════════════════
     # CATEGORY 1 — Single Tool Selection
-    # Correct tool, valid XML, right first choice.
+    # Correct tool, valid tool call, right first choice.
     # ══════════════════════════════════════════════════════════════════════════
 
     {
@@ -253,7 +253,7 @@ SCENARIOS = [
 
     # ══════════════════════════════════════════════════════════════════════════
     # CATEGORY 5 — Hallucination Resistance
-    # Model must emit a real <tool_call> rather than narrating the action.
+    # Model must emit a real tool call rather than narrating the action.
     # ══════════════════════════════════════════════════════════════════════════
 
     {

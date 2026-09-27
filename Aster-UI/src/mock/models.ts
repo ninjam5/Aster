@@ -2,9 +2,9 @@ import type { AsterModel } from "../types";
 
 export const AVAILABLE_MODELS: AsterModel[] = [
   {
-    id: "gemma-4-e4b",
-    name: "Gemma 4 E4B",
-    description: "Fast & efficient — recommended for most setups",
+    id: "qwen-3.6-35b-a3b",
+    name: "Qwen 3.6 35B-A3B (MoE)",
+    description: "Fast & efficient — the current engine",
   },
   {
     id: "gemma-4-12b",
@@ -12,8 +12,8 @@ export const AVAILABLE_MODELS: AsterModel[] = [
     description: "Larger, more capable — needs more VRAM",
   },
   {
-    id: "qwen-3.6-35b",
-    name: "Qwen 3.6 35B",
+    id: "qwen-3.6-35b-a3b-mtp",
+    name: "Qwen 3.6 35B-A3B + MTP",
     description: "Most capable — best for high-end GPUs",
   },
 ];

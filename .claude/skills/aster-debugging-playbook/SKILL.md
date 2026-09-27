@@ -21,7 +21,7 @@ pattern-match to a settled battle (details and stories: `aster-failure-archaeolo
 | No response at all | `Invoke-RestMethod http://localhost:8080/health` | Server down/loading → §1 |
 | Empty response after tools ran | Did the apathy nudge fire? (log/`/peek`) | Post-tool apathy → §1 |
 | "Playing it now, Sir" but nothing happened | `/peek 5` — is there a tool_calls entry? | Hallucinated execution → §1 |
-| `call:func{...}` or `<tool_call>` visible in a reply | Which path? `Select-String -Path config.py -Pattern "USE_NATIVE_TOOL_CALLS"` + real yaml setting | Leaked tool syntax → §2 |
+| `call:func{...}` or `<tool_call>` visible in a reply | Template correct (`E:\Models\qwen36_chat_template.jinja`, froggeric v22.5)? `--reasoning off` set in the launcher? | Leaked tool syntax → §2 |
 | Same tool called repeatedly with same args | `/peek 20` — count identical calls | Degenerate loop (NO guard exists) → §2 |
 | Replies degrade in long sessions | `/status` token estimate vs ctx | Long-context degradation → §1 |
 | VRAM climbing / OOM | `nvidia-smi` per-process | Leak class → `aster-vram-discipline` |
@@ -40,49 +40,47 @@ pattern-match to a settled battle (details and stories: `aster-failure-archaeolo
 ## §1 Engine and brain loop
 
 **Server unreachable/slow.** `http://localhost:8080/health`, then `/props` (also
-tells you WHICH model file is served — the three launchers point at two different
-models, see `aster-run-and-operate`). Boot warning `detected an outdated gemma4
-chat template, applying compatibility workarounds` is expected and harmless.
+tells you WHICH model file is served — see `aster-run-and-operate`).
 
 **Garbage / role-confused / infinitely-echoing output.** You are in the
 template-mismatch class — the costliest bug family in project history (three failed
-architectures, 2026-05). Do NOT iterate on prompts. Check: custom Jinja template
-flag present in the launcher? Multimodal turns carry the literal `<image>` marker?
-Anything new between messages and the server? Then STOP and read
-`aster-failure-archaeology` §engine-hell before changing anything.
+architectures, 2026-05). Do NOT iterate on prompts. Check: the froggeric v22.5
+template `E:\Models\qwen36_chat_template.jinja` is passed via `--chat-template-file`
+(with `--jinja`), and `--reasoning off` is present? Anything new between messages
+and the server? Then STOP and read `aster-failure-archaeology` §engine-hell before
+changing anything.
 
-**Hallucinated tool execution.** `_claims_tool_execution()` (`core/brain.py:185`)
+**Hallucinated tool execution.** `_claims_tool_execution()` (`core/brain.py:176`)
 cross-references user-intent patterns against response claims, catches residual
 leaked syntax, injects a retry nudge, and re-runs ONCE (`hallucination_retried`
-flag, `:2990`). If you see repeated hallucinations in one turn, the detector's
+flag, `:3214`). If you see repeated hallucinations in one turn, the detector's
 single-retry design is working as intended — the model is the problem, not the
 detector. Never raise the retry count (loop risk by design).
 
-**Post-tool apathy (empty final answer).** Gemma-4 sometimes returns "" after
-successful tool rounds. The loop tracks `tools_executed`; on empty exit it injects
-a neutral `[System Internal]` nudge, fires ONE more completion, then removes the
-nudge from history. Verify via transient nudge in logs. If the final answer is
-still empty, that's a real failure — capture the `/peek` and scenario.
+**Post-tool apathy (empty final answer).** The model sometimes returns "" after
+successful tool rounds (Gemma-4 routinely; a mild form survived the Qwen swap). The
+loop tracks `tools_executed`; on empty exit it injects a neutral `[System Internal]`
+nudge, fires ONE more completion, then removes the nudge from history. Verify via
+transient nudge in logs. If the final answer is still empty, that's a real failure —
+capture the `/peek` and scenario.
 
 **Long-context degradation.** `/status` for the estimate; remember it's `len//4` —
-at 128k real tokens the estimate can be off. `/compact` is the mitigation. Also
-check the `--ctx-size` (128000) vs `config.N_CTX` (default 131072) mismatch: the
-trim budget (90% of N_CTX ≈ 118k est. tokens) can exceed what the server actually
-accepts.
+at 60k real tokens the estimate can be off. `/compact` is the mitigation. The
+server `--ctx-size 60000` and `config.N_CTX` (60000) must match.
 
 ## §2 Tool calling
 
-**Which path am I on?** Native (default): `tools=ADMIN_TOOLS` on the POST,
-structured `tool_calls` on the response, results as `role:"tool"` +
-`tool_call_id`. Legacy (rollback): `runtime.use_native_tool_calls: false` → XML
-manual in the system prompt, `_legacy_xml_parse` regex extraction, results as
-`role:"user"` text. `engine_testing/harness.py` ALWAYS exercises the legacy path
-(never sends `tools=`) — don't let its behavior confuse a native-path
-investigation.
+**There is only one path: native.** `tools=ADMIN_TOOLS` on the POST, structured
+`tool_calls` on the response, results as `role:"tool"` + `tool_call_id`. The legacy
+XML path and its `config.USE_NATIVE_TOOL_CALLS` rollback flag were **removed in the
+Qwen 3.6 swap (2026-09-27)** — there is no XML manual and no `_legacy_xml_parse`.
+`engine_testing/harness.py` is native-only too (sends `tools=ADMIN_TOOLS`), so lab
+and production exercise the same path.
 
 **Leaked raw syntax in replies** (`<|tool_call>`, `call:name{...}`): the detector
-catches some; display cleanup strips fragments. Persistent leakage on the native
-path suggests template/server-version drift — treat as §1 template class.
+catches some; display cleanup strips fragments. Persistent leakage now points at
+template drift (froggeric v22.5 template / `--jinja`) or `--reasoning off` missing —
+treat as §1 template class.
 
 **Degenerate loops** (same call repeated, A-B-A-B ping-pong): there is NO LoopGuard
 yet — this is the owner-confirmed hardest live problem. Evidence to capture:
@@ -104,7 +102,7 @@ message's `tool_call_id` must match the id on the assistant's `tool_calls` entry
 - **Element not found:** Track 1 needs OCR-able text scoring ≥0.5
   (SequenceMatcher/token-overlap/substring). Icon-only targets rely on Track 2
   (OmniParser YOLO fallback, downloads on first use, released after each use).
-- `verify_action_result(goal)` runs a post-click Gemma check — read its text in the
+- `verify_action_result(goal)` runs a post-click LLM check — read its text in the
   tool result before assuming the click worked.
 
 ## §4 Voice pipeline
@@ -156,7 +154,7 @@ bug.
 keyword-exact things (IDs, exact names) can miss; rephrase semantically. Last
 resort: grep the verbatim daily transcripts `Aster_Vault/Conversations/`.
 
-**Facts not saved:** dedup gate `is_fact_already_known()` (`core/brain.py:1462`)
+**Facts not saved:** dedup gate `is_fact_already_known()` (`core/brain.py:1448`)
 blocks bidirectional-substring or ≥85% SequenceMatcher matches against memory.md —
 NOTE it reads the path with a lowercase-v `Aster_vault/memory.md` (harmless on
 Windows, real on case-sensitive FS). Auto-consolidation fires every 5 real turns
@@ -187,6 +185,6 @@ budget; `/compact` replaces history with a summary block. Both are features.
 Authored 2026-07-05 against live code.
 
 - Detector/nudge anchors: `Select-String -Path core\brain.py -Pattern "_claims_tool_execution|hallucination_retried|tools_executed"`
-- Path fork: `Select-String -Path config.py -Pattern "USE_NATIVE_TOOL_CALLS"`
+- Template/thinking flags: `Select-String -Path start.bat -Pattern "chat-template|reasoning"`
 - Dedup path casing still lowercase: `Select-String -Path core\brain.py -Pattern "Aster_vault"`
 - Thresholds: `Select-String -Path tools\voice_recognition.py -Pattern "THRESHOLD"`

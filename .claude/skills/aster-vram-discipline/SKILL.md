@@ -6,11 +6,12 @@ description: Load this whenever a change touches ML models, GPU memory, or perfo
 # Aster VRAM Discipline
 
 The owner's #1 standing rule (stated 2026-07-05): **Aster must be as optimized as
-possible. 12 GB (RTX 3080) is a hard ceiling. Idle Aster should consume ~6 GB total
-VRAM on the E4B model, ~4 GB on E2B.** New ML models are **lazy-loaded and
-offloaded when idle** via ref-counting — not eagerly preloaded. (This *reverses* an
-older 2026-05 eager-preload preference; existing eager loads are grandfathered —
-don't churn them without asking the owner.)
+possible. 12 GB (RTX 3080) is a hard ceiling. On the Qwen 3.6 35B-A3B engine
+llama-server alone measures ~11.5-11.9 GB / 12.3 GB at `--n-cpu-moe 20` + 60k ctx —
+the vision mmproj is served from RAM, not VRAM, so headroom is tight.** New ML models
+are **lazy-loaded and offloaded when idle** via ref-counting — not eagerly preloaded.
+(This *reverses* an older 2026-05 eager-preload preference; existing eager loads are
+grandfathered — don't churn them without asking the owner.)
 
 **When NOT to use this skill:** general failure triage → `aster-debugging-playbook`;
 quantization/KV-cache theory → `local-llm-reference`; shipping the change →
@@ -18,14 +19,15 @@ quantization/KV-cache theory → `local-llm-reference`; shipping the change →
 
 ## Budget table
 
-Component figures below are the 2026-05-20 `summary.md` §3.3 **estimates** except
-where marked measured. Treat them as planning numbers; always confirm with
-`nvidia-smi`.
+The llama-server figure below is **measured** (2026-09-27, `summary.md` §3.3); the
+other components are estimates. Treat estimates as planning numbers; always confirm
+with `nvidia-smi`.
 
 | Component | VRAM | Residency |
 |---|---|---|
-| llama-server: Gemma-4-E4B Q4_K_M + mmproj-F16, 128k ctx, Q4_0 KV | **~5–6 GB (measured**, per `checklist_test.md`/`packaging.md`, on the 3080**)** | Permanent while server runs |
-| Faster-Whisper `medium.en` int8 (shared singleton) | ~1.0–1.5 GB (est.) | Loaded at startup, resident |
+| llama-server: Qwen 3.6 35B-A3B IQ4_XS (MoE, `--n-cpu-moe 20`), 60k ctx, KVarN KV + mmproj in RAM | **~11.5–11.9 GB / 12.3 GB (measured 2026-09-27)** | Permanent while server runs |
+| Faster-Whisper `medium.en` int8 (shared singleton) — call path | ~1.0–1.5 GB (est.) | Loaded at startup, resident for calls |
+| Faster-Whisper CPU instance — Telegram voice notes (`local_stt.transcribe_file`) | 0 VRAM (~1.5 GB RAM) | Resident after first use |
 | SpeechBrain ECAPA speaker-ID (eager CUDA, grandfathered) | ~80–200 MB (est.) | Resident |
 | Silero VAD | ~50 MB (est.) | Resident (bridge) |
 | openWakeWord | ~0 (CPU) | — |
@@ -34,8 +36,9 @@ where marked measured. Treat them as planning numbers; always confirm with
 | OmniParser v2 YOLO | ~200 MB (est.) | **Released immediately after each fallback use** (`tools/vision.py:388 _release_omniparser`, called at :593 and :719) |
 | Text/face/ambient emotion models | 0 VRAM (CPU by design) | Resident (CPU) |
 
-E2B/12B model footprints were never recorded — only E4B's number is grounded
-(`packaging.md` flags this explicitly). Do not invent numbers for them.
+The measured Qwen 3.6 35B-A3B stack above is the grounded number on the 3080. The
+old Gemma E4B ~5–6 GB figure is archived with the Gemma branch
+(`gemma-4-e4b-lightweight`). Do not invent footprints for untested models.
 
 ## The ref-count pattern (canonical implementation: `tools/audio.py`)
 
@@ -100,7 +103,8 @@ Rules that make ref-counting actually work:
    nvidia-smi --query-gpu=memory.used,memory.total --format=csv
    nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv
    ```
-4. Check idle total against the budget: ~6 GB (E4B) / ~4 GB (E2B).
+4. Check idle total against the budget: llama-server alone is ~11.5–11.9 GB of the
+   12.3 GB board on the Qwen engine, so anything eager will not fit.
 5. Record the measured numbers in your change notes (gate in
    `aster-change-control` rule 3).
 
@@ -113,7 +117,7 @@ Rules that make ref-counting actually work:
 | LiveKit devmode subprocess | TWO python.exe processes with multi-GB **RAM** (not VRAM) footprints after a call connects | Check: `Get-Process python \| Format-Table Id, WorkingSet64`. Candidate fix: `devmode=True → False` at `webrtc_bridge.py:687` — OPEN item, test carefully (changes worker lifecycle) | Documented in CLAUDE.md (which cites old line 668) |
 | Missing release on an error path | Model never offloads after an exception | `try/finally` around acquire/release | Kokoro's one-shot users demonstrate the pattern |
 | Eager import chains | A "CPU-only" module import drags in torch-CUDA weights at boot | Lazy imports inside loader functions | Kokoro deliberately prints "lazy — loads on first use" at registration |
-| KV cache growth | First-token latency grows with long history | trim_memory budget (90% of N_CTX); `/compact`; ctx-size vs N_CTX mismatch check (start.bat 128000 vs config default 131072) | See `aster-architecture-contract` weak points |
+| KV cache growth | First-token latency grows with long history | trim_memory budget (90% of N_CTX); `/compact`; ctx-size vs N_CTX check (start.bat 60000 vs `config.N_CTX` 60000) | See `aster-architecture-contract` weak points |
 
 ## Measurement quick reference
 
@@ -126,13 +130,14 @@ nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv
 Get-Process python | Format-Table Id, WorkingSet64
 ```
 
-Healthy idle (E4B, no call): board usage ≈ 6 GB dominated by llama-server; exactly
-one python.exe with a large working set; Kokoro/voice-emotion NOT resident.
+Healthy idle (Qwen engine, no call): board usage ≈ 11.5–11.9 GB dominated by
+llama-server; exactly one python.exe with a large working set; Kokoro/voice-emotion
+NOT resident.
 
 ## Provenance and maintenance
 
 Authored 2026-07-05. Budgets are owner-stated (2026-07-05 Q&A); component estimates
-from summary.md (2026-05-20); E4B footprint measured per checklist_test.md.
+from summary.md; Qwen 3.6 35B-A3B llama-server footprint measured 2026-09-27.
 
 - Ref-count implementation drift: `Select-String -Path tools\audio.py -Pattern "_kokoro_users"`
 - OmniParser release still in place: `Select-String -Path tools\vision.py -Pattern "_release_omniparser"`

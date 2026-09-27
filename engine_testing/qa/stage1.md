@@ -121,5 +121,5 @@ Two live defects found and fixed during the run:
    config. Added `tests/conftest.py` pinning all automation knobs, and pinned
    the threshold in `system1-test.py`.
 
-Note: llama-server was **down** during this run, so the Gemma planning leg was
+Note: llama-server was **down** during this run, so the main-LLM planning leg was
 replaced by a scripted plan; the motor + Laya decisions are the parts measured.

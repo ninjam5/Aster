@@ -19,7 +19,7 @@ This is enforced by `.github/instructions/python-global-packages.instructions.md
 ## Running the System
 
 **Prerequisites — must be running before `main.py`:**
-- `llama-server` (llama.cpp binary) at `http://localhost:8080`, serving Gemma 4 E4B (`gemma-e4b-q4km.gguf`, Q4_K_M) **plus** `mmproj-F16.gguf` for vision. **Q4_0 KV cache** (`-ctk q4_0 -ctv q4_0`), **128k context** (`--ctx-size 128000`; must match `config.N_CTX`), full GPU offload. Start with `start.bat`; `Start-all.bat` launches llama-server then **polls `/health` (up to 300 s) before starting Aster**, avoiding the boot-time memory race where simultaneous imports and KV-cache allocation can OOM `main.py`.
+- `llama-server` (**BeeLlama** — `E:\Models\beellama-v0.4.7-bin-win-cuda-12.4-x64\llama-server.exe`, a llama.cpp fork with KVarN KV quantization) at `http://localhost:8080`, serving **Qwen 3.6 35B-A3B** (`E:\Models\Qwen3.6-35B-A3B-UD-IQ4_XS.gguf`, IQ4_XS MoE, ~3B active params/token) **plus** `E:\Models\Qwen3.6-35B-A3B-mmproj-F16.gguf` for vision (`--no-mmproj-offload`, runs from RAM). **KVarN KV cache** (`--cache-type-k kvarn4 --cache-type-v kvarn2 --kv-tail-tokens 1024`), **60k context** (`--ctx-size 60000`; must match `config.N_CTX`), MTP speculative decoding (`--spec-type draft-mtp`), **thinking OFF** (`--reasoning off`), `--n-cpu-moe 20`, `--threads 8` (P-cores only; E-cores hurt MoE throughput), `--ubatch-size 512`. Start with `start.bat`; `Start-all.bat` launches llama-server then **polls `/health` (up to 300 s) before starting Aster**, avoiding the boot-time memory race. (The Gemma-era engine is preserved on branch `gemma-4-e4b-lightweight`.)
 - Tesseract OCR at `C:\Program Files\Tesseract-OCR\tesseract.exe` (override with `TESSERACT_CMD` env var).
 
 ```powershell
@@ -38,7 +38,7 @@ pytest tests/test_system1.py -v     # System-1 kernel (mocked Laya)
 # Run a single test
 pytest tests/test_migration.py -v -k "test_name_here"
 
-# Rebuild llama-cpp-python with CUDA (one-shot, legacy — engine is now llama-server)
+# Rebuild llama-cpp-python with CUDA (unused legacy helper for the old path)
 python build_cuda.py
 ```
 
@@ -81,14 +81,14 @@ npm run lint         # eslint
 User input (CLI / Telegram / WebRTC voice)
   → process_user_input()              [core/brain.py]
     → trim_memory()                   [sliding-window context management]
-    → _execute_gemma_completion()     [POST localhost:8080/v1/chat/completions, tools=ADMIN_TOOLS]
+    → _execute_llm_completion()       [POST localhost:8080/v1/chat/completions, tools=ADMIN_TOOLS]
     → _extract_native_tool_call()     [read structured tool_calls off the response message]
     → execute_tool()                  [dispatch to tools/]
     → loop up to 15 rounds
     → return final text response
 ```
 
-`_execute_gemma_completion()` (`core/brain.py`) is the single LLM adapter. It POSTs OpenAI-format chat messages to llama-server's `/v1/chat/completions`. The server handles multimodal routing internally — there is **no manual prompt building**. There is no `llama-cpp-python`, no `Llava15ChatHandler`, no dual-engine setup; one llama-server instance serves all text, vision, tool calls, chat, Discord, and sentry.
+`_execute_llm_completion()` (`core/brain.py`) is the single LLM adapter. It POSTs OpenAI-format chat messages to llama-server's `/v1/chat/completions`. The server handles multimodal routing internally — there is **no manual prompt building** (no `<image>` text marker; the chat template places vision tokens itself). There is no `llama-cpp-python`, no `Llava15ChatHandler`, no dual-engine setup; one llama-server instance serves all text, vision, tool calls, chat, Discord, and sentry.
 
 ### Tool Calling Mechanism
 
@@ -96,40 +96,38 @@ Aster uses **native OpenAI-format function calling** by default: `ADMIN_TOOLS` (
 full JSON-Schema `{"type": "function", "function": {...}}` dicts) is sent as the `tools`
 param on every `/v1/chat/completions` POST, and llama-server returns a structured
 `tool_calls` array on the response message instead of the model narrating a call in text.
-The custom Jinja template (`Aster_Vault/gemma4-multimodal.jinja`) renders `tools` into the
-model's native `<|tool_call>call:name{...}<tool_call|>` grammar and llama-server parses
-that back into `tool_calls` — llama-server logs `detected an outdated gemma4 chat
-template, applying compatibility workarounds` at boot, which is expected and harmless.
+The chat template in use is the fixed **froggeric v22.5** template
+(`E:\Models\qwen36_chat_template.jinja`, passed via `--chat-template-file`): it fixes
+Qwen's official template bugs (the `|items` filter that broke tool arguments in C++
+Jinja runtimes, empty `<think>` blocks filling context) and places vision tokens itself.
+Thinking is disabled server-side (`--reasoning off`), so responses come back as plain
+`content` with no `reasoning_content`.
 
-`_execute_gemma_completion()` returns the **full message dict** (`role`/`content`/
+`_execute_llm_completion()` returns the **full message dict** (`role`/`content`/
 `tool_calls`), not a bare string — callers that only need text do
 `(response_msg.get("content") or "")`. `_extract_native_tool_call(message)` /
 `_extract_all_native_tool_calls(message)` read the structured `tool_calls` field.
 Tool results are fed back as `role: "tool"` messages carrying `tool_call_id` (matched to
 the `id` on the assistant's `tool_calls` entry), not as fake `role: "user"` observations.
 
-**Legacy XML-in-text path (rollback):** set `runtime.use_native_tool_calls: false` in
-`self_config.yaml` (→ `config.USE_NATIVE_TOOL_CALLS = False`) to fully revert to the old
-behavior: the model outputs `<tool_call>{"name": ..., "arguments": {...}}</tool_call>` as
-prose, `_legacy_xml_parse()` / `_legacy_xml_parse_multi()` (formerly
-`_extract_xml_tool_call` / `_extract_all_xml_tool_calls`) regex-parse it — normalising
-Gemma's mangled tag variants like `<|tool_call>call>` → `<tool_call>` — and the plain-text
-tool manual (`_get_xml_tool_prompt()`) is re-injected into the system prompt. Tool results
-go back as `role: "user"` "Tool Execution Result: ..." messages. `USE_NATIVE_TOOL_CALLS`
-gates every one of these behaviors — there is no other code-path fork. The test harness
-`engine_testing/harness.py` is **native-only since 2026-07** (sends `tools=ADMIN_TOOLS`,
-reads structured `tool_calls`, feeds `role:"tool"` results, runs LoopGuard exactly like
-production); the legacy comparator is the frozen reports in `engine_testing/results/`
-plus the production rollback flag. 52 scenarios across 11 categories, including 5
-`loop_trap` adversarial scenarios (mock results engineered to tempt re-calling, scored
-by `check_loop_discipline`).
+**The tool-calling path is native-only.** The legacy XML-in-text path and its
+`config.USE_NATIVE_TOOL_CALLS` rollback flag (`_legacy_xml_parse*`, `_get_xml_tool_prompt`,
+the XML manual in the system prompt, `role:"user"` tool observations) were **removed in
+the Qwen 3.6 swap (2026-09-27, branch `qwen3.6-35b`)** — nothing branches on a flag any
+more. The Gemma-era engine is preserved on branch `gemma-4-e4b-lightweight`. The test
+harness `engine_testing/harness.py` is native-only (sends `tools=ADMIN_TOOLS`, reads
+structured `tool_calls`, feeds `role:"tool"` results, runs LoopGuard exactly like
+production); historical comparators are the frozen reports in `engine_testing/results/`.
+52 scenarios across 11 categories, including 5 `loop_trap` adversarial scenarios (mock
+results engineered to tempt re-calling, scored by `check_loop_discipline`). Live
+validation of the swapped engine is tracked in `engine_testing/qa/qwen-swap-live-validation.md`.
 
 **Adding a new tool requires three edits:**
-1. Add the schema dict to `ADMIN_TOOLS` list (`core/brain.py`, starts ~line 389)
-2. Add an `elif` branch in `execute_tool()` (`core/brain.py`, ~line 1464)
+1. Add the schema dict to `ADMIN_TOOLS` list (`core/brain.py:324`)
+2. Add an `elif` branch in `execute_tool()` (`core/brain.py:2080`)
 3. Implement the function in the appropriate `tools/` module and import it at the top of `brain.py`
 
-**Gotcha:** `_execute_gemma_completion()` is also called directly (without `tools=`) from
+**Gotcha:** `_execute_llm_completion()` is also called directly (without `tools=`) from
 `tools/vision.py`, `tools/sentry.py`, `tools/awareness.py`, and `tools/face_server.py` for
 one-shot, non-tool-calling completions (vision descriptions, sentry scene analysis,
 proactive-awareness text, persona generation). Every one of these call sites must unwrap
@@ -145,7 +143,6 @@ markdown files in `Aster_Vault/System_Prompts/<name>.md` and are assembled at im
 ```
 messages[0]["content"] = _build_system_content(config.SYSTEM_PROMPT)
 # → _load_system_prompt(name) + shared tool laws
-#   + _get_xml_tool_prompt(ADMIN_TOOLS) ONLY when config.USE_NATIVE_TOOL_CALLS is False
 ```
 
 - **Selector:** `config.SYSTEM_PROMPT` (a filename stem, no `.md`), sourced from
@@ -156,11 +153,9 @@ messages[0]["content"] = _build_system_content(config.SYSTEM_PROMPT)
   behavior). `gogi.md` consumes `[Mood: <state>]` message tags — these are now live
   (emitted by `tools/emotion_recognition.py`). See **Emotion Recognition** subsystem.
 - The loader **strips `<!-- ... -->` HTML comments**, so each file can carry a doc
-  header that never reaches the model. The XML tool manual is appended by the caller
-  **only in the legacy rollback path** (`USE_NATIVE_TOOL_CALLS = False`) — in the default
-  native path tool schemas go through the `tools` POST param instead, not the system
-  prompt. Either way, **do not** put a tool list inside a persona file. Missing/unreadable
-  file → minimal fallback prompt (never crashes import).
+  header that never reaches the model. Tool schemas are **not** in the system prompt —
+  they travel in the `tools` POST param. **Do not** put a tool list inside a persona
+  file. Missing/unreadable file → minimal fallback prompt (never crashes import).
 - **Gotcha:** response-length behavior is persona-defined, not global. The "two-sentence
   law" lives only in `jarvis.md`; `gogi.md` deliberately drops it. There is no global
   two-sentence flag anymore.
@@ -169,23 +164,22 @@ messages[0]["content"] = _build_system_content(config.SYSTEM_PROMPT)
 
 - Messages use standard OpenAI roles (`system` / `user` / `assistant`).
 - Images are sent as `image_url` content blocks: `{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,..."}}`.
-- A literal `<image>` text block is injected alongside each image so the custom Gemma Jinja template (`Aster_Vault/gemma4-multimodal.jinja`) places the `<__media__>` token correctly.
-- Trailing assistant messages containing `<start_of_turn>user\nINST` patterns are stripped before sending (legacy INST tokens conflict with the Gemma template).
+- The chat template places vision tokens itself; the brain adds **no** `<image>` text marker and strips **no** INST tokens (both were Gemma-template workarounds, removed in the Qwen swap).
 - After each turn, `purge_media_cache()` strips Base64 data from history to prevent VRAM bloat, archives images to `Aster_Vault/images/`, and leaves a tombstone with the saved file path. `re_examine_image(filepath, question)` re-loads an archived image for stateless follow-up inference.
 
 ### Hallucination Detection
 
-`_claims_tool_execution()` fires when the model narrates executing a tool ("Playing on Spotify", "Taking a screenshot") without emitting a `<tool_call>` block. It pattern-matches (user-intent regex × response-claim regex) and also catches residual leaked tool syntax. It injects a retry nudge and re-runs the LLM **once**; the `hallucination_retried` flag prevents infinite loops.
+`_claims_tool_execution()` fires when the model narrates executing a tool ("Playing on Spotify", "Taking a screenshot") without an actual `tool_calls` entry. It pattern-matches (user-intent regex × response-claim regex) and short-circuits immediately when `tool_calls` is populated. It injects a retry nudge and re-runs the LLM **once**; the `hallucination_retried` flag prevents infinite loops. **Phase-0 Qwen baseline still shows this family** ("The timer is set, Sir." with no call) — see `engine_testing/qa/qwen-swap-live-validation.md` T3.
 
 **Failure-blind success claims (the inverse case):** the loop tracks `failed_tools` — every genuinely-executed tool whose result reads as a failure (`_tool_result_failed()`: result starts with `FAILED` or `Error`); a later successful retry of the same tool clears its entry. If the model produces a final text response while `failed_tools` is non-empty and the reply doesn't acknowledge a problem (`_acknowledges_failure()`), a one-shot `[System: ... FAILED — that action did NOT happen ...]` retry nudge is injected (`failure_retried` flag). Two related guards: tools in `_TERMINAL_TOOLS` (Spotify playback, volume, etc.) only short-circuit the loop with "Action completed." when the result was **not** a failure — a failed terminal tool loops back so the model can react to the error; and the post-tool ghost prod (below) switches to "tell the user honestly that it failed" when `failed_tools` is non-empty. Tool authors: make failure returns start with `FAILED` (see `_NO_DEVICE_MSG` in `tools/media.py`) so this machinery sees them.
 
 ### Agentic Loop — Post-Tool "Apathy" Failsafe
 
-Gemma-4 sometimes returns an empty string after successfully executing tools. The 15-round loop tracks a `tools_executed` boolean; if the model exits empty after running tools, a neutral `[System Internal]` user nudge is injected, one final completion is fired, and the nudge is removed from history so only the real exchange remains.
+The model can return an empty string after successfully executing tools (Gemma-4 did this routinely; Qwen is watched for it — a mild post-tool refusal survived the swap). The 15-round loop tracks a `tools_executed` boolean; if the model exits empty after running tools, a neutral `[System Internal]` user nudge is injected, one final completion is fired, and the nudge is removed from history so only the real exchange remains.
 
 ### Separate Conversation Contexts
 
-- **Admin brain** — `process_user_input()`, uses `ADMIN_TOOLS` (43 tools), full conversation history, 15-round loop.
+- **Admin brain** — `process_user_input()`, uses `ADMIN_TOOLS` (69 tools), full conversation history, 15-round loop.
 - **Discord brain** — `process_discord_chat()`, per-friend history in `discord_chat_histories` (keyed by lowercase name), separate `DISCORD_CHAT_SYSTEM_PROMPT`, only 3 tools (`forward_to_owner`, `save_personal_fact`, `get_current_track`), 4-round loop.
 
 These histories are fully independent. Discord replies pass through `_enforce_discord_honorific()`, which rewrites "Sir" → "Ma'am" / "Mr." → "Ms." for friends listed in `config.DISCORD_FEMALE_NAMES` (sourced from `self_config.yaml → contacts.female_names`, empty by default — per-install data, not hardcoded). This regex is fragile (can mangle words like "Sirius").
@@ -199,18 +193,18 @@ These histories are fully independent. Discord replies pass through `_enforce_di
 - **CLI** — input loop on the main thread (`main.py`), headless mode.
 - **Telegram C2 bridge** — hardcoded `AUTHORIZED_CHAT_ID`; handles `/status`, `/compact`, `/sentry on|off`, `/stop`, `/diagnostics on|off`, `/screenshot`, `/peek [N]`, `/gpu`, `/gesture on|off`, `/intervention on|off`, `/note <text>`, `/find <thing>` (Assist Mode highlight), voice (Faster-Whisper STT), photos, text. `_dispatch_telegram_response()` intercepts `[NATIVE_AUDIO_PAYLOAD:path]` tags and sends voice notes.
 - **Discord** — two subsystems: `tools/discord_listener.py` (discord.py DM listener, 9-contact whitelist) for inbound, `tools/discord_api.py` (raw Discord REST v10) for outbound.
-- **WebRTC voice bridge** (`webrtc_bridge.py`) — LiveKit Agents SDK. Pipeline: AudioStream → Silero VAD → Faster-Whisper STT → brain → Kokoro TTS. Supports barge-in and epoch-based stale-response cancellation. **Chunk-streaming TTS** (`runtime.tts_chunk_streaming`, default on): `local_tts.py` pushes each Kokoro segment's audio into the call as it is synthesized (first-chunk latency logged as `[Aster Perf] First audio chunk in Xms`) instead of concatenating the whole reply first; a stop-event halts synthesis at the next segment on barge-in. STT and TTS are **shared process-wide**: one Faster-Whisper `medium.en` instance (`local_stt.get_whisper_model()`, also used by Telegram voice) and one ref-counted Kokoro pipeline — no per-call duplicate model loads. Module-level `_active_bridge`/`_active_loop` expose `call_is_active()` and `speak_intervention(text)` so other threads can push an unprompted turn into a live call (used by Intervention Mode).
+- **WebRTC voice bridge** (`webrtc_bridge.py`) — LiveKit Agents SDK. Pipeline: AudioStream → Silero VAD → Faster-Whisper STT → brain → Kokoro TTS. Supports barge-in and epoch-based stale-response cancellation. **Chunk-streaming TTS** (`runtime.tts_chunk_streaming`, default on): `local_tts.py` pushes each Kokoro segment's audio into the call as it is synthesized (first-chunk latency logged as `[Aster Perf] First audio chunk in Xms`) instead of concatenating the whole reply first; a stop-event halts synthesis at the next segment on barge-in. STT and TTS are **shared process-wide**: one CUDA Faster-Whisper `medium.en` instance for calls (`local_stt.get_whisper_model()` — Telegram voice notes reuse it when a call is live, otherwise `local_stt.transcribe_file` uses a lazy **CPU** instance so voice notes cost zero VRAM) and one ref-counted Kokoro pipeline — no per-call duplicate model loads. Module-level `_active_bridge`/`_active_loop` expose `call_is_active()` and `speak_intervention(text)` so other threads can push an unprompted turn into a live call (used by Intervention Mode).
 
 ### Vision & UI Automation (`tools/vision.py`)
 
-- **`look_at_screen`** — `mss` screen capture → Base64 JPEG → Gemma describes the screen (temp 0.2).
+- **`look_at_screen`** — `mss` screen capture → Base64 JPEG → the vision model describes the screen (temp 0.2).
 - **`locate_ui_element_ex(goal)`** — core of `smart_click` / `smart_type`. Three-track pipeline; returns `{"x","y","source","text","score",...}` in logical pixels (`locate_ui_element` is the `(x, y)` back-compat wrapper). Goal parsing/scoring is shared across tracks via `tools/locator_common.py` (`parse_goal` strips filler words, extracts spatial hints ("top right" → position prior, ×0.8 on contradiction) and control-type hints; `score_text` = `max(SequenceMatcher, token-overlap × 0.85, substring × 0.9-0.95)`).
   - **Track 0 — UIA accessibility tree (`tools/uia.py`, primary, ~0.1-2s, zero GPU):** walks the foreground window + taskbar via the `uiautomation` package, matching exact element Names/rects from the OS. Threshold 0.70. Chromium/Electron apps enable accessibility lazily — the walk itself wakes it; a sparse first walk (<12 named controls) triggers one retry after 0.8s. Never raises: any failure falls through to Track 1.
   - **Track 1 — full-screen OCR (~2-4s, cached):** `pytesseract.image_to_data` × 2 (normal + inverted), 2× upscaled, grouped into lines, scored ≥ 0.5. Capture+OCR is cached ~4s (`_get_screen_ocr`); **every GUI action calls `invalidate_screen_cache()`** so a click-then-type re-captures.
-  - **Track 2 — OmniParser YOLO + icon captioning (last resort):** `icon_detect` boxes get text labels by intersecting the *cached* Track-1 OCR lines (`_texts_in_box` — no per-crop tesseract calls). If no labeled box scores ≥ 0.45 (`_YOLO_SCORE_THRESHOLD`; 0.3 caused false positives), the top-8 most-confident **text-less** boxes (real icons, ≤15% screen area) are captioned by the multimodal engine (`_caption_crop`) and matched on function descriptions. Track 2 is demoted by `config.USE_PIXEL_FALLBACK` (default true; false = the YOLO model is never loaded). Captioner is pluggable via `config.ICON_CAPTIONER` (`vision.icon_captioner`): `"gemma"` (default, resident model, zero extra VRAM) / `"off"`. (The Florence-2 experiment was dropped — never wired.)
+  - **Track 2 — OmniParser YOLO + icon captioning (last resort):** `icon_detect` boxes get text labels by intersecting the *cached* Track-1 OCR lines (`_texts_in_box` — no per-crop tesseract calls). If no labeled box scores ≥ 0.45 (`_YOLO_SCORE_THRESHOLD`; 0.3 caused false positives), the top-8 most-confident **text-less** boxes (real icons, ≤15% screen area) are captioned by the multimodal engine (`_caption_crop`) and matched on function descriptions. Track 2 is demoted by `config.USE_PIXEL_FALLBACK` (default true; false = the YOLO model is never loaded). Captioner is pluggable via `config.ICON_CAPTIONER` (`vision.icon_captioner`): `"llm"` (default, resident model, zero extra VRAM) / `"off"` (any other value falls through to the captioner). (The Florence-2 experiment was dropped — never wired.)
   - Coordinates are DPI-corrected: `pixel_in_upscaled_image / 2 * (logical_screen / physical_screen)`; UIA rects scale by `logical / physical-desktop-rect`.
 - **Deterministic action verification** (`core/brain.py` dispatch + vision helpers): every `smart_click` diffs a small pre/post grayscale frame (`capture_screen_small_gray` + blockwise `screens_differ`) and warns the model when the screen did not change; every GUI result carries the match provenance (source/text/score, low-confidence flagged) and the current foreground window title (`tools.uia.get_foreground_window_title`). `smart_type` checks keyboard focus via UIA before Ctrl+A: form fields get select-all, `DocumentControl` gets append-only (never wipes a document), anything else returns `FAILED` without typing. All locate misses return `FAILED — ...` so the failure-blind-claim guard sees them. The ReAct loop warns from the 3rd identical `smart_click` goal per turn.
-- **`verify_action_result(goal)`** — post-click Gemma free-text check (`n_predict=80`); not called by the dispatch path (per-click verification is the deterministic diff above).
+- **`verify_action_result(goal)`** — post-click model free-text check (`n_predict=80`); not called by the dispatch path (per-click verification is the deterministic diff above).
 - **Eval harness** — `engine_testing/locator_eval.py`: `capture <name>` saves labeled screenshots, `run [--captions]` scores Tracks 1/2 offline on `locator_cases/cases.json`, `live "<goal>"` runs the full locate against the live screen (moves mouse, never clicks). Locator-tuning decisions are made here with data; `run --no-pixel` measures the demoted-Track-2 A/B.
 - **DOM-first automation motor (opt-in, Stages 0–3):** `tools/dom.py` builds a role/name/bbox shortlist from Playwright's ARIA snapshot (web, attached over CDP when `config.USE_DOM_MOTOR` is on; only the focused page is actionable) or one shared UIA walk (Windows), ranks it with `locator_common` scoring, and executes via Playwright/UIA. Send/submit/destructive web clicks are refused under `config.DOM_MOTOR_SEND_POLICY` (`confirm` default) until `smart_click(..., confirm_send: true)`. `core/system1.py` (Laya, lazy+ref-counted, CPU) optionally picks among ambiguous candidates and answers neutral-key yes/no gates, escalating to the normal path on low margin (`config.USE_LAYA_KERNEL`). Both flags default OFF; stage plan + QA gates live in `engine_testing/qa/`. **`browse_web(url | site+query)`** opens a page in that browser (launching a real Chrome/Edge when CDP attach isn't available) and returns its visible text + HTTP status — the tool for live prices/pages; read-only (`config.WEB_BROWSE_ENABLED`, default on). **Called with no arguments it reads the current page** without navigating, so the model can interact then review: `browse_web(site='linkedin')` → `smart_type('the search bar', '<name>', submit=true)` → `browse_web()` → `smart_click('<profile>')`. Known sites map to their own search (`linkedin` → people search, `amazon.<tld>` → `/s?k=`, `youtube`, `wikipedia`, `google`); no query → the site home page. **`automation.human_search: true`** (set on this install) makes `site`+`query` land on the site's HOME page so the model drives the site's own search bar like a human (`browse_web(site=…)` → `smart_type('the search bar', q, submit=true)` → `browse_web()`); the mapped URLs are the rollback path (flag off), and unknown bare names still search rather than guess a dead host. The owner's real browser profile can NEVER be driven (settled 2026-09-26: Chrome ≥136 ignores the debug port on the default user-data-dir, and any copy or junction of it loses the app-bound encrypted logins — Chrome purges them, so it must never be attempted); `automation.use_real_profile: true` makes `browse_web` refuse loudly (`RealProfileUnavailable`, no silent logged-out guest) with the supported alternative: **`python login_once.py <site>`** (e.g. `linkedin`) opens the login page in Aster's dedicated persistent profile once — the session persists and every later `browse_web` browses that site logged in (`login_once.py --status` lists saved sessions). Aster's own browser launches with `--disable-background-mode` and detach kills it by `--user-data-dir` match, so closed sessions never leave port-squatting background processes.
 - **Webcam / face recognition** — `capture_webcam_base64()` returns `(base64, detected_names)`; encodings loaded from `Aster_Vault/Faces/` (files named per person) at import via `load_known_faces()`.
@@ -286,7 +280,7 @@ Shared config: `emotion.mood_shared` (`MOOD_TOUCH_COOLDOWN`), `MOOD_SUSTAIN_TURN
 
 ### Sentry Mode (`tools/sentry.py`)
 
-Webcam intruder detection. `sentry_daemon()` polls every 5s when active: Gemma scene analysis with `face_recognition` fallback. Known-as-"Mohamed" ignored; others alert with 5-min cooldown; unknown faces save `temp_intruder.jpg` and set `WAITING_FOR_ID`. The daemon **auto-start is commented out** in `main.py` (~line 359), but `toggle_sentry_mode` still works.
+Webcam intruder detection. `sentry_daemon()` polls every 5s when active: vision-model scene analysis with `face_recognition` fallback. Known-as-"Mohamed" ignored; others alert with 5-min cooldown; unknown faces save `temp_intruder.jpg` and set `WAITING_FOR_ID`. The daemon **auto-start is commented out** in `main.py` (~line 664), but `toggle_sentry_mode` still works.
 
 ### Intervention Mode (`tools/intervention.py`)
 
@@ -316,8 +310,8 @@ command. Primary monitor only.
 - **Dedup gate:** `is_fact_already_known()` blocks writes via bidirectional substring + 85% `SequenceMatcher` against `memory.md`.
 - **`trim_memory()`** (`core/memory.py`) — sliding window using a ~4-chars-per-token heuristic (calibrated against llama-server `/tokenize` when `EXACT_TOKEN_COUNT` is on), budget 90% of `N_CTX`, preserves index 0 (system prompt). **Tool-pair-aware:** an assistant message carrying `tool_calls` and its trailing `role:"tool"` messages pop as one unit (`_pop_oldest_turn_unit`) so trimming never orphans a tool message with a dangling `tool_call_id` (covers both admin and Discord histories).
 - **`/compact` + auto-compact** — `_compact_context_locked()` (`core/brain.py`) LLM-summarizes history and replaces it with a `[System Memory Restored: ...]` block; refuses if < 2000 estimated tokens (calibrated estimator, images charged flat — base64 can't fake the count). Manual `/compact` and the automatic trigger share this one function: when `runtime.auto_compact` is on (default) and the estimate crosses `runtime.auto_compact_threshold` (0.75) × `N_CTX` at the start of a turn, compaction runs before the turn is processed (one-time latency hit) and logs an `auto_compact` instrumentation event.
-- **Auto-consolidation:** `evaluate_and_memorize()` fires automatically every `MEMORIZE_EVERY_N_TURNS` (= 5) real user turns inside `process_user_input()` — not just at shutdown / `/memorize`. Crash safety: at most 4 turns of facts are lost. Multi-fact extraction: `_extract_all_native_tool_calls()` reads every entry off the response's `tool_calls` array (or `_legacy_xml_parse_multi()` iterating `<tool_call>` blocks in the rollback path) so a single pass can save N facts — the old single-match path silently dropped 2nd+.
-- **Raw conversation archive** (`log_raw_turn()`, `core/memory.py`) — independent of the fact pipeline above: every real turn's verbatim user/assistant exchange is appended to `Aster_Vault/Conversations/YYYY-MM-DD.md` (one file per calendar day), called from the end of `process_user_input()` with a pristine pre-mutation copy of the input. Not deduped, not summarized, no retention limit yet — it's a grep-able fallback of last resort for "what exactly did we say on day X" when `recall_memory()` comes up empty. Skips `[System Internal]` nudges; native audio/image payloads collapse to a `(voice note)`/`(image)` placeholder instead of dumping base64.
+- **Auto-consolidation:** `evaluate_and_memorize()` fires automatically every `MEMORIZE_EVERY_N_TURNS` (= 5) real user turns inside `process_user_input()` — not just at shutdown / `/memorize`. Crash safety: at most 4 turns of facts are lost. Multi-fact extraction: `_extract_all_native_tool_calls()` reads every entry off the response's `tool_calls` array so a single pass can save N facts — the old single-match path silently dropped 2nd+.
+- **Raw conversation archive** (`log_raw_turn()`, `core/memory.py`) — independent of the fact pipeline above: every real turn's verbatim user/assistant exchange is appended to `Aster_Vault/Conversations/YYYY-MM-DD.md` (one file per calendar day), called from the end of `process_user_input()` with a pristine pre-mutation copy of the input. Not deduped, not summarized, no retention limit yet — it's a grep-able fallback of last resort for "what exactly did we say on day X" when `recall_memory()` comes up empty. Skips `[System Internal]` nudges; native image payloads collapse to an `(image)` placeholder instead of dumping base64 (voice notes are plain text now — Whisper transcript).
 
 ### Google Integration — Gmail + Calendar (`tools/google_auth.py`, `tools/gmail_tool.py`, `tools/google_calendar.py`)
 
@@ -341,7 +335,7 @@ Partial and Autonomous request identical Google OAuth scopes (`gmail.modify` +
 - **Spotify** (`tools/media.py`) — Spotipy OAuth; `ensure_active_spotify_device()` auto-transfers playback, and when **no device exists at all** (Spotify closed) it self-heals: launches the desktop app via `tools.system.open_application` and polls `sp.devices()` for up to ~25 s until it registers (`_launch_spotify_and_wait`). All Spotify/timer tools return `ToolResult(ok, text)` envelopes (`core/tool_result.py`) — the failure-blind-claim guard reads `.ok` exactly; failure texts keep their LLM-instructive `FAILED` prefix. Unmigrated tools still return plain strings, classified by the legacy FAILED/Error prefix regex in `core.brain._normalize_tool_result` (`runtime.structured_tool_results: false` reverts to regex-everywhere). `execute_tool()` strips envelopes for legacy callers; the ReAct loops use `execute_tool_ex()` → `(ok, payload)`.
 - **System** (`tools/system.py`) — Win32 control: `set_system_state` (rundll32 lock/sleep/restart), `set_volume` (pycaw), `open_application` (Start Menu fuzzy match), process list (psutil).
 - **Timers/Alarms** (`tools/media.py`) — daemon threads firing `winotify` toasts.
-- **RAG** (`tools/rag.py`) — single `research(topic)` tool. Internal pipeline: vault cache (90-day staleness) → Wikipedia API (fast, free, encyclopedic) → Firecrawl fallback (live web, paid). Auto-saves every result to `Aster_Vault/database/*.md` tagged `[Source: Wikipedia|Firecrawl | topic]`. Gemma sees one tool; vault/source routing is internal Python.
+- **RAG** (`tools/rag.py`) — single `research(topic)` tool. Internal pipeline: vault cache (90-day staleness) → Wikipedia API (fast, free, encyclopedic) → Firecrawl fallback (live web, paid). Auto-saves every result to `Aster_Vault/database/*.md` tagged `[Source: Wikipedia|Firecrawl | topic]`. The model sees one tool; vault/source routing is internal Python.
 - **Audio** (`tools/audio.py`) — Kokoro TTS 82M. **One shared, ref-counted pipeline** (`acquire_kokoro_pipeline` / `release_kokoro_pipeline`) used by both the `generate_kokoro_voice` tool and the LiveKit call (`local_tts.py`); lazy-loaded on first use, **offloaded from VRAM when no consumer holds it**. Emits `[NATIVE_AUDIO_PAYLOAD:path]`.
 
 ---
@@ -350,11 +344,11 @@ Partial and Autonomous request identical Google OAuth scopes (`gmail.modify` +
 
 - **FastAPI dashboard block in `main.py`** — still commented out. The old 3-panel `aster-ui` dashboard was replaced by the Tauri face app. A *separate* minimal FastAPI lives in `tools/face_server.py` (token + logs only) — that one IS active.
 - **Sentry daemon auto-start** — commented out (`main.py` ~359).
-- **Old YOLO coordinate pipeline** — archived inside a `'''...'''` string block at the bottom of `tools/vision.py` (`parse_screen`, `UI_ELEMENT_COORDS`, `get_ui_element_coords`, `_extract_detector_elements`, etc.). The current locator is `locate_ui_element`, NOT `parse_screen`.
+- **Old YOLO coordinate pipeline** — the archived `'''...'''` blocks were **deleted in the Qwen swap** (`parse_screen`, `UI_ELEMENT_COORDS`, `get_ui_element_coords`, `_extract_detector_elements` no longer exist anywhere). The current locator is `locate_ui_element`; the live Track-2 path is `_yolo_track` + `_caption_crop`.
 - **`tools/gui.py`** — present but not imported.
 - **`tools/web.py`** — `search_web()` is dead code; the brain uses `deep_web_search()` from `tools/rag.py`.
 - **`whisper-models/models--Systran--faster-distil-whisper-large-v3/`** — present but never loaded; only `medium.en` is used.
-- **`AUDIO_MODE` config** — kept for compatibility but has no runtime effect (native audio bypassed with `if False:`).
+- **Native audio input (`input_audio`) — removed in the Qwen swap.** Gemma's audio head is gone; voice notes now go through Faster-Whisper (`local_stt.transcribe_file`) and enter the brain as text.
 
 ---
 
@@ -396,12 +390,12 @@ Main thread runs the CLI loop. Daemon threads: Telegram `infinity_polling`, Disc
 | `config.py` | Single-engine config, ChromaDB init; loads `self_config.yaml` (`SELF_CONFIG`/`_cfg()`) and `secrets.yaml` (`SECRETS`/`_secret()`) as two separate gitignored per-install files; persona selector (`SYSTEM_PROMPT`) + `VOICE_SPEED` / `UTTERANCE_DEBOUNCE` / `INITIATIVE_LEVEL` knobs |
 | `first_run_setup.py` | Standalone interactive wizard — `python first_run_setup.py` — writes `secrets.yaml` (credentials) and the identity/contacts fields of `self_config.yaml`. Every integration optional; safe to re-run (existing values become prompt defaults). Not auto-invoked by `main.py` (would hang non-interactive contexts like pytest) — `config.py` just prints a one-time note when `secrets.yaml` is missing. |
 | `secrets.example.yaml` / `self_config.example.yaml` | Public templates (committed) for the two gitignored per-install config files above. Copy to `secrets.yaml` / `self_config.yaml` and edit, or use `first_run_setup.py`. |
-| `core/brain.py` | LLM adapter, native OpenAI tool calling (`USE_NATIVE_TOOL_CALLS`, legacy XML path kept for rollback), ReAct loop, hallucination detection, `ADMIN_TOOLS`, `_load_system_prompt()` persona loader, Discord brain (~3200 lines) |
-| `Aster_Vault/System_Prompts/*.md` | Swappable persona prompts (`jarvis.md` butler, `gogi.md` best-friend); chosen by `config.SYSTEM_PROMPT`, assembled by `_build_system_content()` (calls `_load_system_prompt()`). `<!-- -->` comments stripped; XML tool manual appended only when `USE_NATIVE_TOOL_CALLS` is False |
+| `core/brain.py` | LLM adapter (`_execute_llm_completion`), native OpenAI tool calling (no legacy XML path since the Qwen swap), ReAct loop, hallucination detection, `ADMIN_TOOLS`, `_load_system_prompt()` persona loader, Discord brain (~3100 lines) |
+| `Aster_Vault/System_Prompts/*.md` | Swappable persona prompts (`jarvis.md` butler, `gogi.md` best-friend); chosen by `config.SYSTEM_PROMPT`, assembled by `_build_system_content()` (calls `_load_system_prompt()`). `<!-- -->` comments stripped; tool schemas travel in the `tools` POST param |
 | `core/memory.py` | Hybrid memory read/write, tool-pair-aware `trim_memory()`, raw daily conversation archive (`log_raw_turn()`) |
 | `core/tool_result.py` | `ToolResult(ok, text)` envelope + `tool_ok`/`tool_fail` helpers — exact failure signal for migrated tools (media.py, GUI branches); normalized in `core.brain._normalize_tool_result` |
 | `tools/health_watchdog.py` | llama-server `/health` watchdog daemon — 3-strike detection, Telegram alert (`diagnostics.send_alert`), capped auto-relaunch of `start.bat` |
-| `tools/vision.py` | Screen/webcam capture, face recognition, `get_primary_face_crop_rgb` (face crop for Tier-2 emotion), `locate_ui_element_ex` (Tracks 1-2: cached OCR + YOLO/captioning; Track 0 delegated to `tools/uia.py`), `screens_differ` action diffing, cold storage; archived YOLO pipeline at bottom |
+| `tools/vision.py` | Screen/webcam capture, face recognition, `get_primary_face_crop_rgb` (face crop for Tier-2 emotion), `locate_ui_element_ex` (Tracks 1-2: cached OCR + YOLO/captioning; Track 0 delegated to `tools/uia.py`), `screens_differ` action diffing, cold storage |
 | `tools/uia.py` | Locator Track 0 — Windows UI Automation accessibility tree (`uia_locate`, Chromium warm-up retry); `get_foreground_window_title`, `focused_control_type` (smart_type Ctrl+A safety) |
 | `tools/locator_common.py` | Shared goal parsing/scoring for all locator tracks: `parse_goal` (filler stripping, spatial + control-type hints), `score_text`, `spatial_weight` |
 | `engine_testing/locator_eval.py` | Locator eval harness: `capture` / `run [--captions]` / `live "<goal>"` — decides captioner/threshold questions with data on real screenshots |

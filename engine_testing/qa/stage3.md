@@ -14,8 +14,8 @@ battery + live integration pending (needs `pip install laya` + checkpoint)
   blocked) · `pick_element` (choice over the ≤18 shortlist, neutral keys with
   role+name criteria — avoids the `noul` label-bias bug #156) · `check_state`
   (neutral-key 2-option choice).
-- Margin gate (top1−top2); below threshold or `blocked` → escalate to Gemma,
-  respecting `core/loop_guard.py`.
+- Margin gate (top1−top2); below threshold or `blocked` → escalate to the main
+  LLM, respecting `core/loop_guard.py`.
 - Calibration log: `Aster_Vault/system1_log.jsonl` (schema, full distribution,
   margin, deterministic outcome).
 
@@ -40,7 +40,7 @@ python system1-test.py          # mock-distribution battery
 - [ ] mock battery green (canned distributions, no model download)
 - [ ] slow real-model battery: ambiguous fixtures, latency, accuracy vs argmax
       (requires `pip install laya` + checkpoint download; marked slow)
-- [ ] ≥ 1 forced-blocked case escalates to Gemma and logs
+- [ ] ≥ 1 forced-blocked case escalates to the main LLM and logs
 - [ ] RAM measured; idle VRAM unchanged
 - [ ] end-to-end fixture tasks with vision verdicts
 

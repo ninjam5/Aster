@@ -27,11 +27,14 @@ requiring a manual model choice and manual `start.bat` editing.
   `torch.cuda.get_device_properties(0)`.
 - `huggingface_hub` and `psutil` are already installed dependencies — no new
   packages needed for either detection or download.
-- One grounded VRAM data point: E4B + 128k context + Q4_0 KV cache uses
-  ~5-6GB VRAM (`checklist_test.md`), observed on a 3080 12GB.
-- Three model variants already tested successfully: Gemma E2B QAT, Gemma E4B
-  QAT (current default), Gemma 12B QAT. Real VRAM footprints for E2B and 12B
-  haven't been recorded anywhere yet — only E4B's number is grounded above.
+- Grounded VRAM data points on a 3080 12GB: E4B + 128k context + Q4_0 KV cache
+  used ~5-6GB (`checklist_test.md`, 2026-06); **the current engine (Qwen 3.6
+  35B-A3B IQ4_XS + KVarN KV + 60k ctx + ~20 CPU MoE layers) uses ~11.5-11.9GB
+  (measured 2026-09-27)**, with the mmproj held in RAM.
+- The engine is now **Qwen 3.6 35B-A3B** (2026-09-27 swap); the Gemma variants
+  (E2B QAT, E4B QAT, 12B QAT) were the prior engine and are superseded. Real VRAM
+  footprints for E2B and 12B were never recorded — only E4B's and the current
+  engine's are grounded above.
 
 ## Proposed direction
 

@@ -16,13 +16,13 @@ running tests → `aster-validation-and-qa`; understanding why an invariant exis
 
 | # | Rule | Why / incident |
 |---|---|---|
-| 1 | **Risky core changes ship behind a rollback flag.** Pattern: `config.USE_NATIVE_TOOL_CALLS` — the XML→native tool-calling migration kept the entire legacy path alive behind one boolean. | The 2026-05 engine migration hell (three failed architectures) taught that LLM-behavior changes can look fine and fail live. A flag turns a bad night into a one-line revert. |
-| 2 | **Never touch the LLM adapter, the chat template (`Aster_Vault/gemma4-multimodal.jinja`), or the tool-calling path without harness evidence.** Baseline first, A/B after (see `aster-gemma-reliability-campaign` Phase 0). | Three failed tool-calling architectures (ChatML clash, Llava15ChatHandler echo loop, silent system-role drop) each burned days. |
-| 3 | **VRAM budget gate**: any change adding/moving a model must report measured idle + active VRAM against the budgets (idle ~6 GB on E4B / ~4 GB on E2B; 12 GB ceiling). New models are lazy + ref-counted, not eager. | Owner-stated 2026-07-05. Past leaks: per-call duplicate Whisper/Kokoro loads, base64 history bloat. See `aster-vram-discipline`. |
+| 1 | **Risky core changes ship behind a rollback flag.** Pattern (current example): `config.USE_DOM_MOTOR`. The pattern still holds — the older `config.USE_NATIVE_TOOL_CALLS`, itself the XML→native migration's rollback flag, was **deleted in the Qwen 3.6 swap (2026-09-27)** once the path became native-only. | The 2026-05 engine migration hell (three failed architectures) taught that LLM-behavior changes can look fine and fail live. A flag turns a bad night into a one-line revert. |
+| 2 | **Never touch the LLM adapter, the chat template (`E:\Models\qwen36_chat_template.jinja`, froggeric v22.5), or the tool-calling path without harness evidence.** Baseline first, A/B after (see `aster-gemma-reliability-campaign` Phase 0). | Three failed tool-calling architectures (ChatML clash, Llava15ChatHandler echo loop, silent system-role drop) each burned days. |
+| 3 | **VRAM budget gate**: any change adding/moving a model must report measured idle + active VRAM against the budget (llama-server alone measures ~11.5–11.9 GB / 12.3 GB on the Qwen 3.6 35B-A3B engine at 60k ctx; 12 GB ceiling). New models are lazy + ref-counted, not eager. | Owner-stated 2026-07-05. Past leaks: per-call duplicate Whisper/Kokoro loads, base64 history bloat. See `aster-vram-discipline`. |
 | 4 | **No virtual environments.** Global pip only: `python -m pip install <pkg>`. | Enforced by `.github/instructions/python-global-packages.instructions.md`. |
 | 5 | **Credentials only in `secrets.yaml`** (gitignored). Never in `config.py`, `self_config.yaml`, or any tracked file. Never read the real yaml files in a session — use the `.example.yaml` templates. | `self_config.yaml` is exposed verbatim to the LLM via `get_my_config`; secrets use a deliberately separate loader so they can never leak through introspection (config.py:48-56 comments). |
 | 6 | **Proactive/surveillance-adjacent features default OFF** and are debounced (sustained-mood gates, cooldowns, streak guards). | Established by the emotion roadmap: mood check-ins, ambient actions, ambient audio, face emotion all shipped opt-in default OFF so Aster "never feels like it's surveilling". |
-| 7 | **Persona files are owner-authored.** `Aster_Vault/System_Prompts/*.md` content and the custom voice tensors: wire them, never rewrite their substance. Never put a tool list inside a persona file. | Owner-stated. The XML tool manual is appended by code only in the legacy path. |
+| 7 | **Persona files are owner-authored.** `Aster_Vault/System_Prompts/*.md` content and the custom voice tensors: wire them, never rewrite their substance. Never put a tool list inside a persona file. | Owner-stated. Tool schemas live in `ADMIN_TOOLS` only. |
 | 8 | **Multi-feature plans need per-feature testing checklists**, mirrored into the spec doc. | Owner-stated discipline (2026-05); see the shape in `ideas.md` and `emotions-next-steps.md`. |
 | 9 | **Every optional integration fails closed.** Missing credential ⇒ `*_AVAILABLE=False` ⇒ graceful no-op, never a crash. New integrations must follow this shape. | The pattern is uniform across Spotify/Telegram/Discord/LiveKit/Google in config.py. |
 | 10 | **Outward-facing actions are gated.** Anything that sends (email, calendar invites with guests) routes through the tier system + single pending-approval slot (`tools/google_auth.py send_policy`). Never add a tool that silently transmits. | "Data never leaves the machine / auditable gated tool use" is the project's load-bearing external claim (README). |
@@ -31,15 +31,15 @@ running tests → `aster-validation-and-qa`; understanding why an invariant exis
 
 ### A. Adding or modifying an admin tool
 The **three-edit rule** (all three or the tool half-exists):
-1. Schema dict appended to `ADMIN_TOOLS` (`core/brain.py:396`) — already full
+1. Schema dict appended to `ADMIN_TOOLS` (`core/brain.py:324`) — already full
    OpenAI JSON-Schema `{"type":"function","function":{...}}` shape.
-2. `elif` dispatch branch in `execute_tool()` (`core/brain.py:1604`).
+2. `elif` dispatch branch in `execute_tool()` (`core/brain.py:2080`).
 3. Implementation in the right `tools/` module + import at top of `brain.py`.
 
 Gates: description must match the implementation (description drift is a documented
 past bug class); if outward-facing → rule 10; verify registration:
-`python -c "import core.brain as b; print(len(b.ADMIN_TOOLS))"` (68 as of
-2026-07-05, boot log prints the count). Discord brain tools are a separate 3-tool
+`python -c "import core.brain as b; print(len(b.ADMIN_TOOLS))"` (69 as of
+2026-09-27, boot log prints the count). Discord brain tools are a separate 3-tool
 allowlist — do not add admin tools there.
 
 ### B. Core brain / adapter / template / memory changes
@@ -81,15 +81,15 @@ See `aster-docs-and-writing` (which docs are living vs frozen; update duty).
 ## Before-you're-done checklist (run it, don't vibe it)
 
 ```powershell
-# 1. Offline test suites (no llama-server needed) — baseline 2026-07-05:
-#    pytest: 118 passed, 1 known-failing (test_first_run_setup.py::TestUpdateIdentity::test_preserves_comments_and_untouched_fields)
+# 1. Offline test suites (no llama-server needed) — baseline 2026-09-27:
+#    pytest: 408 passed, 1 known-failing (test_first_run_setup.py::TestPollTelegramChatId::test_invalid_token_returns_none_without_hanging)
 python -m pytest tests/ -q
 python emotion-test.py        # 19/19
 python ambient-audio-test.py  # 23/23
 python face-emotion-test.py   # 22/22
 
 # 2. Tool registry intact (only if you touched brain.py):
-python -c "import core.brain as b; print(len(b.ADMIN_TOOLS))"   # expect 68 +/- your change
+python -c "import core.brain as b; print(len(b.ADMIN_TOOLS))"   # expect 69 +/- your change
 
 # 3. Frontend bar (only if you touched Aster-UI):
 cd Aster-UI; npm run build; npm run lint; npm test
@@ -114,6 +114,6 @@ absorbed into your change.
 Authored 2026-07-05 against live code and owner Q&A of the same date.
 
 - Three-edit anchors: `Select-String -Path core\brain.py -Pattern "^ADMIN_TOOLS|^def execute_tool"`
-- Rollback flag: `Select-String -Path config.py -Pattern "USE_NATIVE_TOOL_CALLS"`
-- Test baseline: `python -m pytest tests/ -q` (118 pass / 1 known fail on 2026-07-05)
+- Rollback flag (current example): `Select-String -Path config.py -Pattern "USE_DOM_MOTOR"`
+- Test baseline: `python -m pytest tests/ -q` (408 pass / 1 known fail on 2026-09-27)
 - Frontend bar text: `Select-String -Path Aster-UI\CLAUDE.md -Pattern "standing bar"`

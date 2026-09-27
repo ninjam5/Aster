@@ -32,7 +32,7 @@ values become defaults). It is NOT auto-invoked by main.py.
 `TELEGRAM_AVAILABLE`, `GOOGLE_AVAILABLE`, `MEMORY_AVAILABLE`; LiveKit/Discord have
 their own empty-credential checks in their modules.
 
-## Flag catalog (defaults verified in config.py, 2026-07-05)
+## Flag catalog (defaults verified in config.py; runtime rows updated for the Qwen swap 2026-09-27)
 
 Status: **P** = production/always-on path · **O** = opt-in (default OFF) ·
 **L** = legacy/no-op.
@@ -40,12 +40,10 @@ Status: **P** = production/always-on path · **O** = opt-in (default OFF) ·
 ### Runtime / LLM
 | Flag | Yaml path | Default | Status | Notes |
 |---|---|---|---|---|
-| `MODEL_NAME` | — (constant) | `gemma-e4b-q4km` | P | Sent as `model=`; server ignores it |
-| `N_CTX` | `runtime.context_window` | 131072 | P | **Must match start.bat `--ctx-size` (currently 128000 — known mismatch; verify per-install)** |
-| `USE_NATIVE_TOOL_CALLS` | `runtime.use_native_tool_calls` | True | P | False = full legacy XML ReAct rollback |
+| `MODEL_NAME` | — (constant) | `Qwen3.6-35B-A3B-UD-IQ4_XS` | P | Sent as `model=`; server ignores it |
+| `N_CTX` | `runtime.context_window` | 60000 | P | **Must match start.bat `--ctx-size 60000`** |
 | `LLM_TEMPERATURE` | `settings.llm_temperature` | 1.0 | P | Sub-task calls override temp only (vision 0.2) |
 | `LLM_TOP_P` / `LLM_TOP_K` | `settings.llm_top_p/top_k` | 0.95 / 64 | P | |
-| `AUDIO_MODE` | — (constant) | `whisper` | **L** | No runtime effect (native audio bypassed `if False:` in main.py) |
 | `llm` | — | `None` | **L** | Back-compat placeholder |
 
 ### Wake word / voice
@@ -158,8 +156,9 @@ Status: **P** = production/always-on path · **O** = opt-in (default OFF) ·
 
 ## Provenance and maintenance
 
-Authored 2026-07-05; every default read from config.py the same day. Flags drift —
-re-verify with:
+Authored 2026-07-05; every default read from config.py the same day. Runtime LLM
+rows (`MODEL_NAME`, `N_CTX`) updated 2026-09-27 for the Qwen 3.6 35B-A3B swap.
+Flags drift — re-verify with:
 
 - Full constant dump: `Select-String -Path config.py -Pattern "^[A-Z_]+\s*="`
 - A specific default: `Select-String -Path config.py -Pattern "<FLAG_NAME>"`

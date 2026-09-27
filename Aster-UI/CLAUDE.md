@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 Aster-UI is the desktop companion app for **Aster**, a personal AI assistant whose actual brain
-lives in the sibling repo `../Aster-localization` (local LLM, voice, vision, memory, 68 admin
+lives in the sibling repo `../Aster-localization` (local LLM, voice, vision, memory, 69 admin
 tools, etc.). This app is the friendly desktop front-end for non-technical users, alongside the
 existing terminal/Telegram interfaces.
 

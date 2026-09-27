@@ -5,6 +5,17 @@ description: Load this to work on Aster's hardest live problem (owner-confirmed 
 
 # Gemma Reliability Campaign
 
+> **STATUS: SETTLED 2026-09-27 — resolved by swapping the model.** The owner
+> replaced the quantized Gemma-4-E4B with **Qwen 3.6 35B-A3B** (BeeLlama v0.4.7,
+> 60k ctx, KVarN KV, MTP) rather than continuing to harden the small model. See the
+> `aster-failure-archaeology` entry "Qwen 3.6 35B-A3B engine swap". Everything below
+> is preserved as the record of how the failures were measured and mitigated; **the
+> mitigations themselves all survive** (`_claims_tool_execution`, the apathy nudge,
+> `core/loop_guard.py`, output compression) and are still the first thing to check
+> when the new engine misbehaves. The one residual family is tool-avoidance on
+> trivial instant actions — tracked in
+> `engine_testing/qa/qwen-swap-live-validation.md` T3, lever = tool-law wording.
+
 **The problem (owner-stated 2026-07-05):** the quantized Gemma-4-E4B agent
 misbehaves in four ways — (a) *hallucinated execution* (narrates a tool action
 without calling it), (b) *post-tool apathy* (empty final answer after successful
@@ -32,10 +43,11 @@ LIVE system prompt + ADMIN_TOOLS from core.brain, replays the real 15-round loop
 with mocked tool results, auto-scores 6 categories). Frozen June-2026 reports live
 in `results/`.
 
-**The honest caveat:** `harness.py` exercises **only the legacy XML path** — it
-never sends `tools=`, it injects `_get_xml_tool_prompt()` and parses with
-`_legacy_xml_parse`. Production runs the NATIVE path. **Step 0.1 is therefore the
-first obligation:**
+**The honest caveat (historical):** `harness.py` used to exercise **only the legacy
+XML path**. **Step 0.1 was completed in 2026-07** — the harness is now native-only
+(`tools=ADMIN_TOOLS`, structured `tool_calls`, `role:"tool"` results), and the
+legacy path itself was deleted in the 2026-09-27 swap. The original obligation
+read as follows, for the record:
 
 ### 0.1 Extend the harness to the native path
 Add a `--native` mode to `harness.py`/`run_engine_test.py` that mirrors
@@ -55,7 +67,11 @@ python engine_testing/run_engine_test.py            # legacy mode
 python engine_testing/run_engine_test.py --native   # new mode (after 0.1)
 ```
 
-**Expected observations (from the frozen 2026-06-24 legacy report, 128k ctx):**
+**Baseline of record:** the frozen 2026-06-24 Gemma report (legacy path, 128k ctx)
+scored 32/32 auto at 90.2 tok/s. **Current Qwen 3.6 35B-A3B baseline (native path,
+60k ctx, 52 scenarios):** 31/37 auto at temp 1.0 (84%), 27/37 at temp 0.7 (73%),
+0.0% text-tool-syntax leaks, 0.0% JSON decode failures, loop discipline 5/5, ~40
+tok/s decode. The older expectation text below is kept for the record:**
 auto-score **32/32** (single-tool 8/8, args 6/6, multi-step 5/5, restraint 5/5,
 hallucination 5/5, cutoff-routing 3/3); 90.2 tok/s; 4.98 s avg/turn; 0% XML
 mangle on 84 calls.
@@ -124,7 +140,7 @@ Work top-down; one change per A/B cycle.
 
 ### 2.3 Think-tag stripping (`open-jarvis.md` §1.5 — cheap hygiene)
 Regex-strip `<think>…</think>`/`<thinking>…` blocks in
-`_execute_gemma_completion` before returning. Gate: no legitimate content ever
+`_execute_llm_completion` before returning. Gate: no legitimate content ever
 matches (audit a week of transcripts in `Aster_Vault/Conversations/` for false
 positives first).
 
@@ -147,8 +163,8 @@ dense-only.
 The June-2026 sweeps already compared E2B-QAT / E4B-QAT / E4B-q4km / 12B builds
 (reports frozen in `results/`; note the newer launchers already serve a QAT E4B).
 Any swap must: run the full battery on BOTH paths, pass the VRAM budgets
-(`aster-vram-discipline` — a 12B at 128k likely cannot meet the 6 GB idle
-target; say so with `nvidia-smi` numbers, which were never recorded for 12B), and
+(`aster-vram-discipline` — the live engine holds ~11.5-11.9 GB of the 12.3 GB card at
+60k ctx; say so with `nvidia-smi` numbers, which were never recorded for 12B), and
 soak a week on the daily driver.
 
 ---
@@ -157,12 +173,13 @@ soak a week on the daily driver.
 
 1. **No llama-cpp-python, no Llava15ChatHandler, no ChatML function-calling.**
    The three 2026-05 dead ends (`aster-failure-archaeology` §engine-hell).
-2. **No casual edits to `Aster_Vault/gemma4-multimodal.jinja`.** Template changes
+2. **No casual edits to the chat template** (now `E:\Models\qwen36_chat_template.jinja`). Template changes
    require the full Phase-0 A/B on both paths before AND after.
 3. **Never inject the XML tool manual into the system prompt in native mode** —
    the schemas travel in the `tools=` param; doubling them confuses the grammar.
-4. **Do not delete the legacy XML path** (`USE_NATIVE_TOOL_CALLS=false` is the
-   rollback).
+4. ~~Do not delete the legacy XML path~~ — **superseded 2026-09-27:** the XML path and
+   its `USE_NATIVE_TOOL_CALLS` flag were deleted with owner sign-off; the rollback is now
+   branch `gemma-4-e4b-lightweight`, not a flag. Never re-add a parallel parse path.
 5. **Do not raise the hallucination retry count above 1** — the single-retry flag
    exists to prevent retry loops; fix upstream instead.
 6. **Do not "fix" apathy by auto-repeating the nudge** — same loop risk; the
@@ -188,6 +205,6 @@ Authored 2026-07-05. Baseline numbers from
 `engine_testing/results/engine_report_unknown_20260624_160054.txt`.
 
 - Scenario count: `Select-String -Path engine_testing\scenarios.py -Pattern '"category":' | Measure-Object`
-- Harness still legacy-only (Phase 0.1 not yet done?): `Select-String -Path engine_testing\harness.py -Pattern "tools=|_legacy_xml_parse"`
+- Harness is native-only: `Select-String -Path engine_testing\harness.py -Pattern "tools=|_extract_native_tool_call"` (expect the former; the latter is imported from brain)
 - Latest frozen report: `Get-ChildItem engine_testing\results | Sort-Object LastWriteTime | Select-Object -Last 1`
 - Loop-guard existence: `Get-ChildItem core\loop_guard.py` (absent as of 2026-07-05)

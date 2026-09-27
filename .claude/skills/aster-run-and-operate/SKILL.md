@@ -23,55 +23,66 @@ it (or testing near it):
 
 ## Boot order
 
-1. **llama-server first** (one of the three launchers below). Wait until it serves
+1. **llama-server first** (one of the two launchers below). Wait until it serves
    `http://localhost:8080/health`.
 2. **`python main.py`** — verifies the server (`config.load_engine()`, main.py:49),
    registers tools, starts daemons, fires a warmup completion, then runs the CLI
    input loop on the main thread.
 3. Optional UIs (see below).
 
-`Start-all.bat` does 1+2 together with a fixed 30 s wait between them.
+`Start-all.bat` does 1+2 together, polling `/health` (up to 300 s) before starting
+`main.py` to avoid the boot-time memory race.
 
-### The three launchers — NOT interchangeable (verified 2026-07-05)
+### The two launchers (verified 2026-09-27)
 
-| Launcher | Model served | Extra flags |
+| Launcher | What it does | Notes |
 |---|---|---|
-| `start.bat` | `Aster_Vault/Models/gemma-e4b-q4km.gguf` (the model CLAUDE.md documents) | — |
-| `start_new.bat` | **`E:\Models\gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf`** (QAT variant, path OUTSIDE the repo) | `-ngld 99 --parallel 1` |
-| `Start-all.bat` | same QAT model as start_new.bat, then launches `main.py` | 30 s sleep between |
+| `start.bat` | Launches the Qwen/BeeLlama server (60k ctx, thinking off, vision on) | Serves `E:\Models\Qwen3.6-35B-A3B-UD-IQ4_XS.gguf` + `E:\Models\Qwen3.6-35B-A3B-mmproj-F16.gguf` |
+| `Start-all.bat` | Same server, then polls `/health` (up to 300 s) and launches `main.py` | Server + health poll + `main.py` |
 
-The docs describe the q4km model; the `*new*`/`all` launchers point at a newer QAT
-file. **Check what is actually being served** before reasoning about model
-behavior: `Invoke-RestMethod http://localhost:8080/props` (look at the model path).
+`start_new.bat` is **deleted**; the Gemma-era launchers live on the keepsake branch
+`gemma-4-e4b-lightweight`. **Check what is actually being served** before reasoning
+about model behavior: `Invoke-RestMethod http://localhost:8080/props` (look at the
+model path).
 
-### Flag anatomy (common to all launchers)
+### Flag anatomy (both launchers, BeeLlama v0.4.7)
 
 ```
-llama-server.exe
-  --model <gguf>                      the LLM weights
-  --mmproj Aster_Vault/Models/mmproj-F16.gguf   vision projector (REQUIRED for image turns)
+E:\Models\beellama-v0.4.7-bin-win-cuda-12.4-x64\llama-server.exe
+  --model E:\Models\Qwen3.6-35B-A3B-UD-IQ4_XS.gguf      the LLM weights (IQ4_XS MoE, ~3B active/token)
+  --mmproj E:\Models\Qwen3.6-35B-A3B-mmproj-F16.gguf    vision projector; --no-mmproj-offload = runs from RAM
+  --chat-template-file E:\Models\qwen36_chat_template.jinja   froggeric v22.5 fix (with --jinja)
   --port 8080                         the only port the brain knows
-  -ngl 99                             all layers on GPU (-ngld 99: same for the draft/projector in newer builds)
-  --ctx-size 128000                   context window — must match config.N_CTX (default 131072 — KNOWN mismatch, see aster-architecture-contract)
-  --chat-template-file Aster_Vault/gemma4-multimodal.jinja   custom template: <__media__> placement + native tool grammar
-  -ctk q4_0 -ctv q4_0                 4-bit KV cache (the thing that makes 128k fit)
-  -fa on                              flash attention
-  --slot-save-path Aster_Vault/kv_cache/   KV slot persistence
+  --n-gpu-layers 99 --n-cpu-moe 20    attention/dense/embeddings on GPU; 20 MoE layers on CPU
+  --flash-attn on                     flash attention
+  --cache-type-k kvarn4 --cache-type-v kvarn2 --kv-tail-tokens 1024   KVarN KV cache (BeeLlama fork)
+  --image-min-tokens 1024             vision token budget
+  --spec-type draft-mtp --spec-draft-n-max 3 --spec-draft-p-min 0.75  MTP speculative decoding
+  --reasoning off                     thinking disabled — plain content, no reasoning_content
+  --ctx-size 60000                    context window — must match config.N_CTX (60000)
+  --parallel 1 --threads 8 --batch-size 1024 --ubatch-size 512
 ```
 
-At boot llama-server logs `detected an outdated gemma4 chat template, applying
-compatibility workarounds` — **expected and harmless** (CLAUDE.md).
+At boot llama-server logs `loaded multimodal model '…mmproj-F16.gguf'`,
+`creating MTP draft context against the target model`, and
+`KVarN is target-context-only; disabling it for this auxiliary context` — all
+**expected and harmless**. (The old `detected an outdated gemma4 chat template`
+warning no longer appears.)
 
 ### Healthy main.py boot looks like
 
 - `[Tesseract] Using executable: C:\Program Files\Tesseract-OCR\tesseract.exe`
 - `[Aster Internal: Booting Facial Recognition Engine...]` + learned faces
 - `[Aster Core] Kokoro TTS 82M Voice Engine registered (lazy — loads on first use).`
-- `[Aster Core] 68 tools registered for native tool calling.`
+- `[Aster Core] 69 tools registered for native tool calling.`
 - `[Aster Engine] llama-server reachable at http://localhost:8080.`
-- warmup success (main.py ~:699)
+- warmup success (main.py ~:711)
 
-## Daemon roster (started in main.py:649-672)
+Telegram voice notes use a **CPU** Faster-Whisper instance (`local_stt.transcribe_file`,
+a CPU Whisper instance outside LiveKit calls): ~1.5 GB RAM resident after first use,
+**zero VRAM**.
+
+## Daemon roster (started in main.py:657-684)
 
 | Daemon | Default state |
 |---|---|
@@ -83,7 +94,7 @@ compatibility workarounds` — **expected and harmless** (CLAUDE.md).
 | Awareness | active by default (`daemons.awareness_mode`) |
 | Ambient audio | thread up, idle/no-mic until `/ambientaudio on` |
 | Face server (uvicorn :8000) | active |
-| Sentry | **auto-start commented out** (main.py:656); `toggle_sentry_mode` still works |
+| Sentry | **auto-start commented out** (main.py:664); `toggle_sentry_mode` still works |
 | Screen watcher | on-demand (`watch_screen`), 1-hour timeout |
 
 ## Telegram C2 command reference (handlers verified in main.py, 2026-07-05)
@@ -123,7 +134,7 @@ for memory/notes/skills/stats; chat streams over SSE `POST /api/chat/stream`).
 
 - `python livekit_agent.py` — voice agent alone.
 - `python engine_testing/run_engine_test.py` — model eval battery (needs
-  llama-server; legacy XML path). See `aster-validation-and-qa`.
+  llama-server; native-only). See `aster-validation-and-qa`.
 - `python conversation_testing.py` — persona style sweep (needs llama-server only).
 
 ## Artifact map — what lands where
@@ -157,7 +168,7 @@ for memory/notes/skills/stats; chat streams over SSE `POST /api/chat/stream`).
 Authored 2026-07-05 against live code.
 
 - Which model is actually served: `Invoke-RestMethod http://localhost:8080/props`
-- Launcher drift: `Get-Content start.bat, start_new.bat, Start-all.bat`
+- Launcher drift: `Get-Content start.bat, Start-all.bat`
 - Telegram handlers: `Select-String -Path main.py -Pattern "commands=\['"`
 - Daemon starts: `Select-String -Path main.py -Pattern "threading.Thread\(target="`
-- Tool count at boot: look for `[Aster Core] 68 tools registered` in startup output
+- Tool count at boot: look for `[Aster Core] 69 tools registered` in startup output

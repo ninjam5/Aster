@@ -72,10 +72,10 @@ storage). Notably NOT from speculative architecture.
 Predict: weights ≈ bits/8 × params (+ ~10% overhead) + KV cache (scales with ctx
 × layers; q4_0 ≈ ¼ of fp16) + projector + per-model runtimes. Verify with
 `vram_report.ps1` / `nvidia-smi` at idle → loaded → released.
-**Worked example:** summary.md §3.3 estimated the E4B stack at 7–8 GB;
-measurement said 5–6 GB (`checklist_test.md`) — the estimate table survived as
-planning data but the measured number is what packaging.md builds on. Estimates
-inform; measurements decide.
+**Worked example:** the Qwen 3.6 35B-A3B swap's llama-server footprint was measured
+at ~11.5–11.9 GB / 12.3 GB (2026-09-27, 60k ctx, `--n-cpu-moe 20`, KVarN KV) — the
+measured number is what the launcher flags are tuned against. Estimates inform;
+measurements decide.
 
 ### (b) Model-comparison sweep — one variable, fixed battery, frozen reports
 Method (June 2026, `engine_testing/`): same 47 scenarios, same scoring, swap ONE
@@ -83,7 +83,9 @@ thing (the GGUF in the launcher), auto-score, write a timestamped report, diff.
 Run categories you can't auto-score (persona/vision) as manual-grade sections in
 the same report. Never compare runs from different scenario versions.
 **Worked example:** reports for E2B-QAT/E4B-QAT/E4B-q4km/12B builds, 2026-06-18
-→ 06-24; latest: 32/32 auto, 90.2 tok/s, 4.98 s/turn.
+→ 06-24 (latest Gemma: 32/32 auto, 90.2 tok/s, 4.98 s/turn); the Qwen 3.6 35B-A3B
+swap (2026-09-27) scored **31/37 auto @ temp 1.0, 27/37 @ temp 0.7**, ~40 tok/s
+decode hot.
 
 ### (c) Style/sampling sweep — matrix, side-by-side, honest about subjectivity
 `conversation_testing.py`: fixed prompt battery (persona-relevant situations,
@@ -102,8 +104,8 @@ strictly). Changing one requires a labeled mini-set OR a logged week of outcomes
 
 ### (e) Token-budget math — know your heuristic's error direction
 Everything token-shaped uses `len//4` (`core/memory.py`). It UNDER-counts dense
-text (code/JSON), so real usage ≥ estimate; the trim budget (90% of N_CTX =
-117,964 est. tokens at 131072) can therefore overrun a 128000-token server.
+text (code/JSON), so real usage ≥ estimate; the trim budget (90% of N_CTX = 54,000
+est. tokens at 60000) now matches the 60000-token server.
 Use `context_estimate.py` (diagnostics scripts) and treat >80% as the danger
 zone. Any accuracy-critical work should state estimate error explicitly.
 

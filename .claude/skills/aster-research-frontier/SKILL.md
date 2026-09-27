@@ -5,8 +5,9 @@ description: Load this when choosing what to build next in Aster beyond bug fixe
 
 # Aster Research Frontier
 
-Owner's priority order (2026-07-05): **(1) frontier-agent behavior on a 4–6 GB
-local model → (2) the definitive local companion → (3) shippable local-agent
+Owner's priority order (2026-07-05): **(1) frontier-agent behavior on a small
+active-param local model (now the Qwen 3.6 35B-A3B MoE, ~3B active/token, 60k ctx,
+~11.5–11.9 GB) → (2) the definitive local companion → (3) shippable local-agent
 platform.** Every item below is open/candidate — do not describe any as done.
 
 **When NOT to use this skill:** executing the near-term reliability work →
@@ -15,14 +16,14 @@ the discipline for testing a hunch → `aster-research-methodology`.
 
 ---
 
-## Track 1 — Frontier-agent behavior on 4–6 GB
+## Track 1 — Frontier-agent behavior on a small active-param MoE (60k ctx)
 
 ### 1.1 Eval telemetry for local agents (from `ideas-for-backend.md` #3)
 - **Why SOTA fails:** agent benchmarks assume frontier models and cloud traces;
   there is no established, cheap, continuous eval for a *daily-driver* sub-8 GB
   agent. Local-agent projects ship vibes.
-- **Aster's asset:** a real 47-scenario auto-scored harness that replays the live
-  loop, months of frozen model-sweep reports, and a genuine daily workload.
+- **Aster's asset:** a real 37-scenario auto-scored harness (52 total) that replays
+  the live loop, frozen model-sweep reports, and a genuine daily workload.
 - **First three steps:** (1) native-path harness mode (campaign Phase 0.1);
   (2) implement the two proposed metrics — *response match score* and *tool
   trajectory score* (did the model take the expected tool sequence, not just the
@@ -45,15 +46,15 @@ the discipline for testing a hunch → `aster-research-methodology`.
 
 ### 1.3 Long-context degradation on quantized KV cache — a measurable science question
 - **Why SOTA fails:** published long-context evals use fp16 KV; almost nothing
-  quantifies task accuracy vs context fill under **q4_0 KV at 128k on consumer
-  VRAM**.
+  quantifies task accuracy vs context fill under **KVarN-quantized KV at 60k on
+  consumer VRAM**.
 - **Asset:** the exact rig, permanently running.
 - **First steps:** (1) add a `--context-fill N` harness option that pre-stuffs
-  history to N tokens before running the battery; (2) sweep fill ∈ {0, 32k, 64k,
-  96k, 120k} on the same scenarios; (3) plot auto-score + tok/s vs fill.
+  history to N tokens before running the battery; (2) sweep fill ∈ {0, 15k, 30k,
+  45k, 55k} on the same scenarios; (3) plot auto-score + tok/s vs fill.
 - **Result when:** a curve exists; the knee (if any) dictates the real `/compact`
-  policy instead of the current guess, and resolves whether the
-  N_CTX/--ctx-size mismatch matters in practice.
+  policy instead of the current guess (the old N_CTX/`--ctx-size` mismatch is gone —
+  both are 60000).
 
 ### 1.4 Hybrid recall (RRF) — campaign §2.5; research angle: what mix of
 keyword-exact vs semantic queries does a *personal assistant* workload actually
@@ -107,11 +108,12 @@ output is stable; respect that gate.
 One Python launcher: detect VRAM/RAM/disk → pick model tier + ctx/KV flags →
 `hf_hub_download` if missing → launch llama-server → poll `/health` → launch
 main.py → launch dashboard. **Its own doc lists the open research questions
-verbatim** — real VRAM thresholds for E2B/E4B/12B (never measured), whether
-E2B/12B GGUFs ship their own mmproj, whether the vendored binary degrades to
-CPU-only cleanly. First step is *measurement*, not code: record `nvidia-smi`
-numbers for each tier. Result when: a fresh machine reaches a healthy boot from
-one command, tier chosen automatically.
+verbatim** — real VRAM thresholds for the candidate tiers (the Qwen 3.6 35B-A3B
+IQ4_XS tier measures ~11.5–11.9 GB; smaller tiers never measured), whether each tier
+ships its own mmproj, whether the BeeLlama binary degrades to CPU-only cleanly. First
+step is *measurement*, not code: record `nvidia-smi` numbers for each tier. Result
+when: a fresh machine reaches a healthy boot from one command, tier chosen
+automatically.
 
 ### 3.2 One-click install — Tauri sidecar bundling (LM-Studio-shaped); explicitly
 out of near-term scope per packaging.md (dlib/MediaPipe freezing pain). Candidate

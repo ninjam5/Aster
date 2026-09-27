@@ -1,6 +1,6 @@
 ---
 name: local-llm-reference
-description: Load this for local-LLM domain knowledge as it applies to Aster - GGUF and quantization (Q4_K_M vs QAT vs KV-cache q4_0), context-window/VRAM math, the Gemma 4 chat template and why it has no system role, the custom Jinja template and <image>/<__media__> markers, llama-server API endpoints, sampling parameters, token-counting heuristics, and the supporting local model zoo (Whisper, Kokoro, ECAPA, emotion models). Load when a term like "mmproj", "KV cache", "min_p", "flash attention", or "quant" needs to be understood or explained.
+description: Load this for local-LLM domain knowledge as it applies to Aster - GGUF and quantization (Q4_K_M vs QAT vs IQ4_XS vs KVarN KV), context-window/VRAM math, the Qwen 3.6 froggeric chat template, MTP speculative decoding, llama-server API endpoints, sampling parameters, token-counting heuristics, and the supporting local model zoo (Whisper, Kokoro, ECAPA, emotion models). Load when a term like "mmproj", "KV cache", "KVarN", "MTP", "min_p", "flash attention", or "quant" needs to be understood or explained.
 ---
 
 # Local-LLM Reference (as applied in Aster)
@@ -16,61 +16,64 @@ operating commands → `aster-run-and-operate`; VRAM budgets/policy →
 ## GGUF and quantization
 
 - **GGUF** — llama.cpp's model container format (weights + metadata + chat
-  template). Aster's primary documented model: `gemma-e4b-q4km.gguf` (5.41 GB).
+  template). Aster's engine model: `E:\Models\Qwen3.6-35B-A3B-UD-IQ4_XS.gguf`
+  (17.0 GB, MoE).
 - **Quantization** — storing weights in fewer bits. The names:
   - **Q4_K_M** — 4-bit "K-quant", medium variant; mixed-precision blocks that keep
     sensitive tensors at higher precision. The workhorse for 12 GB cards.
   - **QAT** (quantization-aware training) — the model was *trained* knowing it
     would be quantized; usually better quality at the same bit-width than post-hoc
     quantization. The repo swept `E2B-QAT`, `E4B-QAT`, and 12B builds in June 2026
-    (`engine_testing/results/`), and the newer launchers serve
-    `gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf`.
+    (`engine_testing/results/`) on the Gemma-era engine.
   - **IQ4_XS** — importance-matrix 4-bit, extra-small; more compression, more
-    quality risk (a 12B IQ4XS was swept once).
-- **Gemma-4 "E4B"/"E2B"** — effective-4B / effective-2B parameter MatFormer
-  variants; E4B is the daily model, E2B the low-VRAM tier (idle budget ~4 GB).
+    quality risk. **This is the Qwen 3.6 swap's daily quant** — viable on the 35B
+    MoE because only ~3B params are active per token.
+- **Qwen 3.6 35B-A3B** — a Mixture-of-Experts model (36B total, ~3B active
+  params/token). The MoE split lets 20 expert layers sit on CPU (`--n-cpu-moe 20`)
+  while attention/dense stay on GPU.
 - Rule of thumb: 4-bit weights ≈ 0.55–0.65 GB per billion params, plus KV cache,
   plus the vision projector.
 
-## KV cache and context math
+## KV cache, KVarN, MTP, and context math
 
 - The **KV cache** stores every past token's key/value tensors per layer — it is
   why long chats consume VRAM beyond the weights, and grows linearly with context
   length.
-- **`-ctk q4_0 -ctv q4_0`** quantizes the cache itself to 4-bit — the single trick
-  that makes 128k context fit next to the weights on 12 GB (~1.5–2 GB for 128k per
-  summary.md, vs ~4× that at fp16).
-- Grounded data point (the only measured one): **E4B + 128k ctx + Q4_0 KV ≈ 5–6 GB
-  total** on the 3080 (`packaging.md`, `checklist_test.md`). E2B/12B footprints
-  were never recorded — don't invent them.
-- **Flash attention** (`-fa on`) — faster/leaner attention kernels; required for
-  the above numbers.
-- **`--slot-save-path`** — persists server-side KV slots to disk
-  (`Aster_Vault/kv_cache/`) so a restart can restore cached prefixes.
-- **Context sizing**: server `--ctx-size 128000` must equal `config.N_CTX`
-  (default 131072 — a live mismatch; the brain's trim budget is
-  `int(N_CTX*0.9)` estimated tokens, so an optimistic N_CTX can overrun the
-  server).
+- **KVarN** (BeeLlama's KV quantization; `--cache-type-k kvarn4 --cache-type-v
+  kvarn2 --kv-tail-tokens 1024`) — quantizes the cache into a very-low-precision
+  budget (the `kvarn2`–`kvarn8` range; higher number = more bits) while keeping a
+  **precision tail** (`--kv-tail-tokens 1024`) at full precision for the most recent
+  tokens. ~0.9 GB at 60k context. Grounded: **Qwen 3.6 35B-A3B + 60k + KVarN ≈
+  11.5–11.9 GB / 12.3 GB** on the 3080 (measured).
+- **MTP speculative decoding** (`--spec-type draft-mtp --spec-draft-n-max 3
+  --spec-draft-p-min 0.75`) — the GGUF carries multi-token-prediction draft heads,
+  so no separate draft model is loaded; measured draft acceptance ≈0.90.
+- **Flash attention** (`--flash-attn on`) — faster/leaner attention kernels; required
+  for the above numbers.
+- **`--no-mmproj-offload`** — the vision projector is served from RAM, not VRAM.
+- **Context sizing**: server `--ctx-size 60000` must equal `config.N_CTX` (60000);
+  the brain's trim budget is `int(N_CTX*0.9)` estimated tokens.
 
-## The Gemma 4 chat template (the project's scar tissue)
+## The Qwen 3.6 chat template (froggeric v22.5)
 
-- Gemma's native turn grammar is `<start_of_turn>user … <end_of_turn>` /
-  `<start_of_turn>model …`. **It has no system role.** Layers that pretend
-  otherwise fail in one of three documented ways (dropped system content, foreign
-  `USER:/ASSISTANT:` grammar, ChatML clash) — see `aster-failure-archaeology`
-  §engine-hell before touching anything template-adjacent.
-- **The custom template** `Aster_Vault/gemma4-multimodal.jinja` (passed via
-  `--chat-template-file`) does two load-bearing jobs:
-  1. **Vision markers:** each image turn carries an `image_url` content block PLUS
-     a literal `<image>` text block; the template converts that into the
-     `<__media__>` token the mmproj pipeline expects, at the right position.
-  2. **Native tool grammar:** renders the OpenAI-format `tools` array into Gemma's
-     own `<|tool_call>call:name{...}<tool_call|>` syntax; llama-server parses the
-     model's output back into a structured `tool_calls` field.
-- llama-server boot logs `detected an outdated gemma4 chat template, applying
-  compatibility workarounds` — **expected and harmless**.
-- Legacy INST tokens (`<start_of_turn>user\nINST`) in trailing assistant messages
-  conflict with the template and are stripped before sending.
+- Aster passes `E:\Models\qwen36_chat_template.jinja` via `--chat-template-file`
+  (with `--jinja`). This is the **froggeric v22.5** fixed template
+  (`froggeric/Qwen-Fixed-Chat-Templates`), not Qwen's official template.
+- What it fixes:
+  - the **`|items` tool-argument bug** — Qwen's official template used a Jinja
+    `|items` filter that breaks tool-argument rendering in C++ (llama.cpp's) Jinja
+    runtime, mangling the `arguments` JSON.
+  - **empty `<think>` blocks** — the official template emits empty thinking blocks
+    that fill context for no benefit.
+- Thinking is disabled server-side (`--reasoning off`), so responses arrive as plain
+  `content` with no `reasoning_content`.
+- **No vision markers needed.** The template places the vision tokens itself from
+  the `image_url` content blocks; Aster no longer injects an `<image>`/`<__media__>`
+  marker (that Gemma-era mechanism was removed in the swap).
+- **No system-role limitation.** Unlike Gemma, Qwen supports a system role natively,
+  so the persona system prompt is a normal `role:"system"` message.
+- See `aster-failure-archaeology` §engine-hell before touching anything
+  template-adjacent.
 
 ## llama-server API surface (what the brain actually uses)
 
@@ -101,7 +104,7 @@ Persona *style* is tuned by sweeping these against a fixed prompt battery
 ## Token counting
 
 No local tokenizer exists (REST-only), so everything uses the **~4 characters per
-token heuristic** (`core/memory.py:180`, `len(content)//4` per message). Used by
+token heuristic** (`core/memory.py:391`, `len(content)//4` per message). Used by
 `trim_memory` (budget 90% of N_CTX) and `/status`. Error bars: fine mid-session,
 meaningful near the context ceiling; code and JSON tokenize denser than 4 chars/tok,
 so the estimate typically UNDER-counts them.
@@ -110,7 +113,7 @@ so the estimate typically UNDER-counts them.
 
 | Model | Job | Device / residency |
 |---|---|---|
-| Faster-Whisper `medium.en` int8 (CTranslate2) | STT (Telegram + call) | CUDA, resident shared singleton |
+| Faster-Whisper `medium.en` int8 (CTranslate2) | STT call (CUDA shared singleton) / Telegram voice notes (CPU instance, `local_stt.transcribe_file`) | CUDA resident for calls; CPU ~1.5 GB RAM, zero VRAM for voice notes |
 | Kokoro 82M (`KPipeline`) | TTS, 24 kHz | CUDA w/ CPU fallback; ref-counted, offloads idle |
 | Silero VAD | Speech/silence gating on the call | via livekit-plugins-silero |
 | openWakeWord (`hey_jarvis`) | Wake phrase, agent sleeps otherwise | CPU, tiny |
@@ -123,10 +126,15 @@ so the estimate typically UNDER-counts them.
 
 ## Glossary quick-fire
 
-**mmproj** — multimodal projector GGUF that maps image embeddings into the LLM's
-token space; loaded alongside the model (`--mmproj`); without it image turns fail.
+**mmproj** — multimodal projector GGUF (`E:\Models\Qwen3.6-35B-A3B-mmproj-F16.gguf`)
+that maps image embeddings into the LLM's token space; loaded via `--mmproj` with
+`--no-mmproj-offload` (served from RAM). Vision-only — without it image turns fail.
 **-ngl 99** — offload (up to) 99 layers to GPU = everything. **int8 (CTranslate2)**
 — 8-bit inference quantization for Whisper, ≈half the VRAM of fp16.
+**KVarN** — BeeLlama's KV-cache quantization (`kvarn2`–`kvarn8`); `--kv-tail-tokens`
+keeps a full-precision tail for recent tokens. **MTP** — multi-token-prediction draft
+heads inside the GGUF (`--spec-type draft-mtp`), used for speculative decoding with
+no separate draft model.
 **Barge-in** — user speech interrupts TTS playback mid-response (epoch-cancelled).
 **ReAct loop** — reason→act→observe cycling; Aster's is capped at 15 rounds.
 
@@ -136,5 +144,5 @@ Authored 2026-07-05.
 
 - Which model/ctx is live: `Invoke-RestMethod http://localhost:8080/props`
 - Sampling defaults: `Select-String -Path config.py -Pattern "LLM_TEMPERATURE|LLM_TOP"`
-- Template flags: `Select-String -Path start.bat,start_new.bat -Pattern "chat-template|ctk|ctv|fa"`
+- Template/KV flags: `Select-String -Path start.bat -Pattern "chat-template|cache-type|spec-type|reasoning"`
 - Heuristic unchanged: `Select-String -Path core\memory.py -Pattern "// 4"`

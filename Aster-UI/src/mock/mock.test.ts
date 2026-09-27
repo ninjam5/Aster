@@ -12,7 +12,7 @@ describe("mock data fixtures", () => {
     expect(AVAILABLE_MODELS).toHaveLength(3);
     const ids = AVAILABLE_MODELS.map((m) => m.id);
     expect(new Set(ids).size).toBe(3);
-    expect(ids).toContain("gemma-4-e4b");
+    expect(ids).toContain("qwen-3.6-35b-a3b");
     expect(AUTO_DETECTED_MODEL).toEqual(AVAILABLE_MODELS[0]);
   });
 

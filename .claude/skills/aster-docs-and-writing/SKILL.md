@@ -11,12 +11,13 @@ makes doc discipline unusually load-bearing here.
 **When NOT to use this skill:** the change itself → `aster-change-control`; settled
 technical history → `aster-failure-archaeology`.
 
-## Trust-level map (verified 2026-07-05)
+## Trust-level map (verified 2026-07-05; Qwen-swap notes 2026-09-27)
 
 ### LIVING (must be updated when behavior changes)
 | Doc | Role |
 |---|---|
-| root `CLAUDE.md` | THE working reference — richest, most current. Update after any behavior change. Known stale spots as of 2026-07-05: the "smart_click Florence-2 description drift" gotcha (fixed in code), the "`awareness_mode: false` ignored" gotcha (awareness.py:29 now reads config), devmode line ref (687, not 668), model file (newer launchers serve a QAT gguf from `E:\Models\`) |
+| root `CLAUDE.md` | THE working reference — richest, most current. Updated 2026-09-27 for the Qwen 3.6 engine swap (engine, model file, native tool calling). Update after any behavior change. Remaining stale spots as of 2026-07-05: the "smart_click Florence-2 description drift" gotcha (fixed in code), the "`awareness_mode: false` ignored" gotcha (awareness.py:29 now reads config), devmode line ref (687, not 668) |
+| root `AGENTS.md` | General agent guidance; **rewritten 2026-09-27** for the Qwen swap (native OpenAI tool calling, BeeLlama engine, Qwen model, 69 tools). Keep current |
 | `Aster-UI/CLAUDE.md`, `Aster-UI/README.md`, `Aster-UI/CONTRIBUTING.md`, `aster-face/README.md` | Frontend references — same duty |
 | `self_config.example.yaml` / `secrets.example.yaml` | Public config templates — every new knob lands here first. Known stale spot: the awareness_mode comment still says "currently ignored" |
 | `README.md` | External-facing (program-application framing) — see claims discipline below |
@@ -30,18 +31,19 @@ technical history → `aster-failure-archaeology`.
 `ideas-for-backend.md`, `open-jarvis.md` (graded external-idea mining).
 
 ### BASELINE (dated snapshot, partially stale — cite with the date)
-`summary.md` — "State of the System" **2026-05-20**. Still the best source for
-VRAM tables, frontend detail, per-tool tables. Known-stale: says 54 tools
-(live: 68), XML-only tool calling, intervention threshold 1800 s (config: 60 s).
+`summary.md` — "State of the System" **2026-09-27** (engine section revised for the
+Qwen 3.6 35B-A3B swap; original baseline 2026-05-20). Still the best source for
+VRAM tables, frontend detail, per-tool tables. The engine/tool-calling/VRAM sections
+are current; older prose may still cite the Gemma-era engine. Intervention threshold
+in config is 60 s.
 
 ### STALE — do not trust (kept only as a caution)
-`AGENTS.md` — wrong on: tool-calling ("XML-based ReAct… NOT OpenAI
-function-calling" — native is the default since 2026-06), tool count (39; live
-68), "hardcoded credentials in config.py" (moved to secrets.yaml), ADMIN_TOOLS
-"~line 241" (now :396), and "`summary.md` is source of truth — must be updated
-after every code change. See `.github/instructions/summary-workflow.instructions.md`"
-— that instructions file **does not exist** (verified 2026-07-05; only
-`python-global-packages.instructions.md` is present).
+None as of 2026-09-27: root `AGENTS.md` was rewritten in the Qwen swap (native OpenAI
+tool calling, 69 tools, `secrets.yaml`, BeeLlama engine) and moved to LIVING above.
+Any doc still claiming "XML-based ReAct" / "39 tools" / "hardcoded credentials in
+config.py" predates that rewrite — check its date before trusting it. (The
+`.github/instructions/summary-workflow.instructions.md` file referenced by old docs
+still **does not exist**; only `python-global-packages.instructions.md` is present.)
 
 ### FROZEN point-in-time logs (NEVER rewrite — they are the git-history substitute)
 `checklist_test.md` (2026-05-15 migration), `aster-ui-integration-log.md`,
@@ -66,7 +68,7 @@ canonical example). Check the file's class before "fixing" a stale mention.
 ## House style (derived from root CLAUDE.md — the best exemplar)
 
 - Dense reference prose; **gotcha-first** framing ("**Gotcha:** …" callouts).
-- File:line anchors for everything claimable (`core/brain.py:396`).
+- File:line anchors for everything claimable (`core/brain.py:324`).
 - Tables for inventories; status markers `[IMPLEMENTED]`/`[DONE]`/`✅ BUILT
   (date)` on backlog items.
 - Date-stamp volatile facts inline ("as of 2026-07-05").
@@ -116,8 +118,9 @@ canonical example). Check the file's class before "fixing" a stale mention.
   and gated (see `aster-change-control` rule 10). Gmail/Calendar/Spotify/Telegram
   are owner-initiated integrations of the owner's own accounts — the claim means
   no third-party AI/telemetry backends.
-- **Only measured numbers get published.** Grounded today: E4B + 128k + Q4_0 KV ≈
-  5–6 GB; the 2026-06-24 engine scorecard. NOT grounded: E2B/12B footprints
+- **Only measured numbers get published.** Grounded today (2026-09-27): Qwen 3.6
+  35B-A3B + 60k ctx + KVarN ≈ 11.5–11.9 GB / 12.3 GB; the swap's harness battery
+  (31/37 auto @ temp 1.0, 27/37 @ temp 0.7). NOT grounded: other model footprints
   (never recorded — packaging.md says so explicitly).
 - Unshipped work is labeled open/candidate; the release plan's beta step
   ("do not skip") is the reproducibility bar before any public "it works"
@@ -127,7 +130,7 @@ canonical example). Check the file's class before "fixing" a stale mention.
 
 Authored 2026-07-05.
 
-- AGENTS.md still stale? `Select-String -Path AGENTS.md -Pattern "XML-based|39 tools"`
+- AGENTS.md current? `Select-String -Path AGENTS.md -Pattern "Qwen|native OpenAI"`
 - Instructions dir contents: `Get-ChildItem .github\instructions`
 - CLAUDE.md gotcha drift: `Select-String -Path CLAUDE.md -Pattern "Florence|awareness_mode"` then verify each against code
 - Doc inventory: `Get-ChildItem -File *.md | Select-Object Name`

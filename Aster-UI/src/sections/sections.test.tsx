@@ -103,7 +103,7 @@ function makeFetchMock() {
     if (path === "/api/voices")
       return Promise.resolve({ ok: true, json: () => Promise.resolve({ active: "af_bella", voices: [{ id: "af_bella", label: "Bella", gender: "female", accent: "American" }] }) });
     if (path === "/api/llm-settings")
-      return Promise.resolve({ ok: true, json: () => Promise.resolve({ temperature: 1.0, top_p: 0.95, top_k: 64, context_window: 128000, kv_cache_type: "q4_0" }) });
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ temperature: 1.0, top_p: 0.95, top_k: 64, context_window: 60000, kv_cache_type: "kvarn4" }) });
     if (path === "/api/presets")
       return Promise.resolve({ ok: true, json: () => Promise.resolve({ presets: [{ id: "jarvis_default", name: "Jarvis — British Butler", persona: "jarvis", voice: "bm_george", builtin: true }] }) });
 

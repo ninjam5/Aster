@@ -1,6 +1,6 @@
 # ASTER — State of the System Architectural Summary
 
-**Report Date:** 2026-05-20
+**Report Date:** 2026-09-27 (engine section revised for the Qwen 3.6 35B-A3B swap; original baseline 2026-05-20)
 **Prepared For:** External AI Systems Architect
 **Classification:** Technical Baseline Assessment
 **Workspace Root:** `E:\LLM testing\Aster-localization`
@@ -22,7 +22,7 @@
 
 | Component | Library / Version |
 |---|---|
-| LLM Inference | **llama-server** (native REST `/v1/chat/completions` endpoint, CUDA offload, 128k context) |
+| LLM Inference | **llama-server**/**BeeLlama v0.4.7** fork (native REST `/v1/chat/completions`, CUDA offload, 60k context, KVarN KV cache, MTP speculative decoding) |
 | STT Engine | **Faster-Whisper** (CTranslate2, `faster_whisper` — primary for Telegram) |
 | TTS Engine (WebRTC) | **Kokoro 82M** (`kokoro` Python package, `KPipeline`) |
 | TTS Engine (Telegram) | **Kokoro 82M** (same engine, single voice pipeline) |
@@ -31,7 +31,7 @@
 | Telegram Bot | **pyTelegramBotAPI** (`telebot`) |
 | Discord Bot | **discord.py** (listener) + raw **requests** REST API (sender) |
 | Spotify Control | **Spotipy** (OAuth2, `SpotifyOAuth`) |
-| Vision | **Gemma mmproj** (native vision via `/v1/chat/completions` — primary), **face_recognition** (fallback), **OpenCV** |
+| Vision | **Qwen 3.6 mmproj** (native vision via `/v1/chat/completions`, served from RAM — primary), **face_recognition** (fallback), **OpenCV** |
 | OCR | **pytesseract** (ACTIVE — full-screen `image_to_data` two-track locator, see Section 2.6.1) |
 | UI Detection | **DOM motor** (`tools/dom.py`; ARIA/CDP + UIA shortlist, opt-in) → UIA → pytesseract → **OmniParser v2** (icon_detect YOLOv8 via `ultralytics` + `huggingface_hub`; flag-gated pixel fallback) |
 | Screen Capture | **mss** |
@@ -63,18 +63,19 @@
 |---|---|
 | Engine | **llama-server** (llama.cpp native server binary, CUDA 12.4) |
 | API Protocol | **OpenAI-compatible** `/v1/chat/completions` (NOT the raw `/completion` endpoint) |
-| Base GGUF File | `gemma-e4b-q4km.gguf` (5.41 GB) — primary runtime model |
-| Alternate Model | `Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q4_K_P.gguf` — uncensored variant in `Aster_Vault/Models/` |
-| TurboQuant Server | `llama-server-turboquant/` — alternate llama-server binary bundle, available alongside the default `llama-server/` |
-| Multimodal Projector | `mmproj-F16.gguf` (0.99 GB) — **loaded alongside model** |
-| Quantization | **Q4_K_M** (4-bit with importance matrix) |
-| KV Cache Type | **Q4_0** (4-bit key + 4-bit value quantization) |
-| Context Window | **131,072 tokens** (128k, `--ctx-size 131072`, `config.N_CTX=131072` from `self_config.yaml`) |
-| GPU Offload | **Full** (`n_gpu_layers=-1`, every layer on VRAM) |
-| Flash Attention | **Enabled** (`flash_attn=True`) |
+| Base GGUF File | `Qwen3.6-35B-A3B-UD-IQ4_XS.gguf` (17.0 GB) — MoE, ~3B active params/token (≈35B total) |
+| Speculative Decoding | Built into the GGUF (MTP heads): `--spec-type draft-mtp --spec-draft-n-max 3` (~90% draft acceptance measured) |
+| Server Binary | **BeeLlama v0.4.7** (`E:\Models\beellama-v0.4.7-bin-win-cuda-12.4-x64\llama-server.exe`) — llama.cpp fork adding KVarN KV quantization + MTP |
+| Multimodal Projector | `Qwen3.6-35B-A3B-mmproj-F16.gguf` (~0.86 GB) — **loaded with `--no-mmproj-offload` (runs from RAM, zero VRAM)** |
+| Quantization | **IQ4_XS** (4-bit, importance matrix) |
+| KV Cache Type | **KVarN** (`--cache-type-k kvarn4 --cache-type-v kvarn2 --kv-tail-tokens 1024`) |
+| Context Window | **60,000 tokens** (`--ctx-size 60000`, `config.N_CTX=60000`) |
+| GPU Offload | Attention/dense/embeddings on GPU; routed MoE experts split (`--n-gpu-layers 99 --n-cpu-moe 20`); `--threads 8` (P-cores), `--ubatch-size 512` |
+| Flash Attention | **Enabled** (`--flash-attn on`) |
 | API Endpoint | `http://localhost:8080/v1/chat/completions` |
 | Token Counting | **Character heuristic** (~4 chars per token) |
-| Jinja Template | Custom `gemma4-multimodal.jinja` in `Aster_Vault/` — overrides default Gemma template for `<__media__>` marker handling |
+| Jinja Template | **froggeric v22.5** (`E:\Models\qwen36_chat_template.jinja`) — fixes Qwen's official template tool-arg bug and empty `<think>` blocks |
+| Reasoning Mode | **Off** (`--reasoning off`) — responses arrive as plain `content` |
 
 #### Single-Engine Architecture
 
@@ -86,7 +87,7 @@ A single llama-server instance handles everything. The `/v1/chat/completions` Op
 
 #### Chat Format & Image Handling
 
-Messages are sent in standard OpenAI chat format via `_execute_gemma_completion()` in [`core/brain.py`](core/brain.py:34):
+Messages are sent in standard OpenAI chat format via `_execute_llm_completion()` in [`core/brain.py`](core/brain.py:79):
 
 - **System messages:** `{"role": "system", "content": "..."}`
 - **User messages:** `{"role": "user", "content": [...]}` — content arrays for multimodal
@@ -95,17 +96,16 @@ Messages are sent in standard OpenAI chat format via `_execute_gemma_completion(
   ```json
   {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,{b64}"}}
   ```
-- **`<image>` marker injection:** For Gemma's Jinja template compatibility, a literal `<image>` text block is injected alongside image content arrays so the template can correctly position media markers.
-- **INST stripping:** Trailing assistant messages that contain `<start_of_turn>user\nINST` patterns are stripped before sending, as legacy INST tokens conflict with Gemma's Jinja template.
+- **No marker injection:** the chat template places vision tokens itself; the brain adds no `<image>` text marker and strips no INST tokens (both were Gemma-template workarounds, removed in the Qwen swap).
 - **No more manual prompt building:** The old `<start_of_turn>user`/`<start_of_turn>model` string concatenation and `image_data` tensor injection have been fully replaced by the standardized OpenAI chat format.
 
-#### Custom Gemma Jinja Template (`Aster_Vault/gemma4-multimodal.jinja`)
+#### Chat Template (`E:\Models\qwen36_chat_template.jinja`)
 
-A custom template overrides llama-server's default Gemma handler to properly generate `<__media__>` markers for the `<image>` placeholder. This ensures the mmproj pipeline correctly maps Base64 images to the multimodal token stream without the template stripping `<image>` markers.
+The fixed **froggeric v22.5** template is served via `--chat-template-file`. It repairs the official Qwen template (tool arguments used a Python-only `|items` filter that fails in C++ Jinja runtimes; `preserve_thinking` wrapped empty `<think>` blocks that filled context) and handles vision-token placement natively.
 
 #### Hallucination Detection (v2)
 
-When Gemma claims to execute a tool ("Playing on Spotify", "Taking a screenshot") but emits **no actual tool call**, a `_claims_tool_execution()` detector fires:
+When the model claims to execute a tool ("Playing on Spotify", "Taking a screenshot") but emits **no actual tool call**, a `_claims_tool_execution()` detector fires:
 1. Cross-references user request patterns ("play X on spotify", "what's on my screen") against response execution claims
 2. Also catches residual tool call syntax (`<|tool_call|>`, `call:func{...}`) that can appear when the model leaks raw tags
 3. Injects a system nudge and retries the LLM **once** (`hallucination_retried` flag prevents infinite loops)
@@ -175,7 +175,7 @@ When Gemma claims to execute a tool ("Playing on Spotify", "Taking a screenshot"
   - **Voice messages** — Downloads OGG, transcribes via Faster-Whisper on CUDA, routes text to Brain
   - **Photo messages** — Downloads image, converts to Base64, injects as `[NATIVE_IMAGE_PAYLOAD:...]` with caption
   - **Text messages** — Routes directly to `process_user_input()`
-  - **Intruder naming** — When `sentry.WAITING_FOR_ID` is true, text input is intercepted; `_execute_gemma_completion()` extracts the proper name from conversational input before saving the biometric profile
+  - **Intruder naming** — When `sentry.WAITING_FOR_ID` is true, text input is intercepted; `_execute_llm_completion()` extracts the proper name from conversational input before saving the biometric profile
 
 - **Audio Payload Interceptor:** `_dispatch_telegram_response()` checks for `[NATIVE_AUDIO_PAYLOAD:filepath]` tags in LLM output. If the file exists, sends as Telegram voice note and suppresses text. If the path doesn't exist (hallucinated tag), strips the tag and sends remaining text.
 
@@ -200,7 +200,7 @@ When Gemma claims to execute a tool ("Playing on Spotify", "Taking a screenshot"
 - **Separate system prompt** (`DISCORD_CHAT_SYSTEM_PROMPT`) with personality calibration per friend
 - **Separate tool set** (3 tools only: `forward_to_owner`, `save_personal_fact`, `get_current_track`)
 - **Honorific enforcement:** Friends listed in `config.DISCORD_FEMALE_NAMES` (`self_config.yaml → contacts.female_names`) are never addressed as "Sir" — guardrail regex rewrites output
-- **4-round max tool loop** with `_execute_gemma_completion()` (native REST endpoint)
+- **4-round max tool loop** with `_execute_llm_completion()` (native REST endpoint)
 - **Output sanitization:** Strips XML tags, bracketed thoughts, and leaked model routing tags
 - **Memory staging:** Discord friend facts are saved to `discord_memories.json` (not directly to ChromaDB). Admin can sync via `sync_discord_memories` tool.
 
@@ -239,8 +239,8 @@ When Gemma claims to execute a tool ("Playing on Spotify", "Taking a screenshot"
 - **Camera Access:** `cv2.VideoCapture(0)` — opens webcam, discards 5 warm-up frames, captures 1
 - **Analysis Pipeline:**
   1. `capture_frame_base64()` captures webcam frame
-  2. `_analyze_frame_with_gemma()` sends to `_execute_gemma_completion()` with `image_url` for scene description
-  3. Fallback to `face_recognition` if Gemma analysis fails
+  2. `_analyze_frame_with_llm()` sends to `_execute_llm_completion()` with `image_url` for scene description
+  3. Fallback to `face_recognition` if vision analysis fails
 - **Face Recognition Fallback:**
   1. Detect faces via `face_recognition.face_locations()`
   2. Encode faces via `face_recognition.face_encodings()`
@@ -271,15 +271,15 @@ A background daemon polls the screen + webcam every `AWARENESS_INTERVAL` seconds
   - **A0 — Time-aware block:** local time, day, session duration, whether late-night has been remarked on.
   - **A3 — Ambient block:** screen description, webcam description (person + posture), lighting assessment, mood read, unsurfaced observations.
 
-- **Scene capture (`_brief_scene_describe`):** One low-token Gemma call (~120 tokens) captures both screen and webcam simultaneously. Bypasses tools and never appends to the main `messages` list.
+- **Scene capture (`_brief_scene_describe`):** One low-token LLM call (~120 tokens) captures both screen and webcam simultaneously. Bypasses tools and never appends to the main `messages` list.
 
 - **Mood inference (`_infer_mood`):** Keyword-only (no extra LLM call), mirroring `tools/sentiment.py`. Uses webcam posture keywords ("slumped", "tired", "yawn"), message frequency/length, emoji presence, and late-night heuristics. Moods: `focused`, `tired`, `animated`, `terse`, `neutral`.
 
 - **Proactive nudges (gated by initiative level):**
-  - **A5 — Return-from-absence compliment:** Fires when Mohamed returns after ≥ `AWARENESS_ABSENCE_THRESHOLD` seconds (default 900s). Uses a tiny Gemma call (~40 tokens) to detect one concrete change between pre-absence and post-return webcam descriptions (clothing, hair, posture, room). Delivered via WebRTC if a call is live, else Telegram text + Kokoro voice note.
+  - **A5 — Return-from-absence compliment:** Fires when Mohamed returns after ≥ `AWARENESS_ABSENCE_THRESHOLD` seconds (default 900s). Uses a tiny LLM call (~40 tokens) to detect one concrete change between pre-absence and post-return webcam descriptions (clothing, hair, posture, room). Delivered via WebRTC if a call is live, else Telegram text + Kokoro voice note.
   - **A6 — Environment nudge:** Fires when lighting shifts to "dim." Rate-limited by `AWARENESS_ENV_COOLDOWN` (default 2 hours). Suggests raising monitor brightness or turning on a lamp.
 
-- **Brain-busy semaphore:** The daemon defers its Gemma call when the main brain is mid-turn (`_brain_busy` event), preventing races on the single llama-server instance.
+- **Brain-busy semaphore:** The daemon defers its LLM call when the main brain is mid-turn (`_brain_busy` event), preventing races on the single llama-server instance.
 
 - **Initiative dial (`set_initiative`):** 0=silent, 1=low, 2=medium (default), 3=high. Per-level capability matrix controls `unsolicited_max_per_hour`, `compliment`, `env_nudges`, `context_questions`. Toggled via the `set_initiative` admin tool or `/initiative` Telegram command. Natural-language phrases supported: "less initiative", "more initiative", "silent", "max initiative", etc.
 
@@ -317,11 +317,11 @@ Also available via Telegram: `/note <text>` and `/find <thing>` (unchanged).
 
 ### 2.6 Vision Mode (`tools/vision.py`)
 
-**Status:** Fully implemented. Native Gemma vision via `image_url` content arrays.
+**Status:** Fully implemented. Native multimodal vision via `image_url` content arrays (Qwen 3.6 mmproj).
 
 #### 2.6.1 Screen Capture & Analysis (`look_at_screen`) + UI Element Locator
 
-**`look_at_screen`** (Gemma vision): `capture_screen_base64()` grabs primary monitor via `mss` → Base64 JPEG → `_execute_gemma_completion()` with `image_url`, temperature 0.2, prompt asking for full screen description.
+**`look_at_screen`** (vision model): `capture_screen_base64()` grabs primary monitor via `mss` → Base64 JPEG → `_execute_llm_completion()` with `image_url`, temperature 0.2, prompt asking for full screen description.
 
 **`locate_ui_element_ex(goal)`** — the core for `smart_click`, `smart_type`. Three-track architecture (2026-07-11 rework); returns `{"x","y","source","text","score",...}` in logical pixels — `locate_ui_element` is the `(x, y)` back-compat wrapper. Goal parsing/scoring shared across all tracks via `tools/locator_common.py`: `parse_goal` strips filler words ("the search bar at the top" → tokens `{search}`), extracts **spatial hints** (top/bottom/left/right/center → soft position prior, ×0.8 on contradiction) and **control-type hints** ("button" → ButtonControl); `score_text` = `max(SequenceMatcher ratio, token overlap × 0.85, substring 0.9-0.95)`.
 
@@ -342,16 +342,16 @@ Also available via Telegram: `/note <text>` and `/find <thing>` (unchanged).
 1. `microsoft/OmniParser-v2.0` icon_detect YOLOv8 (via `huggingface_hub` + `ultralytics`, CUDA, released from VRAM after each use) detects element boxes
 2. Boxes get text labels by intersecting the **cached Track-1 OCR lines** (`_texts_in_box`) — the old one-tesseract-call-per-crop approach cost ~0.4s × N boxes (~45s on a busy screen)
 3. If no labeled box scores ≥ **0.45** (`_YOLO_SCORE_THRESHOLD`; the old 0.3 let nonsense goals match random elements — regression-tested), the top-8 most-confident **text-less** boxes (≤15% screen area — real icons) are captioned by `_caption_crop` and matched on function descriptions ("settings gear" ↔ goal "settings")
-4. Track 2 is demoted by `config.USE_PIXEL_FALLBACK` (default true; false never loads the YOLO model). Captioner via `config.ICON_CAPTIONER` (`vision.icon_captioner` in self_config.yaml): `"gemma"` (default — resident Gemma 4 E4B, zero extra VRAM, ~1-2s/crop) / `"off"`. The Florence-2 experiment was dropped (never wired).
+4. Track 2 is demoted by `config.USE_PIXEL_FALLBACK` (default true; false never loads the YOLO model). Captioner via `config.ICON_CAPTIONER` (`vision.icon_captioner` in self_config.yaml): `"llm"` (default — resident model, zero extra VRAM, ~1-2s/crop) / `"off"`. The Florence-2 experiment was dropped (never wired).
 
-Tesseract executable configured at module import time from `C:\Program Files\Tesseract-OCR\tesseract.exe` (env override → default paths → fail gracefully). The old `parse_screen()` / `UI_ELEMENT_COORDS` / YOLO coordinate pipeline remains archived in `tools/vision.py` under a `'''...'''` block.
+Tesseract executable configured at module import time from `C:\Program Files\Tesseract-OCR\tesseract.exe` (env override → default paths → fail gracefully). The old `parse_screen()` / `UI_ELEMENT_COORDS` / YOLO coordinate pipeline was deleted in the Qwen swap (2026-09-27).
 
 **Eval harness (`engine_testing/locator_eval.py`):** `capture <name>` saves labeled screenshots to `locator_cases/`, `run [--captions]` scores Tracks 1/2 offline against `cases.json` (`expected_box` hit-testing, per-track hit-rate + latency), `live "<goal>"` runs the full three-track locate on the live screen and moves the mouse to the match (never clicks). Threshold/captioner decisions are made here, with data; `run --no-pixel` measures the demoted-Track-2 A/B.
 
 #### 2.6.2 Webcam Capture (`capture_webcam_base64()`)
 - Captures frame, detects faces, identifies known persons from vault
 - Returns `(base64_string, detected_names_list)` tuple
-- Used by `look_through_webcam` tool which now sends the raw image to Gemma via `image_url` while injecting facial recognition identities into the prompt
+- Used by `look_through_webcam` tool which now sends the raw image to the vision model via `image_url` while injecting facial recognition identities into the prompt
 
 #### 2.6.3 Face Vault (`Aster_Vault/Faces/`)
 - Images named by person (e.g., `Mohamed.jpg`, `George.jpg`)
@@ -360,7 +360,7 @@ Tesseract executable configured at module import time from `C:\Program Files\Tes
 
 #### 2.6.4 Screen Watcher (`start_screen_watcher()`)
 - **Background daemon thread** that captures and analyzes the screen every 10 seconds for a target word
-- Now uses `capture_screen_base64()` + `_execute_gemma_completion()` instead of the archived `parse_screen()`
+- Now uses `capture_screen_base64()` + `_execute_llm_completion()` (the archived `parse_screen()` pipeline was deleted in the Qwen swap)
 - **Timeout:** 360 iterations (1 hour) to prevent zombie threads
 - **Alert:** Sends Telegram message via `config.bot` when target text is detected
 - **Memory Injection:** On success, appends timestamped event to `Aster_Vault/memory.md` so the main LLM loop is aware
@@ -418,11 +418,11 @@ Tesseract executable configured at module import time from `C:\Program Files\Tes
 
 **Implementation split:**
 - `locate_ui_element_ex()` / Tracks 1-2 live in [`tools/vision.py`](tools/vision.py); Track 0 + focus/foreground helpers in [`tools/uia.py`](tools/uia.py); shared scoring in [`tools/locator_common.py`](tools/locator_common.py)
-- `verify_action_result()` lives in [`tools/vision.py`](tools/vision.py) (Gemma free-text, `n_predict=80`) — NOT called by the dispatch path; per-click verification is the deterministic diff
+- `verify_action_result()` lives in [`tools/vision.py`](tools/vision.py) (model free-text, `n_predict=80`) — NOT called by the dispatch path; per-click verification is the deterministic diff
 
 **DOM-first automation motor (Stages 0–3, opt-in, default OFF):**
 - `tools/dom.py` — Playwright ARIA snapshot (web, attached via CDP; only the focused page is actionable) or one shared UIA walk (Windows) → structural filter (interactive/visible/enabled) → role+lexical rank → ≤18 shortlist → deterministic execution (model output never becomes selectors/JS/coordinates). Send/submit/destructive clicks require `confirm_send=true` after owner confirmation (`DOM_MOTOR_SEND_POLICY=confirm`).
-- `core/system1.py` — optional Laya kernel (lazy + ref-counted, CPU) picks among ambiguous shortlist candidates and provides the neutral-key yes/no gate API (`check_state`; not yet wired to a production caller); low-margin or failed decisions escalate to the Gemma/pyautogui path. Decisions log to `Aster_Vault/system1_log.jsonl`; `engine_testing/calibrate_system1.py` fits temperatures and reports ECE.
+- `core/system1.py` — optional Laya kernel (lazy + ref-counted, CPU) picks among ambiguous shortlist candidates and provides the neutral-key yes/no gate API (`check_state`; not yet wired to a production caller); low-margin or failed decisions escalate to the LLM/pyautogui path. Decisions log to `Aster_Vault/system1_log.jsonl`; `engine_testing/calibrate_system1.py` fits temperatures and reports ECE.
 - Flags: `USE_DOM_MOTOR`, `USE_LAYA_KERNEL`, `USE_PIXEL_FALLBACK` (Track-2 demotion), `DOM_MOTOR_SEND_POLICY`, `DOM_MOTOR_SHORTLIST_K`, `DOM_MOTOR_MIN_SCORE`, `BROWSER_CDP_PORT`, `LAYA_MARGIN_THRESHOLD`, `LAYA_KEEP_RESIDENT`, `LAYA_LOG_PATH`, `WEB_BROWSE_ENABLED`, `DOM_MOTOR_OWN_BROWSER`, `BROWSER_HEADLESS`, `BROWSER_PROFILE_DIR`, `BROWSER_USE_REAL_PROFILE`, `BROWSER_HUMAN_SEARCH`. Promotion is gated on the per-stage QA checklists in `engine_testing/qa/`.
 - **Human-style site search (`BROWSER_HUMAN_SEARCH`, `automation.human_search`, 2026-09-26):** when ON, `browse_web(site, query)` lands on the site's HOME page and the model drives the site's own search bar (open site → `smart_type(search bar, q, submit=true)` → `browse_web()`) — the Astra-like interactive flow. The pre-mapped search URLs (`_SITE_SEARCH`) remain as the rollback path (flag off). Unknown bare site names still Bing-search (discovery must not guess dead hosts). E2E: amazon.eg + eggs → home → site search box (`Search Amazon.eg`) → `/s?k=eggs` with prices read from the page.
 - **Real browser profile — settled impossible (2026-09-26, experimental):** Chrome ≥136 ignores `--remote-debugging-port` on the default user-data-dir (verified: window opens, port never binds), and its v20 app-bound cookie encryption refuses to decrypt through ANY copy or directory-junction of that dir — Chrome then PURGES the undecryptable cookies (a junction test wiped the owner's `Default` + `Profile 3` sessions; `Local State` key survived — re-login only). Edge is identical (v20). Therefore `automation.use_real_profile: true` now raises `RealProfileUnavailable` (tools/dom.py) with the supported alternative — NO silent logged-out guest fallback; `browse_web`/`web_click`/`web_type` all relay it.
@@ -623,13 +623,13 @@ any mood colour.
 | Strategy | Implementation | Location |
 |---|---|---|
 | **Single Engine** | One llama-server instance serving the GGUF + mmproj model | `config.py`, `core/brain.py` |
-| **Q4_0 KV Cache Quantization** | `-ctk q4_0 -ctv q4_0` — 4-bit quantized keys/values, ~1.5-2 GB for 128k context | llama-server (`start.bat`) |
+| **KVarN KV Cache Quantization** | `--cache-type-k kvarn4 --cache-type-v kvarn2 --kv-tail-tokens 1024` — ~0.9 GB at 60k context (Qwen's hybrid attention keeps KV small) | llama-server (`start.bat`) |
 | **Model Permalock** | llama-server loaded once, stays in VRAM permanently | `config.py`, `main.py` |
 | **Whisper int8 Quantization** | Faster-Whisper loaded with `compute_type="int8"` — halves Whisper VRAM vs fp16 | `main.py`, `local_stt.py` |
 | **Shared STT/TTS instances** | One Whisper model (Telegram + call) and one ref-counted Kokoro pipeline — no duplicate model copies during a call; Kokoro offloads when idle | `local_stt.py`, `tools/audio.py`, `local_tts.py` |
 | **Cold Storage Vision** | Images archived to `Aster_Vault/images/` before VRAM flush; tombstone stores filepath for on-demand retrieval via `re_examine_image()` | `brain.py`, `vision.py` |
-| **Media Cache Purge** | `purge_media_cache()` strips Base64 image/audio data from conversation history after every turn | `brain.py` |
-| **Context Window** | 128k tokens (`--ctx-size 128000` in `start.bat`, `config.N_CTX=131072` from `self_config.yaml`) with Q4_0 KV cache | llama-server |
+| **Media Cache Purge** | `purge_media_cache()` strips Base64 image data from conversation history after every turn (voice notes are text now) | `brain.py` |
+| **Context Window** | 60k tokens (`--ctx-size 60000` in `start.bat`, `config.N_CTX=60000`) with KVarN KV cache | llama-server |
 | **Character Heuristic Trimming** | `trim_memory()` uses `len() // 4` for token estimation | `core/memory.py` |
 | **Context Compaction** | `/compact` command — LLM summarizes history, replaces messages array | `brain.py` |
 | **CUDA DLL Path Patching** | `main.py` and `local_stt.py` manually inject NVIDIA DLL paths into `PATH` for CTranslate2 runtime | `main.py`, `local_stt.py` |
@@ -638,8 +638,8 @@ any mood colour.
 
 | Component | Estimated VRAM |
 |---|---|
-| llama-server: Gemma 4 E4B (Q4_K_M, 128k ctx, Q4_0 KV) + mmproj-F16 | ~7-8 GB |
-| Faster-Whisper medium.en (int8, shared — Telegram + call) | ~1.0-1.5 GB |
+| llama-server/BeeLlama: Qwen 3.6 35B-A3B (IQ4_XS, 60k ctx, KVarN KV, ~20 MoE layers on CPU) + mmproj in RAM | **~11.5-11.9 GB (measured)** |
+| Faster-Whisper medium.en (int8, shared — call; Telegram uses a CPU instance when no call) | ~1.0-1.5 GB GPU (call) / ~1.5 GB RAM (voice notes) |
 | SpeechBrain ECAPA (voice recognition, eager CUDA) | ~80 MB |
 | openWakeWord (CPU-only, negligible GPU) | ~0 MB GPU |
 | Silero VAD | ~50 MB |
@@ -756,13 +756,13 @@ The former "AUTONOMOUS GUI NAVIGATION LAW" has been updated to reflect the new t
 
 **Location:** `brain.py` agentic loop
 
-The 15-round agentic tool loop includes a failsafe for Gemma-4's "Post-Tool Apathy" — when the model returns an empty string after successfully executing tools. A `tools_executed` boolean tracks whether any tool ran during the session. If the model exits the loop with an empty response and tools were executed, a neutral `[System Internal]` user message is injected as a nudge, one final `_execute_gemma_completion()` call is fired, and the prod message is wiped from history via `.remove()` so only the user request, tool execution, and final response remain.
+The 15-round agentic tool loop includes a failsafe for "Post-Tool Apathy" (routinely observed on Gemma-4; a mild form survived the swap) — when the model returns an empty string after successfully executing tools. A `tools_executed` boolean tracks whether any tool ran during the session. If the model exits the loop with an empty response and tools were executed, a neutral `[System Internal]` user message is injected as a nudge, one final `_execute_llm_completion()` call is fired, and the prod message is wiped from history via `.remove()` so only the user request, tool execution, and final response remain.
 
 ---
 
 ## Appendix A: Complete Tool Registry
 
-The following **54 tools** are registered in `ADMIN_TOOLS` ([`core/brain.py`](core/brain.py)) and available to the LLM via XML tool-call extraction:
+The following **69 tools** are registered in `ADMIN_TOOLS` ([`core/brain.py`](core/brain.py)) and available to the LLM via native OpenAI tool calling (`tools=ADMIN_TOOLS` param):
 
 | # | Tool Name | Category |
 |---|---|---|
@@ -823,7 +823,7 @@ The following **54 tools** are registered in `ADMIN_TOOLS` ([`core/brain.py`](co
 
 **Removed tools (archived):** `parse_screen`, `ui_click`, `ui_type`, `ui_press_key`, `analyze_screen` (old YOLO-coordinate pipeline — replaced by OmniParser + `smart_click`/`press_key`).
 
-**Tool Call Mechanism:** XML-based extraction via `_extract_xml_tool_call()` — parses `<tool_call>` blocks with JSON arguments. This is a ReAct-style agent loop (not OpenAI function-calling), with up to 15 rounds of tool execution per user turn.
+**Tool Call Mechanism:** native OpenAI function calling — `ADMIN_TOOLS` (full JSON-Schema dicts) travel in the `tools` param of `/v1/chat/completions`; llama-server returns a structured `tool_calls` array (read by `_extract_native_tool_call`/`_extract_all_native_tool_calls`) and tool results go back as `role:"tool"` messages with `tool_call_id`. The legacy XML-in-text path was removed in the Qwen swap. Up to 15 rounds of tool execution per user turn.
 
 ## Appendix B: Thread Architecture
 
@@ -852,16 +852,16 @@ Async tasks (in WebRTC bridge only):
 | `main.py` | ~580 | Entry point, Telegram handlers, engine warmup, headless CLI mode, awareness daemon boot |
 | `config.py` | ~227 | Single-engine config: llama-server, KV cache, ChromaDB, credential loading, wake-word, awareness, intervention settings, `self_config.yaml` loader |
 | `self_config.yaml` | ~107 | Single source of truth for identity, paths, integrations, daemon boot defaults, tunable knobs |
-| `core/brain.py` | ~2784 | LLM router (`/v1/chat/completions`), XML tool calling, ReAct agent loop, hallucination detector, system prompts, Discord brain, GUI tool dispatch, 68-tool registry |
+| `core/brain.py` | ~3100 | LLM router (`/v1/chat/completions`), native OpenAI tool calling, ReAct agent loop, hallucination detector, system prompts, Discord brain, GUI tool dispatch, 69-tool registry |
 | `core/memory.py` | ~110 | Hybrid memory read/write, character-heuristic `trim_memory()`, `get_collection_stats()` for self-knowledge |
 | `tools/system.py` | 218 | OS control, file I/O, process list |
 | `tools/media.py` | 223 | Spotify control, timers, alarms |
-| `tools/sentry.py` | ~146 | Gemma vision sentry daemon (with face_recognition fallback) |
+| `tools/sentry.py` | ~146 | Vision-model sentry daemon (with face_recognition fallback) |
 | `tools/intervention.py` | ~210 | Intervention Mode — foreground-window focus daemon; `classify_window()`, toggle/snooze/close, brain-routed in-persona delivery |
 | `tools/awareness.py` | ~559 | Awareness Mode — ambient screen+webcam polling daemon, context-block injector, mood inference, proactive nudges, initiative dial |
 | `tools/self_knowledge.py` | ~257 | Self-knowledge layer — 6 introspection functions (`get_my_config`, `list_my_contacts`, `list_my_capabilities`, `get_my_status`, `get_my_memory_stats`, `describe_my_tool`) |
 | `tools/notes.py` | 39 | Lightweight note-taking — `save_note()` / `get_notes()` backed by `Aster_Vault/notes.md` |
-| `tools/vision.py` | ~1330 | Screen capture (Base64), webcam capture + face recognition, cold storage, screen watcher. DOM-motor Track -1 + UIA + OCR + OmniParser/YOLO track locator (`locate_ui_element_ex`; Track 2 gated by `USE_PIXEL_FALLBACK`); `locate_ui_elements_boxed()` multi-match box locator for Assist Mode. Old YOLO coordinate pipeline archived in `'''...'''` block at bottom. |
+| `tools/vision.py` | ~1330 | Screen capture (Base64), webcam capture + face recognition, cold storage, screen watcher. DOM-motor Track -1 + UIA + OCR + OmniParser/YOLO track locator (`locate_ui_element_ex`; Track 2 gated by `USE_PIXEL_FALLBACK`); `locate_ui_elements_boxed()` multi-match box locator for Assist Mode. The old YOLO coordinate pipeline's archived `'''...'''` blocks were deleted in the Qwen swap. |
 | `tools/dom.py` | ~1135 | DOM-first motor: ARIA snapshot parser, structural filter + role/lexical shortlist (K≤18), Playwright-over-CDP web execution with send gate + focus requirement, UIA shortlist with walk reuse; dedicated-profile own-launch with `--disable-background-mode` + profile-dir-matched kill on detach; `RealProfileUnavailable` refusal for `use_real_profile` (the real profile is impossible — Chrome ≥136 + app-bound cookies); `web_cookies()` for login_once. Flag `USE_DOM_MOTOR` (default off). |
 | `core/system1.py` | ~330 | System-1 decision kernel (Laya): neutral-key choice schemas, margin gating, escalation, JSONL decision log. Flag `USE_LAYA_KERNEL` (default off). |
 | `tools/assist.py` | ~115 | Assist Mode — stdlib-tkinter dim overlay (`highlight_regions()`) highlighting located screen elements; auto-dismiss on timeout/key/click |

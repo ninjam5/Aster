@@ -2,7 +2,7 @@
 """Estimate token usage the way Aster's trim_memory does (len(content)//4).
 
 Mirrors core/memory.py:_estimate_tokens and prints the budget math
-(budget = 90% of runtime.context_window, default 131072).
+(budget = 90% of runtime.context_window, default 60000).
 
 Usage (repo root):
     python .claude/skills/aster-diagnostics-and-tooling/scripts/context_estimate.py <file>
@@ -15,15 +15,15 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..",
 
 
 def read_n_ctx():
-    """Read runtime.context_window from self_config.yaml if present, else 131072
+    """Read runtime.context_window from self_config.yaml if present, else 60000
     (config.py's default). Reads ONLY that one key; never prints other content."""
     try:
         import yaml
         with open(os.path.join(REPO, "self_config.yaml"), encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
-        return int(data.get("runtime", {}).get("context_window", 131072))
+        return int(data.get("runtime", {}).get("context_window", 60000))
     except Exception:
-        return 131072
+        return 60000
 
 
 def estimate_tokens(text: str) -> int:

@@ -1,6 +1,6 @@
 ---
 name: aster-validation-and-qa
-description: Load this when running tests, deciding whether a change is proven, adding tests for new code, interpreting a red suite, or asked "how do I test this", "what counts as evidence", "run the test suite", "is there a benchmark for X". Contains the full test inventory with counts measured 2026-07-05 (including one known-failing test), the evidence standards, and the how-to-add-tests patterns.
+description: Load this when running tests, deciding whether a change is proven, adding tests for new code, interpreting a red suite, or asked "how do I test this", "what counts as evidence", "run the test suite", "is there a benchmark for X". Contains the full test inventory with counts measured 2026-09-27 (including one known-failing Telegram-network test), the evidence standards, and the how-to-add-tests patterns.
 ---
 
 # Aster Validation and QA
@@ -32,8 +32,8 @@ description: Load this when running tests, deciding whether a change is proven, 
 
 | Suite | Covers | Run | Measured result |
 |---|---|---|---|
-| `tests/` (6 files: test_migration, test_mood_memory, test_intervention, test_sentiment, test_first_run_setup, test_config_cleanup) | REST adapter + native/XML tool parsing, mood-trend logic, `classify_window`, `classify_sentiment`, setup wizard, config hygiene | `python -m pytest tests/ -q` | **118 passed, 1 FAILED** |
-| Known failure | `test_first_run_setup.py::TestUpdateIdentity::test_preserves_comments_and_untouched_fields` | — | Pre-existing on 2026-07-05; treat as known-red baseline until fixed |
+| `tests/` (6 files: test_migration, test_mood_memory, test_intervention, test_sentiment, test_first_run_setup, test_config_cleanup) | REST adapter + native tool parsing, mood-trend logic, `classify_window`, `classify_sentiment`, setup wizard, config hygiene | `python -m pytest tests/ -q` | **408 passed, 1 known-failing** (2026-09-27) |
+| Known failure | `test_first_run_setup.py::TestPollTelegramChatId::test_invalid_token_returns_none_without_hanging` | — | Pre-existing; makes a real Telegram network call — treat as known-red baseline until fixed |
 | `emotion-test.py` | Mood-trigger features (Ideas 1 & 2 gates, streaks, cooldowns, wording) | `python emotion-test.py` | **19/19** |
 | `ambient-audio-test.py` | Tier-1b mapping, EMA, owner gate, call-pause, disabled no-op | `python ambient-audio-test.py` | **23/23** |
 | `face-emotion-test.py` | Tier-2 mapping, EMA, confidence gate, fusion policy | `python face-emotion-test.py` | **22/22** |
@@ -44,7 +44,7 @@ Single test: `pytest tests/test_migration.py -v -k "test_name"`.
 
 ```powershell
 cd Aster-UI
-npm test          # vitest — 34 tests (2026-07-04 count)
+npm test          # vitest — 57 tests (2026-09-27 count)
 npm run build     # tsc + vite bundle check
 npm run lint
 ```
@@ -55,7 +55,7 @@ All three green = the standing bar. Single file:
 
 | Battery | What it measures | Run | Caveat |
 |---|---|---|---|
-| `engine_testing/run_engine_test.py` | Tool selection, arg precision, multi-step, restraint, hallucination resistance, cutoff routing (auto-scored) + persona/two-face/Discord-relay/vision (manual grading) → timestamped report in `engine_testing/results/` | `python engine_testing/run_engine_test.py` (options: `--model NAME`, `--category persona`, `--no-vision`) | **Exercises the LEGACY XML path only** — harness.py never sends `tools=`. There is NO automated native-path battery yet (first obligation of `aster-gemma-reliability-campaign`) |
+| `engine_testing/run_engine_test.py` | Tool selection, arg precision, multi-step, restraint, hallucination resistance, cutoff routing (auto-scored) + persona/two-face/Discord-relay/vision (manual grading) → timestamped report in `engine_testing/results/` | `python engine_testing/run_engine_test.py` (options: `--model NAME`, `--category persona`, `--no-vision`) | **Native-only** — harness.py sends `tools=ADMIN_TOOLS` and reads structured `tool_calls`; there is no legacy path to compare. Qwen-swap battery (2026-09-27): **31/37 auto @ temp 1.0, 27/37 @ temp 0.7**. Live validation checklist: `engine_testing/qa/qwen-swap-live-validation.md` |
 | `conversation_testing.py` | Persona speaking style across sampling presets (side-by-side matrix) | `python conversation_testing.py [--presets …] [--prompts …] [--persona jarvis]` | Output is human-judged by design (style has no auto-metric yet); writes md+json to `Aster_Vault/conversation-tests/` |
 
 ### Golden / frozen inventory
@@ -64,6 +64,9 @@ All three green = the standing bar. Single file:
   E4B-q4km, 12B variants). Latest (2026-06-24): auto **32/32**, 90.2 tok/s,
   4.98 s/turn, 0% XML mangle on 84 calls. THE baselines for any model/template
   change. Never rewrite them.
+- Qwen 3.6 35B-A3B swap battery (2026-09-27, branch `qwen3.6-35b`): **31/37 auto @
+  temp 1.0, 27/37 @ temp 0.7**; live validation still PENDING — checklist in
+  `engine_testing/qa/qwen-swap-live-validation.md`.
 - `Aster_Vault/conversation-tests/` — style-sweep records.
 - Manual regression batteries: `aster-opensource-plan.md` "Testing Checklist — All
   58 Tools" (NOTE: predates Gmail/Calendar; live count is 68) and
@@ -93,8 +96,8 @@ with patch("core.brain.requests.post", return_value=_make_mock_response(msg)):
     ...  # exercise the code path
 ```
 
-Test BOTH paths when touching tool calling (native `tool_calls` and legacy XML
-strings through `_legacy_xml_parse`).
+Tool calling is native-only (the legacy XML path was removed in the Qwen swap,
+2026-09-27) — assert on the structured `tool_calls` shape.
 
 ### Pattern 2 — standalone mock harness (for ML-adjacent logic)
 
@@ -124,8 +127,8 @@ labeled mini-set or a logged week of outcomes — one anecdote is not evidence
 
 Authored 2026-07-05; all counts measured that day on the live machine.
 
-- Re-measure pytest: `python -m pytest tests/ -q` (baseline 118 pass / 1 fail)
+- Re-measure pytest: `python -m pytest tests/ -q` (baseline 408 pass / 1 known-fail)
 - Re-measure harnesses: `python emotion-test.py; python ambient-audio-test.py; python face-emotion-test.py`
 - Vitest count: `cd Aster-UI; npm test`
-- Legacy-only harness still true: `Select-String -Path engine_testing\harness.py -Pattern "_legacy_xml_parse|tools="`
+- Native-only harness still true: `Select-String -Path engine_testing\harness.py -Pattern "tools=|_extract_native_tool_call"`
 - Latest golden report: `Get-ChildItem engine_testing\results | Sort-Object LastWriteTime | Select-Object -Last 1`

@@ -51,14 +51,19 @@ install on demand when an import fails:
    `C:\Program Files\Tesseract-OCR\tesseract.exe`, override with the
    `TESSERACT_CMD` env var. Boot prints `[Tesseract] Using executable: ...`.
 3. **ffmpeg on PATH** — Telegram voice-note transcoding.
-4. **llama-server binary** — vendored in the repo: `llama-server/` (~1.2 GB with
-   CUDA DLLs + per-CPU-microarch ggml backends) and an alternate
-   `llama-server-turboquant/` bundle. No build step needed. (`build_cuda.py` is
-   LEGACY — it rebuilt llama-cpp-python, which the project no longer uses.)
-5. **Model files**: `Aster_Vault/Models/gemma-e4b-q4km.gguf` (~5.41 GB) +
-   `Aster_Vault/Models/mmproj-F16.gguf` (~0.99 GB), from Hugging Face (Gemma-4-E4B
-   GGUF repos). NOTE: `start_new.bat`/`Start-all.bat` reference an additional QAT
-   model at `E:\Models\` outside the repo — see `aster-run-and-operate`.
+4. **llama-server binary (BeeLlama)** — the engine binary lives OUTSIDE the repo at
+   `E:\Models\beellama-v0.4.7-bin-win-cuda-12.4-x64\llama-server.exe` (a llama.cpp
+   fork adding KVarN KV quantization + MTP). Install from the BeeLlama **Windows
+   CUDA 12.4 release zip plus the separate cudart DLLs zip**; no build step.
+   (`build_cuda.py` is LEGACY — it rebuilt llama-cpp-python, which the project no
+   longer uses.)
+5. **Model files**: `E:\Models\Qwen3.6-35B-A3B-UD-IQ4_XS.gguf` plus the vision
+   projector `E:\Models\Qwen3.6-35B-A3B-mmproj-F16.gguf`, from the Hugging Face repo
+   **`unsloth/Qwen3.6-35B-A3B-MTP-GGUF`** (the "MTP" in the repo name is what
+   supplies the speculative-decoding draft tensors), and the chat template
+   `E:\Models\qwen36_chat_template.jinja` from
+   **`froggeric/Qwen-Fixed-Chat-Templates`** (v22.5). Launcher flags:
+   `aster-run-and-operate`.
 6. **Node.js + npm** — both frontend apps.
 7. **Rust toolchain + MSVC "Desktop development with C++"** — ONLY for
    `npm run tauri build`/`tauri dev`. Browser dev (`npm run dev` in Aster-UI)
@@ -83,11 +88,11 @@ package's broken downloader), OmniParser v2 (on first smart_click fallback).
 ## Smoke-test ladder (run in order; 1–3 need NO llama-server)
 
 ```powershell
-# 1. Offline unit tests (expect 118 pass / 1 known fail as of 2026-07-05):
+# 1. Offline unit tests (expect 408 pass / 1 known fail as of 2026-09-27):
 python -m pytest tests/ -q
 # 2. Standalone mock harnesses (19/19, 23/23, 22/22):
 python emotion-test.py; python ambient-audio-test.py; python face-emotion-test.py
-# 3. Core import (loads face models, ~1 min; prints "68 tools registered"):
+# 3. Core import (loads face models, ~1 min; prints "69 tools registered"):
 python -c "import core.brain as b; print(len(b.ADMIN_TOOLS))"
 # 4. Engine up:
 .\start.bat        # separate window; wait for load
@@ -121,5 +126,5 @@ exists — verified same day).
 - requirements file appeared? `Get-ChildItem requirements*.txt`
 - Python version: `python --version` (3.12 expected)
 - DLL patch still present: `Select-String -Path main.py -Pattern "nvidia"`
-- Vendored server bundles: `Get-ChildItem llama-server*, -Directory`
+- Engine binary present: `Test-Path "E:\Models\beellama-v0.4.7-bin-win-cuda-12.4-x64\llama-server.exe"`
 - Test-ladder baseline: `python -m pytest tests/ -q`

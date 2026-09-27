@@ -21,10 +21,10 @@ rules → `aster-change-control`.
 |---|---|---|
 | Engine hell — 3 failed tool-calling architectures | Stop fighting Gemma's template; custom Jinja + (later) llama-server | SETTLED — fenced |
 | llama-cpp-python → llama-server migration | One REST server serves everything | SETTLED |
-| XML ReAct → native OpenAI tool calling | Migrated 2026-06 behind `USE_NATIVE_TOOL_CALLS` | SETTLED, rollback kept |
+| XML ReAct → native OpenAI tool calling | Migrated 2026-06; rollback **removed** in the Qwen swap | SETTLED |
 | Hallucinated tool execution | Detector + single retry | SETTLED (mitigation), model-level cause LIVE |
 | Post-tool apathy | `[System Internal]` nudge + one completion | SETTLED (mitigation) |
-| Degenerate tool loops | No guard exists | **LIVE — the campaign target** |
+| Degenerate tool loops | LoopGuard (call-hash budget + ping-pong detect) shipped + tests | SETTLED (watch live) |
 | OCR clicked the word "Enter" | Keyboard ≠ screen text; `press_key` law | SETTLED |
 | Per-crop OCR 60–90 s | Two-track rewrite → ~2–4 s | SETTLED |
 | VRAM duplicate-model leaks | Singletons + ref-counting | SETTLED (pattern mandatory) |
@@ -33,7 +33,8 @@ rules → `aster-change-control`.
 | hsemotion torch pkg broken on timm 1.x | Use `hsemotion-onnx` | SETTLED |
 | IEMOCAP anger→happy | Arousal ≠ valence; text gates prosody | SETTLED (characterized) |
 | Karaoke Mode | Fully removed 2026-07-03 | SETTLED — never restore |
-| Doc drift (AGENTS.md et al.) | Multiple stale claims | ONGOING hazard |
+| Doc drift (AGENTS.md et al.) | Multiple stale claims; refreshed 2026-09-27 for the Qwen swap | ONGOING hazard |
+| Gemma 4 E4B → Qwen 3.6 35B-A3B engine swap | BeeLlama v0.4.7 + froggeric template; XML/audio/LoRA-era paths deleted | SETTLED (code) — live validation pending |
 
 ## The engine hell saga (2026-05) — the costliest battle. Fenced off.
 
@@ -87,7 +88,7 @@ path — the native path has no automated harness yet (first obligation of
 
 - **Hallucinated execution** ("Playing it now" with no tool call): regex
   cross-reference of user-intent × response-claims + leaked-syntax check; one
-  retry, `hallucination_retried` flag prevents loops (`core/brain.py:185`, `:2990`).
+  retry, `hallucination_retried` flag prevents loops (`core/brain.py:176`, `:3214`).
 - **Post-tool apathy** (empty string after successful tools): `tools_executed`
   bool; neutral `[System Internal]` nudge; one final completion; nudge removed from
   history.
@@ -186,10 +187,13 @@ LoopGuard port graded in `open-jarvis.md` §1.1).
   via pyautogui in brain.py).
 - `whisper-models/models--Systran--faster-distil-whisper-large-v3/` — never
   loaded; only `medium.en` is used.
-- `AUDIO_MODE` — no runtime effect (native audio bypassed `if False:`).
+- `AUDIO_MODE` + the native-audio (`input_audio`) voice-note route — **removed 2026-09-27**;
+  voice notes now go through Faster-Whisper (`local_stt.transcribe_file`).
+- Archived YOLO `'''...'''` blocks in `tools/vision.py` (`parse_screen`, `UI_ELEMENT_COORDS`,
+  `get_ui_element_coords`, `_extract_detector_elements`…) — **deleted 2026-09-27**.
 - Old in-`main.py` FastAPI dashboard block — commented out; the ACTIVE server is
   `tools/face_server.py`.
-- Sentry daemon auto-start — commented out (`main.py:656`); toggle still works.
+- Sentry daemon auto-start — commented out (`main.py:664`); toggle still works.
 
 ## Small settled oddities
 
@@ -199,8 +203,8 @@ LoopGuard port graded in `open-jarvis.md` §1.1).
 | Spotify redirect URI once collided with llama-server's :8080 | Fixed — default is now `http://127.0.0.1:8081` (config.py:104) |
 | `awareness_mode: false` yaml "ignored / hardcoded True" | **FIXED** — `tools/awareness.py:29` now reads config; CLAUDE.md gotcha + example-yaml comment are STALE |
 | Intervention threshold "default 1800 s" (summary.md) | STALE — config default is 60 s |
-| Docs claim model is `gemma-e4b-q4km` | `start_new.bat`/`Start-all.bat` actually serve `E:\Models\gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf`; verify live via `/props` |
-| `AGENTS.md` | BADLY STALE: claims XML ReAct is current, 39 tools, hardcoded credentials in config.py, and a summary-workflow instructions file that no longer exists. Do not trust it |
+| Docs claim model is `gemma-e4b-q4km` | **RESOLVED 2026-09-27** — engine + launchers now Qwen 3.6 35B-A3B; verify live via `/props` |
+| `AGENTS.md` | Was badly stale (XML ReAct, 39 tools, hardcoded creds). **Rewritten 2026-09-27** — now native tool calling, 69 tools, `secrets.yaml`, docs-duty line. Re-verify before trusting |
 | harness.py `TEMPERATURE = 0.7` labeled "must match brain.py" | config default `LLM_TEMPERATURE` is 1.0 — drifted |
 
 ## Model-sweep record (June 2026, `engine_testing/results/`)
@@ -212,6 +216,60 @@ hallucination 5/5, cutoff-routing 3/3), 90.2 tok/s generation, 4.98 s avg
 latency/turn, 0% XML mangle. Manual-review categories (persona, two-face, Discord
 relay, vision) are graded by hand in the report files. These are the frozen
 baselines for any model swap.
+
+## Qwen 3.6 35B-A3B engine swap (2026-09-27, branch `qwen3.6-35b`)
+
+**Symptom (why it happened):** the quantized Gemma-4-E4B agent kept misbehaving in
+the same four ways the reliability campaign documented (hallucinated execution,
+post-tool apathy, degenerate loops, long-context degradation), and the owner was
+already at the model's quality ceiling after an extensive build-up of mitigations.
+
+**Root cause:** model capability, not the harness. Phase-0 baseline on the swapped
+engine resolved the harness question: native path, 0.0% text-tool-syntax leaks,
+0.0% JSON decode failures, loop-discipline 5/5, clean role handling.
+
+**What shipped (code):** all Gemma/XML machinery deleted from the engine path —
+`_legacy_xml_parse`/`_get_xml_tool_prompt`/`_TOOL_CALL_REMINDER`, the
+`USE_NATIVE_TOOL_CALLS` rollback flag and every dual-parse branch, the `<image>`
+marker injection + INST-token stripping, the Gemma/QAT leak-scrub strip list, the
+Gemma audio-head (`input_audio`) voice-note route, and the archived YOLO string
+blocks. Adapter renamed `_execute_gemma_completion` → `_execute_llm_completion`.
+`N_CTX` 131072 → 60000. See commits `0454616`, `c59c409`, `c4929eb`, `2cdaebd`.
+
+**Numbers (measured, this install):**
+- decode **~40 tok/s** hot (BeeLlama v0.4.7, `--threads 8` P-cores, MTP draft
+  acceptance ~0.90, `ubatch 512`); ~32 tok/s on v0.4.4 and ~24-31 with the earlier
+  configs. Prefill ~1.5-1.8k tok/s at ub 512, versus ~178 at ub 256 (the
+  RAM-crash mitigation was the single biggest prefill cost).
+- VRAM **~11.5-11.9 GB / 12.3** at `--n-cpu-moe 20 --ctx-size 60000`; the MoE is
+  bandwidth-bound on DDR4-3200 dual channel, not GPU-bound.
+- Harness battery (52 scenarios): **31/37 auto (84%) at temp 1.0**, **27/37 (73%)
+  at temp 0.7** — temp 1.0 is the keeper default (config already 1.0).
+
+**Residual failure family (LIVE — not settled):** "narrate instead of act" —
+on trivial instant actions the model answers in persona without calling the tool
+("The timer is set, Sir."). Six prompts: time / pause Spotify / skip song /
+screenshot / screenshot+describe / 10-min timer. Production's
+`_claims_tool_execution` single-retry catches the explicit claims; the fix lever is
+tool-law wording in `_shared_tool_laws.md`, to be A/B'd on the battery. Tracked in
+`engine_testing/qa/qwen-swap-live-validation.md` T3.
+
+**Fences produced (do not re-enter):**
+1. **Never re-add `<image>` marker injection or INST-token stripping** — the
+   froggeric template places vision tokens itself; those were Gemma-template
+   workarounds.
+2. **Never re-add `input_audio`** — the Qwen mmproj is vision-only; voice notes
+   are text via Whisper.
+3. **Do not chase BeeLlama as a slow fork** — A/B against mainline b9568 was a
+   dead heat on decode; the fork's KVarN + v0.4.7 GQA decode kernels are the win.
+4. **`--ubatch-size 256` was a RAM-crash mitigation, not a tuning choice** — it
+   costs ~8× prefill; only lower it if commit charge is near the limit.
+5. **The Gemma engine is preserved on branch `gemma-4-e4b-lightweight`** — roll
+   back by switching branches, not by restoring deleted code.
+
+**Status:** SETTLED in code; **live validation OPEN** (boot, vision round-trip,
+tool-calling behavior, Whisper route, harness regression) — checklist in
+`engine_testing/qa/qwen-swap-live-validation.md`.
 
 ## Provenance and maintenance
 

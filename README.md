@@ -2,7 +2,7 @@
 
 **A fully local, always-on AI companion â€” voice, vision, memory, and 69 autonomous tools, running entirely on a single consumer GPU with no data ever leaving the machine.**
 
-Aster is a personal AI agent I designed and built from scratch: a local LLM (Gemma-4 via `llama.cpp`) wired into a real agentic loop with native function-calling, long-term memory, multimodal perception (screen, webcam, voice), and interfaces across CLI, Telegram, Discord, a live WebRTC voice call, and two custom desktop apps. Nothing is routed through a third-party API â€” inference, speech, vision, and memory all run on-device.
+Aster is a personal AI agent I designed and built from scratch: a local LLM (Qwen 3.6 35B-A3B via `llama.cpp`) wired into a real agentic loop with native function-calling, long-term memory, multimodal perception (screen, webcam, voice), and interfaces across CLI, Telegram, Discord, a live WebRTC voice call, and two custom desktop apps. Nothing is routed through a third-party API â€” inference, speech, vision, and memory all run on-device.
 
 I'm submitting Aster as my project for the **Claude Builder / Life Sciences Program** application. It isn't a life-sciences tool itself, but it's the clearest evidence I have of the skills that track cares about: building *reliable* agentic systems on top of an LLM â€” tool orchestration, multimodal reasoning, long-horizon memory, and privacy-preserving architecture â€” all of which transfer directly to building trustworthy AI agents for sensitive, high-stakes domains like healthcare and life sciences, where **data never leaving a controlled environment** and **auditable, gated tool use** aren't nice-to-haves, they're the whole point.
 
@@ -44,7 +44,7 @@ User input (CLI / Telegram / WebRTC voice)
     â†’ response                      routed back to whichever interface asked
 ```
 
-A single `llama-server` instance (Gemma-4-E4B, Q4_K_M, 128k context, full GPU offload) serves **every** text, vision, and tool-calling request across every interface â€” there's no separate vision pipeline or duplicate model load. The tool-calling path is the OpenAI-compatible native `tools` schema; a full legacy XML-in-text fallback path exists behind one config flag as a rollback, which forced the entire system to be designed around a single dispatch abstraction rather than two parallel code paths.
+A single `llama-server` instance (Qwen 3.6 35B-A3B MoE, IQ4_XS, 60k context, KVarN-quantized KV cache, MTP speculative decoding) serves **every** text, vision, and tool-calling request across every interface â€” there's no separate vision pipeline or duplicate model load. The tool-calling path is the OpenAI-compatible native `tools` schema, which is why the whole system is built around a single dispatch abstraction.
 
 ### Interfaces, all backed by the same brain
 
@@ -59,7 +59,7 @@ A single `llama-server` instance (Gemma-4-E4B, Q4_K_M, 128k context, full GPU of
 
 ## Engineering choices worth noting
 
-- **One LLM adapter function**, `_execute_gemma_completion()`, is the single place every caller (chat, vision, sentry, persona generation) goes through â€” every non-tool-calling caller has to explicitly unwrap the same dict shape, which was a deliberate choice to keep one calling convention instead of two.
+- **One LLM adapter function**, `_execute_llm_completion()`, is the single place every caller (chat, vision, sentry, persona generation) goes through â€” every non-tool-calling caller has to explicitly unwrap the same dict shape, which was a deliberate choice to keep one calling convention instead of two.
 - **Modular persona system** â€” the entire personality (tone, response length, mood-awareness) lives in swappable markdown files, selected by one config key, with zero code branching on "which persona."
 - **Ref-counted, lazy-loaded models** â€” Kokoro TTS and the voice-emotion model are acquired/released like a semaphore so VRAM is only paid for while something is actually using them, instead of holding every model resident all the time on a 12GB card.
 - **Fusion over precedence, not overwrite** â€” mood detection combines multiple signals (text > face > ambient voice) so a confident text read is never clobbered by a noisier secondary signal, but a still-neutral read gets filled in by whatever's available.
@@ -69,7 +69,7 @@ A single `llama-server` instance (Gemma-4-E4B, Q4_K_M, 128k context, full GPU of
 
 | Layer | Choice |
 |---|---|
-| LLM inference | `llama-server` (llama.cpp), Gemma-4-E4B Q4_K_M, 128k ctx, full CUDA offload |
+| LLM inference | `llama-server` (llama.cpp; BeeLlama v0.4.7 fork), Qwen 3.6 35B-A3B IQ4_XS (MoE, ~3B active/token), 60k ctx, KVarN KV cache, MTP speculative decoding |
 | STT | Faster-Whisper (`medium.en`, CTranslate2, CUDA) |
 | TTS | Kokoro 82M |
 | Voice ID | SpeechBrain ECAPA-TDNN speaker embeddings |
@@ -85,18 +85,18 @@ A single `llama-server` instance (Gemma-4-E4B, Q4_K_M, 128k context, full GPU of
 ```
 core/            LLM adapter, agentic tool-calling loop, memory read/write
 tools/           69 admin tools: vision, GUI automation, voice ID, emotion, Gmail/Calendar, Spotify, system control, RAG...
-Aster_Vault/     Per-install runtime data + shippable assets (system prompts, custom Jinja template)
+Aster_Vault/     Per-install runtime data + shippable assets (system prompts)
 aster-face/      Tauri desktop companion â€” animated reactor-core face + live call
 Aster-UI/        Tauri full dashboard â€” memory CRUD, skills toggles, activity log
 tests/           pytest suite (mocked LLM, no server required)
-engine_testing/  Standalone prompt-tuning harness for the legacy tool-calling path
+engine_testing/  Standalone native tool-calling harness (52 scenarios) + QA gates
 main.py          Entry point â€” CLI loop + Telegram/Discord/WebRTC daemon threads
 webrtc_bridge.py Standalone LiveKit voice agent
 ```
 
 ## Status
 
-This is a live, actively-used personal system (not a demo repo) â€” I run it daily as my own assistant. Model weights, voice enrollments, and personal config are gitignored; see `secrets.example.yaml` and `self_config.example.yaml` for the setup shape. A from-scratch install additionally requires a running `llama-server` instance serving Gemma-4-E4B + its multimodal projector, and Tesseract OCR â€” see `first_run_setup.py` for the guided setup wizard.
+This is a live, actively-used personal system (not a demo repo) â€” I run it daily as my own assistant. Model weights, voice enrollments, and personal config are gitignored; see `secrets.example.yaml` and `self_config.example.yaml` for the setup shape. A from-scratch install additionally requires a running `llama-server` instance serving Qwen 3.6 35B-A3B + its multimodal projector, and Tesseract OCR â€” see `first_run_setup.py` for the guided setup wizard.
 
 ## Quickstart
 

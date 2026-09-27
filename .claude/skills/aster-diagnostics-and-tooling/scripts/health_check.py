@@ -56,13 +56,14 @@ check("face_server (:8000)", status is not None and status < 500,
 tess = os.environ.get("TESSERACT_CMD", r"C:\Program Files\Tesseract-OCR\tesseract.exe")
 check("Tesseract executable", os.path.isfile(tess), tess)
 
-# 4. Model files (the ones start.bat references inside the repo)
-for rel in (os.path.join("Aster_Vault", "Models", "gemma-e4b-q4km.gguf"),
-            os.path.join("Aster_Vault", "Models", "mmproj-F16.gguf")):
-    p = os.path.join(REPO, rel)
+# 4. Engine files (absolute paths the current start.bat references)
+for p in (r"E:\Models\Qwen3.6-35B-A3B-UD-IQ4_XS.gguf",
+          r"E:\Models\Qwen3.6-35B-A3B-mmproj-F16.gguf",
+          r"E:\Models\qwen36_chat_template.jinja",
+          r"E:\Models\beellama-v0.4.7-bin-win-cuda-12.4-x64\llama-server.exe"):
     ok = os.path.isfile(p)
     size = f"{os.path.getsize(p) / 1e9:.2f} GB" if ok else "missing"
-    check(rel, ok, size)
+    check(os.path.basename(p), ok, size)
 
 # 5. ChromaDB dir
 chroma = os.path.join(REPO, "Aster_Vault", "chroma_db")

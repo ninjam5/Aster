@@ -22,14 +22,14 @@ Run from the repo root.
 python .claude/skills/aster-diagnostics-and-tooling/scripts/health_check.py
 ```
 Checks llama-server `/health` + `/props` (reports which model file is loaded —
-resolves the three-launchers ambiguity), face_server :8000, Tesseract, the two
-repo model files, ChromaDB dir. Example output with Aster **not** running:
+resolves the launcher ambiguity), face_server :8000, Tesseract, the model files,
+ChromaDB dir. Example output with Aster **not** running:
 ```
-CHECK                                   RESULT  DETAIL
-llama-server /health (:8080)            FAIL    DOWN — No connection could be made...
-face_server (:8000)                     FAIL    DOWN — ...
-Tesseract executable                    PASS    C:\Program Files\Tesseract-OCR\tesseract.exe
-Aster_Vault\Models\gemma-e4b-q4km.gguf  PASS    5.41 GB
+CHECK                                       RESULT  DETAIL
+llama-server /health (:8080)                FAIL    DOWN — No connection could be made...
+face_server (:8000)                         FAIL    DOWN — ...
+Tesseract executable                        PASS    C:\Program Files\Tesseract-OCR\tesseract.exe
+E:\Models\Qwen3.6-35B-A3B-UD-IQ4_XS.gguf    PASS    17.0 GB
 ...
 4/7 checks passed (services down are reported above — may be expected if Aster is not running)
 ```
@@ -43,7 +43,8 @@ powershell -File .claude/skills/aster-diagnostics-and-tooling/scripts/vram_repor
 Board totals, per-process VRAM, python.exe RAM working sets; warns if ≥2 python
 processes exceed 2 GB RAM (the LiveKit devmode fork signature). Reference desktop
 baseline measured 2026-07-05 with Aster stopped: **1.9 GB / 12.3 GB** used. With
-Aster idle on E4B expect ≈ 6 GB (the budget). Note: `used_gpu_memory` shows `[N/A]`
+Aster idle on the Qwen engine expect ≈ 11.5–11.9 GB (llama-server dominates).
+Note: `used_gpu_memory` shows `[N/A]`
 for processes not using CUDA compute — normal.
 (The script is ASCII-only on purpose: PowerShell 5.1 misparses UTF-8 punctuation in
 BOM-less scripts — em-dash bytes decode as a CP1252 smart quote and break string
@@ -56,15 +57,14 @@ python .claude/skills/aster-diagnostics-and-tooling/scripts/context_estimate.py 
 ```
 Mirrors `core/memory.py` exactly (`len//4`, budget = 90% of
 `runtime.context_window`; reads only that single yaml key). Verified output shows
-N_CTX 131072 → budget 117,964 est. tokens — note this exceeds the server's
-`--ctx-size 128000`… in *estimated* tokens, and the heuristic under-counts dense
-text, so treat >80% of budget as the danger zone.
+N_CTX 60000 → budget 54,000 est. tokens, matching the server's `--ctx-size 60000`;
+the heuristic under-counts dense text, so treat >80% of budget as the danger zone.
 
 ### 4. `dump_tool_registry.py` — live tool list (slow: ~1 min, loads face models)
 ```powershell
 python .claude/skills/aster-diagnostics-and-tooling/scripts/dump_tool_registry.py
 ```
-Prints `68 admin tools registered:` + numbered name/description table. Use after
+Prints `69 admin tools registered:` + numbered name/description table. Use after
 any brain.py edit to confirm registration.
 
 ## Telegram diagnostic commands (live system)
@@ -94,8 +94,7 @@ Invoke-RestMethod http://localhost:8080/health    # readiness
 Invoke-RestMethod http://localhost:8080/props     # model path, n_ctx, generation settings
 ```
 `/props` is the authority on which GGUF and context size are ACTUALLY loaded —
-always check it before reasoning about model behavior (the launchers disagree about
-the model; see `aster-run-and-operate`).
+always check it before reasoning about model behavior (see `aster-run-and-operate`).
 
 ## Log streams
 
@@ -115,8 +114,10 @@ look for repeated identical `tool_calls` (loop signature), check the final
 assistant message isn't empty.
 
 **Latency:** the engine harness reports tok/s and per-turn latency per scenario
-(90.2 tok/s gen, 4.98 s avg/turn on 2026-06-24 — `engine_testing/results/`);
-for one-off checks read llama-server's console timings rather than stopwatching.
+(the frozen 2026-06-24 Gemma baseline was 90.2 tok/s gen, 4.98 s avg/turn). The
+Qwen 3.6 swap measures ~40 tok/s decode hot and ~1.5–1.8k tok/s prefill at
+`--ubatch-size 512`; for one-off checks read llama-server's console timings rather
+than stopwatching.
 
 ## Provenance and maintenance
 

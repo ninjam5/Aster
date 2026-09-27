@@ -8,7 +8,7 @@ engine_testing/results/.
 
 Usage:
     python engine_testing/run_engine_test.py
-    python engine_testing/run_engine_test.py --model gemma-4-e4b-q4km
+    python engine_testing/run_engine_test.py --model Qwen3.6-35B-A3B-UD-IQ4_XS
     python engine_testing/run_engine_test.py --category persona
     python engine_testing/run_engine_test.py --no-vision
 
