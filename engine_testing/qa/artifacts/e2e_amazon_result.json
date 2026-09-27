@@ -1,0 +1,19 @@
+{
+  "task": "Go to amazon.eg and check how much a new ball is",
+  "query": "ball",
+  "url": "https://www.amazon.eg/s?k=ball&crid=7CQT8MLCZIS9&sprefix=ball%2Caps%2C154&ref=nb_sb_noss_1",
+  "title": "Amazon.eg : ball",
+  "first_product": "Rubber Small Round Ball With Amazing Design To Add More Fun For Kids - Multi Color",
+  "price": "EGP 285.00",
+  "results_count": 60,
+  "laya_state_gate": {
+    "answer": true,
+    "margin": 0.8216000000000001,
+    "escalate": false
+  },
+  "laya_operation": {
+    "choice": "click",
+    "margin": 0.3891,
+    "escalate": false
+  }
+}

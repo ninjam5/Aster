@@ -1,0 +1,17 @@
+{
+  "stage": "1",
+  "timestamp": "20260925-143813",
+  "passed": true,
+  "results": [
+    {
+      "suite": "pytest",
+      "returncode": 0,
+      "log": "E:\\LLM testing\\Aster-localization\\engine_testing\\qa\\artifacts\\stage1\\pytest-20260925-143813.log"
+    },
+    {
+      "suite": "dom-motor-test",
+      "returncode": 0,
+      "log": "E:\\LLM testing\\Aster-localization\\engine_testing\\qa\\artifacts\\stage1\\dom-motor-test-20260925-143813.log"
+    }
+  ]
+}

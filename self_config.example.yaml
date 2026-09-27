@@ -1,0 +1,229 @@
+# Aster — Self-Configuration Template
+#
+# Copy this file to `self_config.yaml` (gitignored — never commit the real
+# one) and fill in the `identity` / `contacts` sections. Everything else is a
+# reasonable default you can tune later. `first_run_setup.py` will write the
+# identity fields for you interactively if you'd rather not edit YAML by hand.
+#
+# This file is the single source of truth for Aster's self-knowledge:
+# identity, contacts, intended integrations, path layout, and tunable knobs.
+#
+# config.py loads this at import. tools/self_knowledge.py exposes it
+# to Aster as introspection tools (get_my_config, get_my_status, ...) —
+# so nothing secret may ever be added to this file. Credentials
+# (Spotify/Telegram/Discord/LiveKit/Firecrawl) live in secrets.yaml instead —
+# see secrets.example.yaml.
+#
+# Runtime state (active daemons, current initiative level after `/initiative`,
+# integration AVAILABLE flags after import) is reported live by
+# tools/self_knowledge.py — it does NOT come from this file. The fields
+# below are the *intended* / boot defaults.
+
+identity:
+  name: Aster
+  version: "1.0"
+  created: "YYYY-MM-DD"          # placeholder — edit if a real start date is known
+  owner: YourName
+
+contacts:
+  # Discord friends who should be addressed "Ma'am"/"Ms." instead of the
+  # default "Sir"/"Mr." — see core.brain._discord_honorific. Case-insensitive,
+  # match on the contact's name in Aster_Vault/discord_contacts.json.
+  female_names: []
+
+runtime:
+  llm_model: gemma-e4b-q4km
+  llm_engine: llama-server (llama.cpp, OpenAI-compatible REST)
+  context_window: 131072         # must match llama-server --ctx-size
+  vision_enabled: true
+  vision_model: gemma-e4b (mmproj-F16)
+  audio_input: faster-whisper (medium.en)
+  audio_output: kokoro-tts (82M)
+  wake_word_enabled: true
+  wake_word_model: hey_jarvis
+  wake_word_threshold: 0.5
+  wake_inactivity_timeout: 300   # seconds of silence before re-muting
+  use_native_tool_calls: true    # native OpenAI-format tool_calls (default). false = legacy XML-in-text rollback path
+  # ── Reliability campaign (see .claude/skills/aster-gemma-reliability-campaign) ──
+  reliability_log_enabled: true      # log-only counters (hallucination/apathy/loop retries) to Aster_Vault/reliability_log.jsonl — no behavior change
+  loop_guard_enabled: true           # blocks/warns on degenerate repeated tool calls within one turn (core/loop_guard.py)
+  tool_output_compression: true      # truncate/summarize oversized tool results before they enter history (core/output_compression.py)
+  strip_think_tags: true             # strip <think>/<thinking> reasoning-scaffold blocks from every completion's content
+  exact_token_count: true            # calibrate trim_memory()'s chars-per-token ratio against llama-server's /tokenize endpoint (cached, rate-limited — not a per-turn network call)
+  # ── Reliability campaign round 2 ──
+  tts_chunk_streaming: true          # LiveKit calls: start speaking after the first Kokoro segment instead of synthesizing the whole reply first (local_tts.py)
+  structured_tool_results: true      # exact ToolResult(ok, text) failure detection for migrated tools; false = legacy FAILED/Error prefix-regex heuristic everywhere (core/tool_result.py)
+  auto_compact: true                 # auto-run the /compact summarize-and-replace when context crosses the threshold below
+  auto_compact_threshold: 0.75       # fraction of context_window that triggers auto-compaction (0.75 × 128k ≈ 96k tokens)
+
+automation:
+  # DOM-first perception motor (tools/dom.py). When enabled, web tasks are
+  # driven through the attached browser's accessibility tree (Playwright over
+  # CDP) and Windows tasks through a UIA shortlist before the OCR/YOLO
+  # fallbacks are consulted. Default OFF — promoted only after the stage QA
+  # gates pass (.claude/skills + engine_testing/qa/).
+  dom_motor: false
+  browser_cdp_port: 9222         # attach-only: the browser must be started with --remote-debugging-port (open_application adds it when the motor is on). Close the browser to close the port.
+  dom_motor_send_policy: confirm  # confirm | allow — send/submit/destructive web clicks are refused until the owner confirms (re-call with confirm_send=true)
+  dom_motor_shortlist_k: 18      # shortlist ceiling handed to the decision step; System-1 choice accuracy degrades past ~20 options
+  dom_motor_min_score: 0.55      # below this the motor falls through to the OCR/YOLO tracks
+  pixel_fallback: true           # Stage-2 rollback flag: OmniParser/YOLO Track 2. false = demoted (OCR Track 1 still runs)
+  # Live web browsing (browse_web tool): opens a URL or site+query and returns page text.
+  web_browse: true               # set false to hide the browse_web tool
+  own_browser: true              # if CDP attach fails (e.g. your Chrome is already running without the debug port), launch Aster's own real Chrome/Edge with a dedicated profile
+  browser_headless: false        # headless browsers are more likely to be bot-blocked; keep false for real sites
+  # browser_profile_dir: Aster_Vault/browser_profile   # dedicated persistent Aster profile — log into sites ONCE here (python login_once.py linkedin) and browse_web stays logged in
+  use_real_profile: false        # true = ask to browse with YOUR real Chrome profile. IMPOSSIBLE since Chrome >=136 (debug port ignored on the default folder; copies/links lose the encrypted logins) — with true, browse_web fails loudly and tells you to use login_once.py instead. Keep false.
+  human_search: true             # site+query opens the site's home page and the model drives its own search bar (open site -> search box -> type -> submit -> read), like Astra. false = the pre-mapped search URLs (rollback path).
+  # Stage-3 System-1 decision kernel (core/system1.py). Lazy + ref-counted,
+  # CPU-first. Default OFF; when on it picks among ambiguous shortlist
+  # candidates and answers neutral-key yes/no state gates, escalating to Gemma
+  # on low margin. Requires `python -m pip install laya` (+ first-load download).
+  laya_kernel: false
+  laya_model: convaiinnovations/laya
+  laya_device: cpu               # cpu | cuda (cuda must fit the VRAM budget)
+  laya_margin_threshold: 0.25    # top-1 minus top-2 probability needed to act
+  laya_keep_resident: false      # false = unload on last release (saves ~1-2 GB RAM)
+  # laya_log_path: Aster_Vault/system1_log.jsonl   # decision log for calibration
+
+vision:
+  # Track-2 icon captioner for the pixel fallback. "gemma" = resident model,
+  # zero extra VRAM; "off" = match only OCR-readable boxes (no captioner call).
+  icon_captioner: gemma
+
+integrations:
+  # Intended state. Live availability is reported by tools/self_knowledge.py
+  # (which reads SPOTIFY_AVAILABLE / TELEGRAM_AVAILABLE / etc. from config).
+  spotify: enabled
+  discord: enabled
+  telegram: enabled
+  livekit: enabled
+  notification_hub: false        # Phase B — not yet implemented
+  google:                        # Gmail + Calendar — see tools/google_auth.py
+    access_tier: limited         # limited (read-only) | partial (ask before sending) | autonomous (sends immediately)
+    autonomous_daily_cap: 10     # safety valve — max autonomous sends per day
+    reauth_reminder: true        # Aster reminds you before the ~7-day Google token lapses
+    email_checkin:
+      enabled: false             # opt-in ambient "you have N unread emails" nudge (Awareness daemon)
+      unread_threshold: 3        # minimum unread (category:primary) before nudging
+      cooldown_seconds: 3600     # minimum gap between email check-in nudges
+
+daemons:
+  # Boot defaults. Live ACTIVE flags are tracked in each module
+  # (tools.sentry.SENTRY_ACTIVE, tools.intervention.INTERVENTION_ACTIVE,
+  # tools.awareness.AWARENESS_ACTIVE, tools.gesture.GESTURE_ACTIVE).
+  sentry_mode: false             # auto-start commented out in main.py
+  intervention_mode: false       # inactive until /intervention on
+  gesture_mode: false            # inactive until /gesture on
+  awareness_mode: true           # ambient context daemon boot state — this key IS honored now (config.AWARENESS_ACTIVE); set false to boot with awareness off
+  health_watchdog: true          # ping llama-server /health every 30s; 3 consecutive failures → Telegram alert (tools/health_watchdog.py)
+  health_watchdog_autorestart: true  # on failure, relaunch start.bat automatically (max 2 restarts per rolling hour); false = alert-only
+  webrtc_bridge: enabled         # always-on daemon thread
+  face_server: enabled           # always-on (FastAPI on :8000)
+  discord_listener: enabled      # always-on inbound DM listener
+  proactive_research_worker: false   # Phase C — not yet implemented
+  notification_listener: false       # Phase B — not yet implemented
+
+memory:
+  chromadb_path: Aster_Vault/chroma_db
+  fact_collection: aster_long_term_memory
+  rag_vault_dir: Aster_Vault/database    # markdown RAG files, not a ChromaDB collection
+  memory_file: Aster_Vault/memory.md
+  rag_stale_days: 90
+  hybrid_recall: true             # fuse BM25 (keyword, over memory.md) with ChromaDB dense retrieval via RRF — catches keyword-exact queries dense embeddings miss
+
+paths:
+  vault_dir: Aster_Vault
+  discord_contacts: Aster_Vault/discord_contacts.json
+  cold_storage_images: Aster_Vault/images
+  models_dir: Aster_Vault/Models
+  faces_dir: Aster_Vault/Faces
+  voice_ref_dir: Aster_Vault/Voice
+  gemma_jinja: Aster_Vault/gemma4-multimodal.jinja
+  notes_file: Aster_Vault/notes.md
+  system_prompts_dir: Aster_Vault/System_Prompts
+  conversations_dir: Aster_Vault/Conversations
+
+persona:
+  # Active system prompt = a filename stem (no .md) in system_prompts_dir.
+  # Shipped options: jarvis (refined butler), gogi (best friend).
+  # This is the single knob to swap Aster's whole personality.
+  system_prompt: jarvis
+
+settings:
+  voice_speed: 1.0
+  voice_name: af_nova            # Kokoro TTS voice — built-in id or path to .pt file
+  initiative_level: medium       # silent | low | medium | high (maps 0..3 in code)
+  utterance_debounce: 0.6        # seconds of VAD silence before sending a turn
+  llm_temperature: 1.0           # main-conversation sampling temperature
+  llm_top_p: 0.95                # nucleus sampling cutoff
+  llm_top_k: 64                  # top-k token pool
+  # Tool-loop sampling (reliability campaign) — applied only to the agentic
+  # tool-call rounds, separate from the main knobs above. Defaults to the
+  # main knobs (byte-identical no-op) until a harness sweep justifies cooling
+  # it. CAVEAT: a loop round that happens to produce the final text (e.g.
+  # round 0 of a pure-chat turn) is sampled with THESE settings, not the main
+  # ones — lowering llm_tool_temperature cools first replies too. Sweep with
+  # engine_testing/run_engine_test.py (reliability) + conversation_testing.py
+  # (persona style) before changing away from the defaults below.
+  # llm_tool_temperature: 1.0
+  # llm_tool_top_p: 0.95
+  # llm_tool_top_k: 64
+
+emotion:
+  enabled: true
+  text_model: j-hartmann/emotion-english-distilroberta-base   # Tier 0 — CPU, eager
+  voice_model: speechbrain/emotion-recognition-wav2vec2-IEMOCAP  # Tier 1 — CUDA, lazy
+  min_confidence: 0.5            # below this score → neutral
+  face:                          # Tier 2 — facial emotion (CPU, eager, HSEmotion AffectNet)
+    enabled: false               # opt-in; flip true after `pip install hsemotion`. Toggle via toggle_face_emotion / /faceemotion
+    model: enet_b2_8             # HSEmotion model name (AffectNet 8-class EfficientNet-B2)
+    min_confidence: 0.5          # below this smoothed score → hold previous read
+    ema_alpha: 0.5               # EMA smoothing on the probability vector (higher = snappier, lower = steadier)
+  ambient_audio:                 # Tier 1b — passive room listening (CPU, opt-in). See tools/ambient_audio.py
+    enabled: false               # opt-in; flip true after `pip install sounddevice webrtcvad`. Toggle via toggle_ambient_audio / /ambientaudio
+    device:                      # mic device index/name, or null for the system default
+    vad_aggressiveness: 2        # webrtcvad 0..3 (higher = more aggressive speech gating)
+    min_utterance_seconds: 2.0   # ignore speech clips shorter than this
+    ema_alpha: 0.5               # EMA smoothing on the voice probability vector
+    gate_owner: true             # only trust tone when ECAPA identifies the owner (rejects friends/TTS/music)
+    window_feed_cooldown: 60     # min seconds between feeding an ambient read into the sustained-mood window
+  mood_trend:                    # roadmap Idea 3 — mood logging + emotional continuity
+    enabled: true                # log per-turn mood + fold periodic summaries into memory
+    sustain_turns: 3             # consecutive same-mood turns = a "sustained" read (shared foundation for Ideas 1 & 2)
+    retention_days: 30           # prune emotion_log.jsonl entries older than this
+    flush_interval_hours: 24     # minimum gap between rolled-up summary writes to memory
+    flush_min_turns: 6           # need at least this many logged turns in the window to summarize
+    flush_min_nonneutral_frac: 0.4   # skip the summary if mood was mostly neutral (boring day)
+  mood_actions:                  # roadmap Idea 2 — inline ambient-action OFFERS (never auto-executes)
+    enabled: false               # opt-in; toggle at runtime via toggle_mood_actions / /moodactions
+    cooldown_seconds: 1800       # minimum gap between offers (also one-offer-per-streak; debounce uses mood_trend.sustain_turns)
+  proactive_checkin:             # roadmap Idea 1 — proactive mood check-ins (Awareness daemon)
+    enabled: false               # opt-in; toggle via toggle_mood_checkins / /checkins. Needs initiative >= medium
+    quiet_seconds: 90            # how long the user must be quiet (post-streak) before checking in
+    cooldown_seconds: 3600       # minimum gap between check-ins (also one-per-streak)
+  mood_shared:                   # cross-system coordination
+    touch_cooldown_seconds: 120  # minimum gap between ANY two mood-driven nudges (Idea 1 + Idea 2)
+
+intervention:
+  check_interval: 30             # seconds between foreground-window polls
+  threshold: 60                  # continuous seconds on a distraction → intervene
+  cooldown: 900                  # minimum seconds between interventions
+  quiet_hours:                   # e.g. [23, 8] to mute 11pm–8am
+  distraction_keywords:
+    youtube: YouTube
+    reddit: Reddit
+    twitter: Twitter
+    instagram: Instagram
+    tiktok: TikTok
+    twitch: Twitch
+    netflix: Netflix
+    facebook: Facebook
+    discord: Discord
+    Stremio: Stremio - Freedom to Stream
+
+awareness:
+  interval: 300                  # seconds between ambient screen+webcam polls
+  absence_threshold: 900         # min seconds away before return triggers a compliment
+  env_cooldown: 7200             # min seconds between environmental nudges
+  initiative_quiet_hours:        # same shape as intervention.quiet_hours

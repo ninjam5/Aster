@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aster QA Fixture — Home</title>
+<style>
+  body { font-family: sans-serif; margin: 2rem; }
+  section { margin: 1rem 0; padding: 1rem; border: 1px solid #ccc; }
+</style>
+</head>
+<body>
+<h1>Aster QA Fixture</h1>
+
+<section aria-label="Search section">
+  <label for="q">Search</label>
+  <input id="q" type="search" placeholder="Search">
+  <button id="go">Go</button>
+</section>
+
+<section aria-label="Actions section">
+  <button id="submit">Submit</button>
+  <button id="cancel">Cancel</button>
+  <a id="settings" href="form.html">Settings</a>
+</section>
+
+<section aria-label="Ambiguous section">
+  <button id="open-first">Open</button>
+  <button id="open-second">Open</button>
+</section>
+
+<p id="status" role="status">idle</p>
+
+<script>
+  const set = (v) => { document.getElementById('status').textContent = v; };
+  document.getElementById('go').addEventListener('click', () => set('searched'));
+  document.getElementById('submit').addEventListener('click', () => set('submitted'));
+  document.getElementById('cancel').addEventListener('click', () => set('cancelled'));
+  document.getElementById('open-first').addEventListener('click', () => set('opened-first'));
+  document.getElementById('open-second').addEventListener('click', () => set('opened-second'));
+</script>
+</body>
+</html>

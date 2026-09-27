@@ -1,0 +1,22 @@
+{
+  "stage": "4",
+  "timestamp": "20260925-155507",
+  "passed": true,
+  "results": [
+    {
+      "suite": "pytest",
+      "returncode": 0,
+      "log": "E:\\LLM testing\\Aster-localization\\engine_testing\\qa\\artifacts\\stage4\\pytest-20260925-155507.log"
+    },
+    {
+      "suite": "dom-motor-test",
+      "returncode": 0,
+      "log": "E:\\LLM testing\\Aster-localization\\engine_testing\\qa\\artifacts\\stage4\\dom-motor-test-20260925-155507.log"
+    },
+    {
+      "suite": "system1-test",
+      "returncode": 0,
+      "log": "E:\\LLM testing\\Aster-localization\\engine_testing\\qa\\artifacts\\stage4\\system1-test-20260925-155507.log"
+    }
+  ]
+}

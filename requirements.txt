@@ -1,0 +1,64 @@
+# ============================================================================
+# Aster — Python dependencies (global pip, no venvs: `python -m pip install -r`)
+# Top-level third-party imports; versions are NOT pinned because the stack is
+# tuned per-GPU (CUDA wheels for torch etc. — install torch first, CUDA build).
+# ============================================================================
+requests
+psutil
+numpy
+scipy
+Pillow
+opencv-python
+pytesseract
+mss
+pyautogui
+pygetwindow
+pyperclip
+pycaw
+comtypes
+uiautomation
+ruamel.yaml
+pyyaml
+pydantic
+fastapi
+uvicorn
+gguf
+# torch / torchaudio: install the CUDA build first, then the rest
+torch
+torchaudio
+transformers
+huggingface_hub
+# --- speech / audio ---
+faster-whisper
+soundfile
+sounddevice
+kokoro
+speechbrain
+openwakeword
+webrtcvad
+# --- vision / perception ---
+face_recognition
+mediapipe
+rembg
+hsemotion-onnx
+ultralytics
+# --- memory / search / integrations ---
+chromadb
+wikipedia
+spotipy
+pyTelegramBotAPI
+discord.py
+google-auth-oauthlib
+google-api-python-client
+firecrawl
+# --- voice transport ---
+livekit
+livekit-agents
+livekit-plugins-silero
+livekit-api
+# --- automation / web ---
+playwright
+# --- agent kernel (System-1) ---
+laya
+# --- dev ---
+pytest

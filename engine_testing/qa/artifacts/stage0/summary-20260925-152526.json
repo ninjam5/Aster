@@ -1,0 +1,12 @@
+{
+  "stage": "0",
+  "timestamp": "20260925-152526",
+  "passed": true,
+  "results": [
+    {
+      "suite": "pytest",
+      "returncode": 0,
+      "log": "E:\\LLM testing\\Aster-localization\\engine_testing\\qa\\artifacts\\stage0\\pytest-20260925-152526.log"
+    }
+  ]
+}

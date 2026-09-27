@@ -1,0 +1,103 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: #111111;
+  color: #e2e2e5;
+  font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
+  overflow: hidden;
+}
+
+/* Custom thin scrollbar for panels / lists */
+.aster-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #3a3a3a transparent;
+}
+.aster-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.aster-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.aster-scroll::-webkit-scrollbar-thumb {
+  background-color: #3a3a3a;
+  border-radius: 8px;
+}
+.aster-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: #4a4a4a;
+}
+
+@keyframes aster-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  50% {
+    transform: scale(1.06);
+    opacity: 1;
+  }
+}
+.animate-aster-pulse {
+  animation: aster-pulse 2.4s ease-in-out infinite;
+}
+
+/* Shimmer sweep for loading/placeholder blocks. */
+@keyframes aster-shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+.animate-aster-shimmer {
+  background-image: linear-gradient(
+    100deg,
+    theme("colors.surface-elevated") 30%,
+    theme("colors.outline-custom") 50%,
+    theme("colors.surface-elevated") 70%
+  );
+  background-size: 200% 100%;
+  animation: aster-shimmer 2.2s ease-in-out infinite;
+}
+
+/* Soft glowing status dot for "enabled" states (e.g. Skills). */
+@keyframes aster-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(165 202 244 / 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgb(165 202 244 / 0);
+  }
+}
+.animate-aster-glow {
+  animation: aster-glow 2s ease-in-out infinite;
+}
+
+/* Respect the OS-level reduced-motion preference for the plain-CSS animations
+   above. framer-motion animations are covered separately via <MotionConfig
+   reducedMotion="user"> in App.tsx. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-aster-pulse,
+  .animate-aster-shimmer,
+  .animate-aster-glow,
+  .animate-spin {
+    animation: none !important;
+  }
+}

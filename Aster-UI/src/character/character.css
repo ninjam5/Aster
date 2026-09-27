@@ -1,0 +1,436 @@
+/* Aster character animation system.
+   Three layers of motion, keyed off .aster-stage[data-mood][data-phase]:
+     1. idle loops    — per-mood ambient animation (breathing, head acting)
+     2. enter         — choreographed entrance per mood (nothing just fades in)
+     3. exit          — short cartoon exits (zip / hop / sink)
+   Structure: stage > pose (aspect-locked size container) > flip > figure >
+   body/head layers. The flip wrapper is never animated so mirroring can't
+   clash with animation transforms. Everything is compositor-only. */
+
+/* ════ base ═══════════════════════════════════════════════════════════ */
+.aster-pose {
+  container-type: size;
+}
+.aster-flip {
+  position: absolute;
+  inset: 0;
+  transform: scaleX(-1);
+}
+.aster-figure {
+  transform-origin: 50% 100%;
+}
+
+/* ════ idle loops ═════════════════════════════════════════════════════ */
+@keyframes aster-breathe {
+  0%, 100% { transform: scaleY(1); }
+  50%      { transform: scaleY(1.014); }
+}
+.aster-body {
+  transform-origin: 50% 100%;
+  animation: aster-breathe 4.2s ease-in-out infinite;
+}
+/* desk poses: the furniture is part of the body layer — don't breathe it */
+.aster-pose[data-mood="working"] .aster-body,
+.aster-pose[data-mood="thinking"] .aster-body,
+.aster-pose[data-mood="success"] .aster-body,
+.aster-pose[data-mood="jumping"] .aster-body {
+  animation: none;
+}
+
+/* calm: lazy sway with long pauses */
+@keyframes aster-head-sway {
+  0%, 22%  { transform: rotate(0deg); }
+  36%      { transform: rotate(-1.6deg); }
+  52%, 64% { transform: rotate(0.4deg); }
+  78%      { transform: rotate(1.4deg); }
+  100%     { transform: rotate(0deg); }
+}
+.aster-pose[data-mood="calm"] .aster-head {
+  animation: aster-head-sway 7s ease-in-out infinite;
+}
+
+/* working: quick little typing nods */
+@keyframes aster-head-nod {
+  0%, 55%, 100% { transform: rotate(0deg); }
+  65%           { transform: rotate(1.3deg) translateY(0.6%); }
+  75%           { transform: rotate(0.2deg); }
+  85%           { transform: rotate(1.1deg) translateY(0.5%); }
+}
+.aster-pose[data-mood="working"] .aster-head {
+  animation: aster-head-nod 2.6s ease-in-out infinite;
+}
+
+/* alert: attentive stillness, sharp glance */
+@keyframes aster-head-glance {
+  0%, 62%, 100% { transform: rotate(0deg); }
+  68%           { transform: rotate(-2.4deg); }
+  80%           { transform: rotate(-2.2deg); }
+  88%           { transform: rotate(0.8deg); }
+}
+.aster-pose[data-mood="alert"] .aster-head {
+  animation: aster-head-glance 5.5s ease-in-out infinite;
+}
+
+/* music: rhythmic groove */
+@keyframes aster-head-groove {
+  0%, 100% { transform: rotate(-2.8deg); }
+  50%      { transform: rotate(2.8deg); }
+}
+.aster-pose[data-mood="music"] .aster-head {
+  animation: aster-head-groove 1.5s ease-in-out infinite;
+}
+
+/* thinking: tilt, hold the thought, release */
+@keyframes aster-head-ponder {
+  0%, 18%  { transform: rotate(0deg); }
+  32%, 62% { transform: rotate(-2.6deg); }
+  76%      { transform: rotate(0.6deg); }
+  100%     { transform: rotate(0deg); }
+}
+.aster-pose[data-mood="thinking"] .aster-head {
+  animation: aster-head-ponder 8s ease-in-out infinite;
+}
+
+/* confused: short wobble bursts while scratching his head */
+@keyframes aster-head-wobble {
+  0%, 48%, 100% { transform: rotate(0deg); }
+  56%           { transform: rotate(-2.4deg); }
+  64%           { transform: rotate(2.2deg); }
+  72%           { transform: rotate(-1.4deg); }
+  80%           { transform: rotate(0.6deg); }
+}
+.aster-pose[data-mood="confused"] .aster-head {
+  animation: aster-head-wobble 4.5s ease-in-out infinite;
+}
+
+/* pouty: a slow "hmph" head shake */
+@keyframes aster-head-hmph {
+  0%, 40%, 100% { transform: rotate(0deg); }
+  50%           { transform: rotate(-2.2deg); }
+  60%           { transform: rotate(1.8deg); }
+  70%           { transform: rotate(-1deg); }
+  78%           { transform: rotate(0deg); }
+}
+.aster-pose[data-mood="pouty"] .aster-head {
+  animation: aster-head-hmph 6s ease-in-out infinite;
+}
+
+/* celebration poses: whole-sprite bounce, only once the entrance settles */
+@keyframes aster-celebrate {
+  0%, 100% { transform: translateY(0) scaleY(1); }
+  18%      { transform: translateY(0.5%) scaleY(0.965); }
+  45%      { transform: translateY(-4.5%) scaleY(1.03); }
+  70%      { transform: translateY(0) scaleY(0.985); }
+}
+.aster-stage[data-phase="idle"] .aster-pose[data-mood="success"] .aster-figure,
+.aster-stage[data-phase="idle"] .aster-pose[data-mood="jumping"] .aster-figure {
+  animation: aster-celebrate 0.95s ease-in-out infinite;
+}
+
+/* ════ exits — short and cartoonish, never a plain fade ═══════════════ */
+@keyframes aster-exit-zip {
+  0%   { transform: none; opacity: 1; }
+  30%  { transform: translateX(-6%) scaleX(0.92); opacity: 1; }
+  100% { transform: translateX(70%) scaleX(1.3) scaleY(0.8); opacity: 0; }
+}
+@keyframes aster-exit-hop {
+  0%   { transform: none; opacity: 1; }
+  25%  { transform: translateY(3%) scaleY(0.9); }
+  100% { transform: translateY(-60%) scaleY(1.15); opacity: 0; }
+}
+@keyframes aster-exit-sink {
+  0%   { transform: none; opacity: 1; }
+  100% { transform: translateY(24%) scaleY(0.72); opacity: 0; }
+}
+.aster-stage[data-phase="exit"] .aster-figure {
+  animation: aster-exit-zip 0.26s ease-in both;
+}
+.aster-stage[data-phase="exit"][data-mood="success"] .aster-figure,
+.aster-stage[data-phase="exit"][data-mood="jumping"] .aster-figure {
+  animation: aster-exit-hop 0.24s ease-in both;
+}
+.aster-stage[data-phase="exit"][data-mood="tired"] .aster-figure,
+.aster-stage[data-phase="exit"][data-mood="pouty"] .aster-figure {
+  animation: aster-exit-sink 0.3s ease-in both;
+}
+
+/* ════ entrances — one choreography per mood ══════════════════════════ */
+/* default: drop in with a landing squash (calm & fallback) */
+@keyframes aster-enter-drop {
+  0%   { transform: translateY(-60%) scaleY(1.05); opacity: 0; }
+  55%  { transform: translateY(0) scaleY(0.88) scaleX(1.07); opacity: 1; }
+  75%  { transform: scaleY(1.04) scaleX(0.98); }
+  100% { transform: none; }
+}
+.aster-stage[data-phase="enter"] .aster-figure {
+  animation: aster-enter-drop 0.55s cubic-bezier(0.22, 0.9, 0.35, 1) both;
+}
+
+/* working / thinking: the desk pops up from below, then the head drops on */
+@keyframes aster-enter-rise {
+  0%   { transform: translateY(75%); opacity: 0; }
+  100% { transform: none; opacity: 1; }
+}
+@keyframes aster-enter-headdrop {
+  0%   { transform: translateY(-150%); opacity: 0; }
+  55%  { transform: translateY(4%); opacity: 1; }
+  72%  { transform: translateY(-3%); }
+  100% { transform: none; }
+}
+.aster-stage[data-phase="enter"][data-mood="working"] .aster-figure,
+.aster-stage[data-phase="enter"][data-mood="thinking"] .aster-figure {
+  animation: none;
+}
+.aster-stage[data-phase="enter"][data-mood="working"] .aster-body,
+.aster-stage[data-phase="enter"][data-mood="thinking"] .aster-body {
+  animation: aster-enter-rise 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+.aster-stage[data-phase="enter"][data-mood="working"] .aster-head,
+.aster-stage[data-phase="enter"][data-mood="thinking"] .aster-head {
+  animation: aster-enter-headdrop 0.5s ease-out 0.25s both;
+}
+
+/* alert: camera-punch zoom with a quick shake */
+@keyframes aster-enter-punch {
+  0%   { transform: scale(1.5); opacity: 0; }
+  45%  { transform: scale(0.95); opacity: 1; }
+  60%  { transform: scale(1.02) translateX(-2%); }
+  72%  { transform: translateX(2%); }
+  84%  { transform: translateX(-1%); }
+  100% { transform: none; }
+}
+.aster-stage[data-phase="enter"][data-mood="alert"] .aster-figure {
+  animation: aster-enter-punch 0.42s ease-out both;
+}
+
+/* music: slides in mid-groove */
+@keyframes aster-enter-grooveslide {
+  0%   { transform: translateX(-70%) rotate(-7deg); opacity: 0; }
+  55%  { transform: translateX(6%) rotate(5deg); opacity: 1; }
+  80%  { transform: translateX(-2%) rotate(-2deg); }
+  100% { transform: none; }
+}
+.aster-stage[data-phase="enter"][data-mood="music"] .aster-figure {
+  animation: aster-enter-grooveslide 0.6s ease-out both;
+}
+
+/* success: leaps up from below */
+@keyframes aster-enter-leap {
+  0%   { transform: translateY(85%) scaleY(0.7) scaleX(1.2); opacity: 0; }
+  40%  { transform: translateY(-16%) scaleY(1.1) scaleX(0.95); opacity: 1; }
+  65%  { transform: translateY(2%) scaleY(0.92); }
+  82%  { transform: translateY(-3%); }
+  100% { transform: none; }
+}
+.aster-stage[data-phase="enter"][data-mood="success"] .aster-figure {
+  animation: aster-enter-leap 0.62s cubic-bezier(0.22, 0.9, 0.35, 1) both;
+}
+
+/* jumping: bounces in, each bounce smaller */
+@keyframes aster-enter-bounces {
+  0%   { transform: translateY(-80%); opacity: 0; }
+  26%  { transform: translateY(0) scaleY(0.88); opacity: 1; }
+  42%  { transform: translateY(-26%); }
+  58%  { transform: translateY(0) scaleY(0.92); }
+  72%  { transform: translateY(-11%); }
+  85%  { transform: translateY(0) scaleY(0.97); }
+  100% { transform: none; }
+}
+.aster-stage[data-phase="enter"][data-mood="jumping"] .aster-figure {
+  animation: aster-enter-bounces 0.75s cubic-bezier(0.22, 0.9, 0.35, 1) both;
+}
+
+/* pouty: plops down in a huff */
+@keyframes aster-enter-plop {
+  0%   { transform: translateY(-40%); opacity: 0; }
+  55%  { transform: translateY(3%) scaleY(0.86) scaleX(1.1); opacity: 1; }
+  75%  { transform: scaleY(1.02); }
+  100% { transform: none; }
+}
+.aster-stage[data-phase="enter"][data-mood="pouty"] .aster-figure {
+  animation: aster-enter-plop 0.55s ease-out both;
+}
+
+/* confused: spins in dizzy */
+@keyframes aster-enter-spin {
+  0%   { transform: rotate(-300deg) scale(0.5); opacity: 0; }
+  70%  { transform: rotate(10deg) scale(1.02); opacity: 1; }
+  85%  { transform: rotate(-4deg); }
+  100% { transform: none; }
+}
+.aster-stage[data-phase="enter"][data-mood="confused"] .aster-figure {
+  transform-origin: 50% 55%;
+  animation: aster-enter-spin 0.6s ease-out both;
+}
+
+/* ════ sleeping scene (tired) ═════════════════════════════════════════ */
+/* layout — pose box is 5:3 for this scene */
+.aster-sleep-pillow {
+  left: 0;
+  bottom: 6%;
+  width: 46%;
+}
+.aster-sleep-headbox {
+  left: 7%;
+  bottom: 11%;
+  width: 34%;
+  aspect-ratio: 282 / 268; /* head content region of the tired head layer */
+  transform: rotate(-78deg); /* lying pose (kept static under reduced motion) */
+  transform-origin: 50% 55%;
+}
+.aster-sleep-blanket {
+  left: 24%;
+  bottom: 0;
+  width: 76%;
+  transform-origin: 50% 100%;
+}
+
+/* idle: the blanket lump and head breathe together */
+@keyframes aster-sleep-breathe {
+  0%, 100% { transform: scaleY(1); }
+  50%      { transform: scaleY(1.05); }
+}
+@keyframes aster-sleep-breathehead {
+  0%, 100% { transform: rotate(-78deg) translateY(0); }
+  50%      { transform: rotate(-77deg) translateY(-2%); }
+}
+.aster-pose[data-mood="tired"] .aster-sleep-blanket {
+  animation: aster-sleep-breathe 4.5s ease-in-out infinite;
+}
+.aster-pose[data-mood="tired"] .aster-sleep-headbox {
+  animation: aster-sleep-breathehead 4.5s ease-in-out infinite;
+}
+
+/* entrance: pillow slides in → he flops onto it → covers pulled up */
+@keyframes aster-sleep-slidein {
+  0%   { transform: translateX(-60%); opacity: 0; }
+  100% { transform: none; opacity: 1; }
+}
+@keyframes aster-sleep-flop {
+  0%   { transform: translate(70%, -110%) rotate(-15deg); opacity: 0; }
+  55%  { transform: translate(0, 6%) rotate(-78deg); opacity: 1; }
+  72%  { transform: translate(0, -4%) rotate(-80deg); }
+  100% { transform: translate(0, 0) rotate(-78deg); }
+}
+@keyframes aster-sleep-cover {
+  0%   { transform: translate(30%, 60%); opacity: 0; }
+  100% { transform: none; opacity: 1; }
+}
+.aster-stage[data-phase="enter"][data-mood="tired"] .aster-figure {
+  animation: none;
+}
+.aster-stage[data-phase="enter"][data-mood="tired"] .aster-sleep-pillow {
+  animation: aster-sleep-slidein 0.35s ease-out both;
+}
+.aster-stage[data-phase="enter"][data-mood="tired"] .aster-sleep-headbox {
+  animation: aster-sleep-flop 0.6s cubic-bezier(0.3, 0.9, 0.4, 1) 0.3s both;
+}
+.aster-stage[data-phase="enter"][data-mood="tired"] .aster-sleep-blanket {
+  animation: aster-sleep-cover 0.45s ease-out 0.85s both;
+}
+
+/* ════ mood particles ═════════════════════════════════════════════════ */
+.aster-fx {
+  position: absolute;
+  top: 4%;
+  font-weight: 700;
+  line-height: 1;
+  opacity: 0;
+  pointer-events: none;
+  user-select: none;
+}
+
+@keyframes aster-fx-rise {
+  0%   { transform: translate(0, 0) scale(0.7); opacity: 0; }
+  20%  { opacity: 0.9; }
+  80%  { opacity: 0.35; }
+  100% { transform: translate(24%, -110%) scale(1.15); opacity: 0; }
+}
+.aster-fx-zzz {
+  color: #a5caf4;
+  font-size: 13cqh;
+  animation: aster-fx-rise 3.2s ease-out infinite;
+}
+/* sleeping layout: Zzz rise from the pillow, not the standing head */
+.aster-pose[data-mood="tired"] .aster-fx-zzz {
+  top: 24%;
+}
+
+@keyframes aster-fx-note {
+  0%   { transform: translate(0, 0) rotate(-8deg) scale(0.8); opacity: 0; }
+  18%  { opacity: 0.95; }
+  55%  { transform: translate(-14%, -60%) rotate(7deg) scale(1); opacity: 0.7; }
+  100% { transform: translate(10%, -120%) rotate(-6deg) scale(1.05); opacity: 0; }
+}
+.aster-fx-note {
+  color: #a5caf4;
+  font-size: 11cqh;
+  animation: aster-fx-note 2.8s ease-in-out infinite;
+}
+
+@keyframes aster-fx-pop {
+  0%, 55% { transform: scale(0); opacity: 0; }
+  63%     { transform: scale(1.2); opacity: 1; }
+  78%     { transform: scale(1); opacity: 0.9; }
+  100%    { transform: scale(0.9) translateY(-30%); opacity: 0; }
+}
+.aster-fx-question {
+  color: #ffb4ab;
+  font-size: 13cqh;
+  animation: aster-fx-pop 4.5s ease-out infinite;
+}
+.aster-fx-alert {
+  color: #ffd977;
+  font-size: 14cqh;
+  animation: aster-fx-pop 5.5s ease-out infinite;
+}
+
+/* ════ yellow star bursts on entrances/impacts ════════════════════════ */
+@keyframes aster-burst {
+  0%   { transform: translate(0, 0) scale(0) rotate(0deg); opacity: 1; }
+  60%  { transform: translate(var(--dx), var(--dy)) scale(1) rotate(40deg); opacity: 1; }
+  100% { transform: translate(calc(var(--dx) * 1.3), calc(var(--dy) * 1.3)) scale(0.2) rotate(70deg); opacity: 0; }
+}
+.aster-burst-star {
+  position: absolute;
+  opacity: 0;
+  animation: aster-burst 0.65s ease-out both;
+}
+
+/* ════ home hero scene ════════════════════════════════════════════════ */
+@keyframes aster-kenburns {
+  0%   { transform: scale(1) translate(0, 0); }
+  100% { transform: scale(1.055) translate(-1.2%, -0.8%); }
+}
+.aster-kenburns {
+  animation: aster-kenburns 38s ease-in-out infinite alternate;
+}
+
+@keyframes aster-twinkle {
+  0%, 100% { opacity: 0.15; transform: scale(0.8); }
+  50%      { opacity: 0.9;  transform: scale(1.25); }
+}
+.aster-twinkle {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  border-radius: 9999px;
+  background: #fff;
+  box-shadow: 0 0 10px 3px rgb(255 255 255 / 0.55);
+  pointer-events: none;
+  animation: aster-twinkle 3.8s ease-in-out infinite;
+}
+
+/* ════ reduced motion: freeze everything, keep static poses intact ════ */
+@media (prefers-reduced-motion: reduce) {
+  .aster-stage,
+  .aster-stage *,
+  .aster-kenburns,
+  .aster-twinkle {
+    animation: none !important;
+  }
+  .aster-fx,
+  .aster-burst-star {
+    opacity: 0 !important;
+  }
+}

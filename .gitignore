@@ -1,0 +1,108 @@
+# ============================================================================
+# Aster — gitignore
+# Rules of thumb: secrets and per-install identity NEVER commit; heavy
+# fetched/compiled artifacts never commit; personal runtime data never commits.
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# Secrets & per-install identity — never committed. See the .example templates
+# for the shape of each file (secrets.example.yaml / self_config.example.yaml).
+# ----------------------------------------------------------------------------
+secrets.yaml
+secrets.*.yaml
+*.secret
+self_config.yaml
+discord_memories.json
+google_token.json
+.cache/
+.cache
+nul
+
+# ----------------------------------------------------------------------------
+# Aster_Vault — personal runtime data (memory, faces, voices, images, notes,
+# contacts, logs). Everything here is generated/collected per-install.
+# Shippable open-source assets are explicitly re-included below.
+# ----------------------------------------------------------------------------
+Aster_Vault/*
+!Aster_Vault/System_Prompts/jarvis.md
+!Aster_Vault/System_Prompts/_shared_tool_laws.md
+!Aster_Vault/gemma4-multimodal.jinja
+
+# ----------------------------------------------------------------------------
+# Python
+# ----------------------------------------------------------------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ----------------------------------------------------------------------------
+# Node / frontend build output
+# ----------------------------------------------------------------------------
+node_modules/
+aster-face/src-tauri/target/
+Aster-UI/src-tauri/target/
+aster-face/src-tauri/gen/
+Aster-UI/src-tauri/gen/
+
+# ----------------------------------------------------------------------------
+# Models, engines & large binaries — fetched by the installer, never checked in
+# ----------------------------------------------------------------------------
+*.gguf
+*.pt
+*.onnx
+*.bin
+*.safetensors
+llama-server/
+llama-server-turboquant/
+whisper-models/
+wav2vec2_checkpoints/
+piper_engine/
+pretrained_models/
+Aster_Models/
+*.dll
+
+# ----------------------------------------------------------------------------
+# Conversation transcripts / telemetry (personal)
+# ----------------------------------------------------------------------------
+Conversations/
+emotion_log.jsonl
+reliability_log.jsonl
+system1_log.jsonl
+
+# ----------------------------------------------------------------------------
+# Misc / editor & agent state
+# ----------------------------------------------------------------------------
+*.log
+*.tmp
+~$*
+.vs/
+.idea/
+.roo/
+.claude/settings.local.json
+.claude/launch.json
+
+# Personal knock-about files
+annoying-aster-prompt.txt
+Bugs.txt
+WhatsApp Chat with George Da Homie.txt
+E?tmp/
+Chat-template/
+plans/
+aster-opensource-plan.md
+open-jarvis.md
+emotions-next-steps.md
+ideas.md
+ideas-for-backend.md
+checklist_test.md
+aster-ui-integration-log.md
+Aster-ui-integration.md
+engine_testing/qa/browser_profile_handoff.md
