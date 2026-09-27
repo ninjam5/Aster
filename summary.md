@@ -70,7 +70,7 @@
 | Quantization | **IQ4_XS** (4-bit, importance matrix) |
 | KV Cache Type | **KVarN** (`--cache-type-k kvarn4 --cache-type-v kvarn2 --kv-tail-tokens 1024`) |
 | Context Window | **60,000 tokens** (`--ctx-size 60000`, `config.N_CTX=60000`) |
-| GPU Offload | Attention/dense/embeddings on GPU; routed MoE experts split (`--n-gpu-layers 99 --n-cpu-moe 20`); `--threads 8` (P-cores), `--ubatch-size 512` |
+| GPU Offload | Attention/dense/embeddings on GPU; routed MoE experts split (`--n-gpu-layers 99 --n-cpu-moe 26`, sized so Faster-Whisper CUDA ~1.2 GB stays resident); `--threads 8` (P-cores), `--ubatch-size 512` |
 | Flash Attention | **Enabled** (`--flash-attn on`) |
 | API Endpoint | `http://localhost:8080/v1/chat/completions` |
 | Token Counting | **Character heuristic** (~4 chars per token) |
@@ -638,8 +638,8 @@ any mood colour.
 
 | Component | Estimated VRAM |
 |---|---|
-| llama-server/BeeLlama: Qwen 3.6 35B-A3B (IQ4_XS, 60k ctx, KVarN KV, ~20 MoE layers on CPU) + mmproj in RAM | **~11.5-11.9 GB (measured)** |
-| Faster-Whisper medium.en (int8, shared — call; Telegram uses a CPU instance when no call) | ~1.0-1.5 GB GPU (call) / ~1.5 GB RAM (voice notes) |
+| llama-server/BeeLlama: Qwen 3.6 35B-A3B (IQ4_XS, 60k ctx, KVarN KV, ~26 MoE layers on CPU) + mmproj in RAM | **~9.4 GB (measured)** |
+| Faster-Whisper medium.en (int8 CUDA, shared by calls + voice notes, **resident**) | **~1.2 GB GPU (measured)**; CPU instance is the fallback only |
 | SpeechBrain ECAPA (voice recognition, eager CUDA) | ~80 MB |
 | openWakeWord (CPU-only, negligible GPU) | ~0 MB GPU |
 | Silero VAD | ~50 MB |

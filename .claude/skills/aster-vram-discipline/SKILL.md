@@ -7,7 +7,7 @@ description: Load this whenever a change touches ML models, GPU memory, or perfo
 
 The owner's #1 standing rule (stated 2026-07-05): **Aster must be as optimized as
 possible. 12 GB (RTX 3080) is a hard ceiling. On the Qwen 3.6 35B-A3B engine
-llama-server alone measures ~11.5-11.9 GB / 12.3 GB at `--n-cpu-moe 20` + 60k ctx —
+llama-server alone measures ~9.4 GB model + ~1.2 GB resident Whisper / 12.3 GB at `--n-cpu-moe 26` + 60k ctx —
 the vision mmproj is served from RAM, not VRAM, so headroom is tight.** New ML models
 are **lazy-loaded and offloaded when idle** via ref-counting — not eagerly preloaded.
 (This *reverses* an older 2026-05 eager-preload preference; existing eager loads are
@@ -25,9 +25,9 @@ with `nvidia-smi`.
 
 | Component | VRAM | Residency |
 |---|---|---|
-| llama-server: Qwen 3.6 35B-A3B IQ4_XS (MoE, `--n-cpu-moe 20`), 60k ctx, KVarN KV + mmproj in RAM | **~11.5–11.9 GB / 12.3 GB (measured 2026-09-27)** | Permanent while server runs |
+| llama-server: Qwen 3.6 35B-A3B IQ4_XS (MoE, `--n-cpu-moe 26`), 60k ctx, KVarN KV + mmproj in RAM | **~11.5–11.9 GB / 12.3 GB (measured 2026-09-27)** | Permanent while server runs |
 | Faster-Whisper `medium.en` int8 (shared singleton) — call path | ~1.0–1.5 GB (est.) | Loaded at startup, resident for calls |
-| Faster-Whisper CPU instance — Telegram voice notes (`local_stt.transcribe_file`) | 0 VRAM (~1.5 GB RAM) | Resident after first use |
+| Faster-Whisper CUDA singleton — calls + Telegram voice notes (`local_stt.transcribe_file`) | ~1.2 GB VRAM (measured) | Resident; VRAM reserved by `--n-cpu-moe 26` (CPU instance is the fallback) |
 | SpeechBrain ECAPA speaker-ID (eager CUDA, grandfathered) | ~80–200 MB (est.) | Resident |
 | Silero VAD | ~50 MB (est.) | Resident (bridge) |
 | openWakeWord | ~0 (CPU) | — |

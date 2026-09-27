@@ -53,7 +53,7 @@ E:\Models\beellama-v0.4.7-bin-win-cuda-12.4-x64\llama-server.exe
   --mmproj E:\Models\Qwen3.6-35B-A3B-mmproj-F16.gguf    vision projector; --no-mmproj-offload = runs from RAM
   --chat-template-file E:\Models\qwen36_chat_template.jinja   froggeric v22.5 fix (with --jinja)
   --port 8080                         the only port the brain knows
-  --n-gpu-layers 99 --n-cpu-moe 20    attention/dense/embeddings on GPU; 20 MoE layers on CPU
+  --n-gpu-layers 99 --n-cpu-moe 26    attention/dense/embeddings on GPU; 26 MoE layers on CPU (leaves ~1.4 GB VRAM for resident Faster-Whisper)
   --flash-attn on                     flash attention
   --cache-type-k kvarn4 --cache-type-v kvarn2 --kv-tail-tokens 1024   KVarN KV cache (BeeLlama fork)
   --image-min-tokens 1024             vision token budget
@@ -79,8 +79,8 @@ warning no longer appears.)
 - warmup success (main.py ~:711)
 
 Telegram voice notes use a **CPU** Faster-Whisper instance (`local_stt.transcribe_file`,
-a CPU Whisper instance outside LiveKit calls): ~1.5 GB RAM resident after first use,
-**zero VRAM**.
+one CUDA singleton shared by calls and voice notes, ~1.2 GB VRAM resident because the
+launchers reserve it via `--n-cpu-moe 26`; a CPU instance is the fallback only), **zero VRAM**.
 
 ## Daemon roster (started in main.py:657-684)
 

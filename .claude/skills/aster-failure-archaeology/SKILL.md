@@ -241,7 +241,7 @@ blocks. Adapter renamed `_execute_gemma_completion` → `_execute_llm_completion
   acceptance ~0.90, `ubatch 512`); ~32 tok/s on v0.4.4 and ~24-31 with the earlier
   configs. Prefill ~1.5-1.8k tok/s at ub 512, versus ~178 at ub 256 (the
   RAM-crash mitigation was the single biggest prefill cost).
-- VRAM **~11.5-11.9 GB / 12.3** at `--n-cpu-moe 20 --ctx-size 60000`; the MoE is
+- VRAM **~9.4 GB model + 1.2 GB resident Whisper / 12.3** at `--n-cpu-moe 26 --ctx-size 60000`; the MoE is
   bandwidth-bound on DDR4-3200 dual channel, not GPU-bound.
 - Harness battery (52 scenarios): **31/37 auto (84%) at temp 1.0**, **27/37 (73%)
   at temp 0.7** — temp 1.0 is the keeper default (config already 1.0).

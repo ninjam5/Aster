@@ -18,7 +18,7 @@ step is done; promote to `summary.md` when green.
 | Model | `E:\Models\Qwen3.6-35B-A3B-UD-IQ4_XS.gguf` (MoE, 3B active) |
 | Vision | `E:\Models\Qwen3.6-35B-A3B-mmproj-F16.gguf`, served with `--no-mmproj-offload` (runs from RAM) |
 | Template | `E:\Models\qwen36_chat_template.jinja` (froggeric v22.5 fix) |
-| Flags | `--n-gpu-layers 99 --n-cpu-moe 20 --flash-attn on --cache-type-k kvarn4 --cache-type-v kvarn2 --image-min-tokens 1024 --kv-tail-tokens 1024 --spec-type draft-mtp --spec-draft-n-max 3 --spec-draft-p-min 0.75 --reasoning off --ctx-size 60000 --parallel 1 --threads 8 --batch-size 1024 --ubatch-size 512` |
+| Flags | `--n-gpu-layers 99 --n-cpu-moe 26 --flash-attn on --cache-type-k kvarn4 --cache-type-v kvarn2 --image-min-tokens 1024 --kv-tail-tokens 1024 --spec-type draft-mtp --spec-draft-n-max 3 --spec-draft-p-min 0.75 --reasoning off --ctx-size 60000 --parallel 1 --threads 8 --batch-size 1024 --ubatch-size 512` |
 | Brain config | `config.N_CTX = 60000` (must match `--ctx-size`), `MODEL_NAME = Qwen3.6-35B-A3B-UD-IQ4_XS` |
 | Reference bench (BeeLlama v0.4.4, 172 tok/s pp / 31.9 tok/s decode) | superseded by v0.4.7 measurements below |
 
@@ -193,6 +193,43 @@ number is wanted, average 3 seeds per temp. Complementary: `pytest tests/ -q` = 
   daemons (Telegram polling, mic, face server) online and needs interactive judgement.
 
 ### Session notes
-- RAM headroom is the tight resource, not VRAM: with the CPU Whisper instance resident,
-  free RAM fell to ~2.3 GB. Close desktop apps before long tool sessions.
+- RAM headroom is the tight resource, not VRAM: with the CPU Whisper fallback resident,
+  free RAM fell to ~2.3 GB. After the `--n-cpu-moe 26` rebalance (2026-09-27) voice notes
+  use the CUDA singleton instead (~1.2 GB VRAM, verified resident with 1.4 GB headroom).
 - The server was stopped after this run (owner instruction).
+
+### 2026-09-27 (later) — T3 FIX A/B: tool-law wording, and the Whisper VRAM rebalance
+
+**Rebalance (task 1):** `--n-cpu-moe 20 → 26` frees VRAM for a *resident* Faster-Whisper.
+
+| n-cpu-moe | llama-server VRAM | + Whisper CUDA | free after both |
+|---|---|---|---|
+| 20 | 11,878 MiB | (would OOM) | ~0 |
+| 24 | 10,233 MiB | 11,489 MiB | 799 MiB |
+| **26 (shipped)** | **9,635 MiB** | **10,867 MiB (transcribe peak)** | **1,421 MiB** |
+
+Whisper measured at **1,182 MiB**; `local_stt.transcribe_file` now prefers the CUDA
+singleton (CPU is the fallback), so calls and voice notes share one resident instance.
+
+**A/B (task 2):** added the `INSTANT ACTIONS — CALL, NEVER NARRATE, NEVER DENY` law to
+`Aster_Vault/System_Prompts/_shared_tool_laws.md` (terse-command → exact-tool table, banned
+narrations, "never write a tool result yourself", capability-denial ban, "now" is part of
+the command).
+
+Sharp probe (the 6 stubborn prompts), same server/config:
+
+| | Phase-6 (no law) | law v1 | law v2 (shipped) |
+|---|---|---|---|
+| tool calls emitted | 1/6 | 4/6 | **6/6** |
+
+Harness battery:
+
+| Run | Phase 0 (pre-cleanup) | post-cleanup, no law | **+ tool law (final)** |
+|---|---|---|---|
+| temp 0.7 (default) | 27/37 (73%) | 33/37 (89%) | **34/37 (92%)** |
+| temp 1.0 (`--preset baseline`) | 31/37 (84%) | 29/37 (78%) | **35/37 (95%)** |
+
+Reports: `…_20260927_210200.txt` (temp 1.0), `…_20260927_211553.txt` (temp 0.7).
+→ **T3 defect materially fixed** (both temps now above every prior baseline); the residual
+two auto-fails are in other categories. Loop tendency still rises at low temp (C6-01: 8
+`browse_web` calls in 9 rounds at 0.7 vs 5 in 6 at 1.0) — temp 1.0 remains the keeper.

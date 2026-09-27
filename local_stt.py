@@ -118,14 +118,14 @@ def release_whisper_model() -> None:
 
 
 # ── one-shot transcription for the Telegram voice-note path ───────────────────
-# A CPU instance is used when no LiveKit call is active so a voice note never
-# competes with llama-server for VRAM. Lazy-loaded and kept resident.
+# The CUDA singleton is preferred (the launchers reserve ~1.4 GB VRAM for it via
+# --n-cpu-moe 26); this CPU instance is the fallback when the CUDA load fails.
 _cpu_whisper: WhisperModel | None = None
 _cpu_whisper_lock = threading.Lock()
 
 
 def _get_cpu_whisper() -> WhisperModel:
-    """Lazily load (once) a CPU Whisper model for voice notes outside a call.
+    """Lazily load (once) the CPU fallback Whisper model.
 
     Kept resident after the first voice note (~1.5 GB RAM, zero VRAM) so
     subsequent notes skip the cold-load cost. Used only when no LiveKit call
@@ -157,10 +157,18 @@ def format_transcript(text: str, speaker: str | None = None,
 def transcribe_file(path: str) -> str:
     """Transcribe a 16 kHz mono WAV file to text.
 
-    Reuses the resident CUDA model when a LiveKit call holds it; otherwise a
-    lazy CPU instance keeps the voice-note path at zero extra VRAM.
+    Prefers the shared CUDA model — the launchers reserve VRAM for it
+    (`--n-cpu-moe 26`), so voice notes and LiveKit calls share one GPU instance
+    that stays resident. If the CUDA load fails (e.g. VRAM lost to another app),
+    falls back to the lazy CPU instance rather than failing the turn.
     """
-    model = _shared_whisper if _shared_whisper is not None else _get_cpu_whisper()
+    model = _shared_whisper
+    if model is None:
+        try:
+            model = get_whisper_model()
+        except Exception as exc:
+            print(f"[Aster Ears] CUDA Faster-Whisper unavailable ({exc}) \u2014 using the CPU instance.")
+            model = _get_cpu_whisper()
     segments, _ = model.transcribe(
         path,
         beam_size=5,

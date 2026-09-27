@@ -29,7 +29,7 @@ operating commands → `aster-run-and-operate`; VRAM budgets/policy →
     quality risk. **This is the Qwen 3.6 swap's daily quant** — viable on the 35B
     MoE because only ~3B params are active per token.
 - **Qwen 3.6 35B-A3B** — a Mixture-of-Experts model (36B total, ~3B active
-  params/token). The MoE split lets 20 expert layers sit on CPU (`--n-cpu-moe 20`)
+  params/token). The MoE split lets 26 expert layers sit on CPU (`--n-cpu-moe 26`)
   while attention/dense stay on GPU.
 - Rule of thumb: 4-bit weights ≈ 0.55–0.65 GB per billion params, plus KV cache,
   plus the vision projector.
@@ -44,7 +44,7 @@ operating commands → `aster-run-and-operate`; VRAM budgets/policy →
   budget (the `kvarn2`–`kvarn8` range; higher number = more bits) while keeping a
   **precision tail** (`--kv-tail-tokens 1024`) at full precision for the most recent
   tokens. ~0.9 GB at 60k context. Grounded: **Qwen 3.6 35B-A3B + 60k + KVarN ≈
-  11.5–11.9 GB / 12.3 GB** on the 3080 (measured).
+  9.4 GB model + ~1.2 GB resident Faster-Whisper / 12.3 GB** on the 3080 (measured).
 - **MTP speculative decoding** (`--spec-type draft-mtp --spec-draft-n-max 3
   --spec-draft-p-min 0.75`) — the GGUF carries multi-token-prediction draft heads,
   so no separate draft model is loaded; measured draft acceptance ≈0.90.
@@ -113,7 +113,7 @@ so the estimate typically UNDER-counts them.
 
 | Model | Job | Device / residency |
 |---|---|---|
-| Faster-Whisper `medium.en` int8 (CTranslate2) | STT call (CUDA shared singleton) / Telegram voice notes (CPU instance, `local_stt.transcribe_file`) | CUDA resident for calls; CPU ~1.5 GB RAM, zero VRAM for voice notes |
+| Faster-Whisper `medium.en` int8 (CTranslate2) | STT call + Telegram voice notes (one CUDA singleton via `local_stt.transcribe_file`) | ~1.2 GB VRAM, resident; CPU instance is the fallback only |
 | Kokoro 82M (`KPipeline`) | TTS, 24 kHz | CUDA w/ CPU fallback; ref-counted, offloads idle |
 | Silero VAD | Speech/silence gating on the call | via livekit-plugins-silero |
 | openWakeWord (`hey_jarvis`) | Wake phrase, agent sleeps otherwise | CPU, tiny |
