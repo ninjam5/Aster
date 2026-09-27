@@ -6,13 +6,10 @@ Imports core.brain to reuse the live system prompt, ADMIN_TOOLS, and native
 tool-call extraction so tests run inside Aster's REAL machinery — not a
 re-implementation.
 
-Native-only since 2026-07: production runs native OpenAI-format tool calling
-(config.USE_NATIVE_TOOL_CALLS defaults True) and this harness now exercises
-only that path — it sends `tools=ADMIN_TOOLS` and reads structured
-`message["tool_calls"]`, exactly like core.brain's real agentic loop. The
-legacy XML-in-text path is NOT tested here anymore; its comparator is the
-frozen reports in engine_testing/results/ (pre-2026-07) plus production's own
-rollback flag (`runtime.use_native_tool_calls: false` in self_config.yaml).
+Native-only: production runs native OpenAI-format tool calling and this harness
+exposes only that path — it sends `tools=ADMIN_TOOLS` and reads structured
+`message["tool_calls"]`, exactly like core.brain's real agentic loop. Historical
+comparators are the frozen reports in engine_testing/results/ (pre-2026-07).
 """
 from __future__ import annotations
 
@@ -85,8 +82,7 @@ def llm_call(
     POST to llama-server /v1/chat/completions with native tool calling enabled.
 
     Mirrors _execute_gemma_completion() in brain.py — same payload shape (incl.
-    `tools`/`tool_choice="auto"`), same trailing-assistant-strip (Gemma Jinja
-    template incompatibility) — but without the debug spam.
+    `tools`/`tool_choice="auto"`) — but without the debug spam.
 
     Returns:
         message     — full choices[0]["message"] dict (role/content/tool_calls),
@@ -94,26 +90,7 @@ def llm_call(
         metrics     — {prompt_tokens, completion_tokens, elapsed_s,
                        gen_tok_per_s, prompt_tok_per_s}
     """
-    # Mirror brain.py: strip trailing assistant message before sending
-    # (Gemma Jinja template incompatibility with assistant prefill)
     msgs = list(messages)
-    if msgs and msgs[-1].get("role") == "assistant":
-        msgs = msgs[:-1]
-
-    # Inject <image> marker into multimodal messages (matches brain.py:66-80)
-    for msg in msgs:
-        content = msg.get("content")
-        if not isinstance(content, list):
-            continue
-        if not any(p.get("type") == "image_url" for p in content):
-            continue
-        for part in content:
-            if part.get("type") == "text":
-                if not part["text"].startswith("<image>"):
-                    part["text"] = "<image>\n" + part["text"]
-                break
-        else:
-            content.append({"type": "text", "text": "<image>"})
 
     payload = {
         "model": "gemma",

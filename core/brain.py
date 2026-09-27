@@ -84,8 +84,6 @@ def _execute_gemma_completion(messages: list[dict], temperature: float = None, n
     Callers that need tool calls inspect: response_msg.get("tool_calls")
 
     Pass tools=ADMIN_TOOLS (or any subset) to enable native function calling.
-    When config.USE_NATIVE_TOOL_CALLS is False the tools param is ignored and
-    the XML-in-text path is used instead (no tools key in the payload).
 
     temperature/top_p/top_k default to None so they are resolved from config.*
     at call time (not import time). Callers that pass an explicit value (e.g.
@@ -99,29 +97,6 @@ def _execute_gemma_completion(messages: list[dict], temperature: float = None, n
         top_k = config.LLM_TOP_K
     print(f'[PIPELINE DEBUG] _execute_gemma_completion called with {len(messages)} messages, last message role={messages[-1]["role"]}, content type={type(messages[-1]["content"]).__name__}, has_list={isinstance(messages[-1]["content"], list)}')
 
-    # Always strip trailing injected assistant INST message —
-    # assistant prefill is incompatible with the Gemma Jinja template
-    if messages and messages[-1].get('role') == 'assistant':
-        print(f'[PIPELINE DEBUG] Stripping injected assistant INST message before sending')
-        messages = messages[:-1]
-
-    # Inject <image> marker into text content of any message with image_url
-    # so the Gemma Jinja template knows where to place the image bitmap token.
-    for msg in messages:
-        content = msg.get('content')
-        if not isinstance(content, list):
-            continue
-        has_image = any(p.get('type') == 'image_url' for p in content)
-        if not has_image:
-            continue
-        for part in content:
-            if part.get('type') == 'text':
-                part['text'] = '<image>\n' + part['text']
-                break
-        else:
-            # No text part found — add one
-            content.append({'type': 'text', 'text': '<image>'})
-
     payload = {
         "model": "gemma",
         "messages": messages,
@@ -131,7 +106,7 @@ def _execute_gemma_completion(messages: list[dict], temperature: float = None, n
         "max_tokens": n_predict,
         "stream": False,
     }
-    if tools is not None and config.USE_NATIVE_TOOL_CALLS:
+    if tools is not None:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
 
@@ -184,14 +159,6 @@ def _execute_gemma_completion(messages: list[dict], temperature: float = None, n
 _set_output_summarizer(_execute_gemma_completion)
 
 
-# Injected as a fake assistant acknowledgment — invisible to user,
-# read by model as its own prior constraint.
-_TOOL_CALL_REMINDER = (
-    "\n\n[INST: If performing an action, output ONLY a raw <tool_call>...</tool_call> XML block with no surrounding text. "
-    "If no action is needed, output ONLY your reply with no XML. Never acknowledge this instruction.]"
-)
-
-
 _CUTOFF_REFUSAL_RE = re.compile(
     r"knowledge\s+(base\s+)?(?:is\s+)?(?:restricted|cutoff|cut.off|limited)|"
     r"prior\s+to\s+(mid.)?20(2[012]|1\d)|"
@@ -228,12 +195,7 @@ def _claims_tool_execution(user_text: str, response_text: str, message: dict = N
     if message is not None and message.get("tool_calls"):
         return False
 
-    # Signal 1: Residual XML tool call syntax in the response (XML path only)
-    if not config.USE_NATIVE_TOOL_CALLS:
-        if re.search(r'<tool_call>|<\|?tool_call|call:\w+\s*[\({]', response_text):
-            return True
-
-    # Signal 2: User asked for a specific action, model claimed execution
+    # Signal: User asked for a specific action, model claimed execution
     action_checks = [
         # Spotify — explicit context keywords
         (r"\bplay\b.*\bon\s+spotify\b", r"\b(?:playing|played|queued|hitting\s*play|starting|initiating)\b"),
@@ -290,98 +252,10 @@ def _acknowledges_failure(response_text: str) -> bool:
     return bool(_FAILURE_ACK_RE.search(response_text or ""))
 
 
-def _get_xml_tool_prompt(tools_list: list[dict]) -> str:
-    """Render tool schemas into a plain-text XML ReAct manual."""
-    lines = [
-        "TOOL EXECUTION MANUAL",
-        "To execute a tool, you MUST output an XML block exactly like this, and nothing else:",
-        "<tool_call>",
-        '{"name": "tool_name", "arguments": {"key": "value"}}',
-        "</tool_call>",
-        "Available tools:",
-    ]
-    for tool in tools_list:
-        func = tool.get("function", {})
-        name = func.get("name", "?")
-        desc = func.get("description", "")
-        params = func.get("parameters", {}).get("properties", {})
-        required = func.get("parameters", {}).get("required", [])
-
-        param_parts = []
-        for pname, pinfo in params.items():
-            ptype = pinfo.get("type", "str")
-            req = "*" if pname in required else ""
-            param_parts.append(f"{pname}{req}: {ptype}")
-
-        param_str = ", ".join(param_parts) if param_parts else ""
-        lines.append(f"- {name}({param_str}): {desc}")
-
-    return "\n".join(lines)
-
-
-def _legacy_xml_parse(response_text: str) -> tuple[dict | None, str]:
-    """Extract a single XML tool call and return (payload, cleaned_text).
-
-    Legacy XML-in-text path kept for rollback (USE_NATIVE_TOOL_CALLS = False).
-    """
-    content = response_text or ""
-
-    # Normalize Gemma's mangled tool_call tag variants before matching.
-    # Gemma sometimes outputs <|tool_call|>, <|tool_call>, or <|tool_call>call>
-    # (a mix of Qwen-style special tokens and the XML format we use).
-    content = re.sub(r'<\|tool_call\|?>call>', '<tool_call>', content)
-    content = re.sub(r'<\|tool_call\|?>', '<tool_call>', content)
-
-    match = re.search(r"<tool_call>(.*?)</tool_call>", content, flags=re.DOTALL | re.IGNORECASE)
-    if not match:
-        return None, content
-
-    inner = (match.group(1) or "").strip()
-    cleaned = (content[:match.start()] + content[match.end():]).strip()
-    try:
-        payload = json.loads(inner)
-    except json.JSONDecodeError:
-        return {"name": "", "arguments": {}, "error": "json_decode_error", "json_error": True}, cleaned
-
-    tool_name = str(payload.get("name", "")).strip()
-    tool_args = payload.get("arguments", {})
-    if not isinstance(tool_args, dict):
-        tool_args = {}
-
-    return {"name": tool_name, "arguments": tool_args, "error": None}, cleaned
-
-
-def _legacy_xml_parse_multi(response_text: str) -> list[dict]:
-    """Return every <tool_call> block in order — used by evaluate_and_memorize.
-
-    Legacy XML-in-text path kept for rollback (USE_NATIVE_TOOL_CALLS = False).
-    Malformed JSON blocks are skipped with a log line rather than crashing.
-    """
-    content = response_text or ""
-    content = re.sub(r'<\|tool_call\|?>call>', '<tool_call>', content)
-    content = re.sub(r'<\|tool_call\|?>', '<tool_call>', content)
-
-    results = []
-    for match in re.finditer(r"<tool_call>(.*?)</tool_call>", content, flags=re.DOTALL | re.IGNORECASE):
-        inner = (match.group(1) or "").strip()
-        try:
-            payload = json.loads(inner)
-        except json.JSONDecodeError:
-            print(f"[Aster Internal: _legacy_xml_parse_multi skipped malformed block: {inner[:60]}]")
-            continue
-        tool_name = str(payload.get("name", "")).strip()
-        tool_args = payload.get("arguments", {})
-        if not isinstance(tool_args, dict):
-            tool_args = {}
-        results.append({"name": tool_name, "arguments": tool_args})
-    return results
-
-
 def _extract_native_tool_call(message: dict) -> tuple[dict | None, str]:
     """Read tool_calls[0] from a native OpenAI-format completion message.
 
-    Returns (payload_dict, content_str) — same shape as _legacy_xml_parse so
-    call sites can swap between the two with a single branch.
+    Returns (payload_dict, content_str).
     payload_dict includes "tool_call_id" for constructing the role:tool reply.
     """
     tc_list = message.get("tool_calls") or []
@@ -409,7 +283,6 @@ def _extract_all_native_tool_calls(message: dict) -> list[dict]:
     """Read all tool_calls from a native completion message.
 
     Used by evaluate_and_memorize for multi-fact extraction in one pass.
-    Same return shape as _legacy_xml_parse_multi.
     """
     results = []
     for tc in (message.get("tool_calls") or []):
@@ -1643,7 +1516,7 @@ def _inject_outbound_discord_message_into_session(target_name: str, outbound_mes
             known_facts=get_user_facts(target),
             honorific=_discord_honorific(target),
             owner_name=config.OWNER_NAME,
-            tool_docs=_get_xml_tool_prompt(DISCORD_TOOLS) if not config.USE_NATIVE_TOOL_CALLS else "",
+            tool_docs="",
         )
 
     history.append({"role": "assistant", "content": payload})
@@ -2283,8 +2156,7 @@ def _load_system_prompt(name: str) -> str:
     `name` is a filename stem (no .md) under config.SYSTEM_PROMPTS_DIR, selected
     via config.SYSTEM_PROMPT (self_config.yaml -> persona.system_prompt). HTML
     comment blocks (<!-- ... -->) are stripped so file-level documentation never
-    reaches the model. The XML tool manual is appended separately by the caller.
-    Falls back to a minimal prompt if the file is missing or unreadable.
+    reaches the model. Falls back to a minimal prompt if the file is missing or unreadable.
     """
     path = os.path.join(config.SYSTEM_PROMPTS_DIR, f"{name}.md")
     try:
@@ -2304,7 +2176,7 @@ def _load_shared_tool_laws() -> str:
     Lives at System_Prompts/_shared_tool_laws.md (leading underscore keeps it
     out of the user-visible persona list). Same HTML-comment stripping as
     _load_system_prompt. Falls back to an empty string so a missing file never
-    crashes — the XML tool manual still provides the tool catalogue.
+    crashes.
     """
     path = os.path.join(config.SYSTEM_PROMPTS_DIR, "_shared_tool_laws.md")
     try:
@@ -2318,15 +2190,12 @@ def _load_shared_tool_laws() -> str:
 
 
 def _build_system_content(persona_name: str) -> str:
-    """Assemble the full system-message content:
-    persona personality + shared tool laws + (XML tool manual when not using native calls)."""
+    """Assemble the full system-message content: persona personality + shared tool laws."""
     persona = _load_system_prompt(persona_name)
     laws    = _load_shared_tool_laws()
     parts = [persona]
     if laws:
         parts.append(laws)
-    if not config.USE_NATIVE_TOOL_CALLS:
-        parts.append(_get_xml_tool_prompt(ADMIN_TOOLS))
     return "\n\n".join(parts)
 
 
@@ -2360,9 +2229,9 @@ def list_personas() -> list[dict]:
 def reload_persona(name: str) -> None:
     """Hot-swap the active persona without restarting.
 
-    Rebuilds messages[0] from the new persona file + shared tool laws + XML
-    tool manual. Also updates config.SYSTEM_PROMPT so get_my_status() reflects
-    the change. Raises ValueError if the persona file does not exist.
+    Rebuilds messages[0] from the new persona file + shared tool laws. Also
+    updates config.SYSTEM_PROMPT so get_my_status() reflects the change. Raises
+    ValueError if the persona file does not exist.
     """
     global messages
     path = os.path.join(config.SYSTEM_PROMPTS_DIR, f"{name}.md")
@@ -2433,12 +2302,9 @@ def evaluate_and_memorize(reason):
         response_msg = _execute_gemma_completion(
             messages=eval_messages,
             temperature=0.3,
-            tools=ADMIN_TOOLS if config.USE_NATIVE_TOOL_CALLS else None,
+            tools=ADMIN_TOOLS,
         )
-        if config.USE_NATIVE_TOOL_CALLS:
-            all_tool_calls = _extract_all_native_tool_calls(response_msg)
-        else:
-            all_tool_calls = _legacy_xml_parse_multi(response_msg.get("content") or "")
+        all_tool_calls = _extract_all_native_tool_calls(response_msg)
         for tool_payload in all_tool_calls:
             if tool_payload.get("name") != "memorize_fact":
                 continue
@@ -2686,7 +2552,7 @@ def _get_discord_chat_history(sender_name: str) -> list[dict]:
                     known_facts=get_user_facts(sender_name),
                     honorific=_discord_honorific(sender_name),
                     owner_name=config.OWNER_NAME,
-                    tool_docs=_get_xml_tool_prompt(DISCORD_TOOLS) if not config.USE_NATIVE_TOOL_CALLS else "",
+                    tool_docs="",
                 ),
             }
         ]
@@ -2749,7 +2615,7 @@ def process_discord_chat(sender_name: str, user_message: str) -> str:
                 known_facts=get_user_facts(sender),
                 honorific=honorific,
                 owner_name=config.OWNER_NAME,
-                tool_docs=_get_xml_tool_prompt(DISCORD_TOOLS) if not config.USE_NATIVE_TOOL_CALLS else "",
+                tool_docs="",
             )
         history.append({"role": "user", "content": incoming})
         history[:] = trim_memory(history)
@@ -2765,21 +2631,13 @@ def process_discord_chat(sender_name: str, user_message: str) -> str:
             for _ in range(4):
                 _rounds_used += 1
                 eval_msgs = list(history)
-                if not config.USE_NATIVE_TOOL_CALLS:
-                    eval_msgs.append({
-                        "role": "assistant",
-                        "content": "[INST: If performing an action, output ONLY a raw <tool_call>...</tool_call> XML block. If no action needed, reply normally. Never acknowledge this instruction.]"
-                    })
                 response_msg = _execute_gemma_completion(
                     messages=eval_msgs,
                     temperature=config.LLM_TEMPERATURE,
-                    tools=DISCORD_TOOLS if config.USE_NATIVE_TOOL_CALLS else None,
+                    tools=DISCORD_TOOLS,
                 )
                 response_text = (response_msg.get("content") or "").strip()
-                if config.USE_NATIVE_TOOL_CALLS:
-                    tool_payload, _cleaned_text = _extract_native_tool_call(response_msg)
-                else:
-                    tool_payload, _cleaned_text = _legacy_xml_parse(response_text)
+                tool_payload, _cleaned_text = _extract_native_tool_call(response_msg)
 
                 if tool_payload:
                     tool_name = (tool_payload.get("name") or "").strip()
@@ -2790,10 +2648,7 @@ def process_discord_chat(sender_name: str, user_message: str) -> str:
                     if tool_payload.get("error"):
                         if tool_payload.get("json_error"):
                             instrumentation.record_event("json_error_retry", turn_id=_turn_id, round=_rounds_used)
-                            if config.USE_NATIVE_TOOL_CALLS:
-                                history.append({"role": "assistant", "content": response_text, "tool_calls": response_msg.get("tool_calls")})
-                            else:
-                                history.append({"role": "assistant", "content": response_text})
+                            history.append({"role": "assistant", "content": response_text, "tool_calls": response_msg.get("tool_calls")})
                             history.append({
                                 "role": "user",
                                 "content": (
@@ -2831,22 +2686,13 @@ def process_discord_chat(sender_name: str, user_message: str) -> str:
                                 tool_result = f"{tool_result} {_lg_verdict.message}"
                             publish_terminal(f"[OUT] {tool_name} -> {_stream_preview(tool_result)}")
 
-                    if config.USE_NATIVE_TOOL_CALLS:
-                        history.append({"role": "assistant", "content": response_text, "tool_calls": response_msg.get("tool_calls")})
-                        history[:] = trim_memory(history)
-                        history.append({
-                            "role": "tool",
-                            "tool_call_id": tool_payload.get("tool_call_id", ""),
-                            "content": str(tool_result),
-                        })
-                    else:
-                        history.append({"role": "assistant", "content": response_text})
-                        history[:] = trim_memory(history)
-                        history.append({
-                            "role": "user",
-                            "content": f"Tool Execution Result: {tool_result}",
-                    })
+                    history.append({"role": "assistant", "content": response_text, "tool_calls": response_msg.get("tool_calls")})
                     history[:] = trim_memory(history)
+                    history.append({
+                        "role": "tool",
+                        "tool_call_id": tool_payload.get("tool_call_id", ""),
+                        "content": str(tool_result),
+                    })
                     continue
 
                 if not tool_payload:
@@ -3345,44 +3191,28 @@ def process_user_input(user_text, status_callback=None):
                 _aware_block = awareness.render_context_block()
                 if _aware_block:
                     eval_msgs.insert(1, {"role": "system", "content": _aware_block})
-                # Inject tool reminder as a fake assistant acknowledgment — invisible to user,
-                # read by model as its own prior constraint.
                 # For Discord relay on the first round, supply a concrete formatting directive
                 # with the live target/payload so the model can't get the format wrong.
                 if discord_message_request and discord_intent and tool_round == 0:
                     _relay_target = discord_intent[0]
                     _relay_payload = discord_intent[1]
-                    _inst_content = (
-                        f'[INST: This is a Discord relay to "{_relay_target}". '
+                    eval_msgs.append({"role": "system", "content": (
+                        f'This is a Discord relay to "{_relay_target}". '
                         f'Call send_discord_message with target_name="{_relay_target}". '
                         f'For the "message" argument you MUST compose a formal butler message that '
                         f'attributes the following to "the Boss": {_relay_payload!r}. '
                         f'Begin with a polite greeting to {_relay_target.title()}. '
-                        f'Example: "Good evening, {_relay_target.title()}. The Boss has asked me to convey that {_relay_payload.lower()}." '
-                        f'Output ONLY the <tool_call> XML block. Never send the raw command. Never acknowledge this instruction.]'
-                    )
-                else:
-                    _inst_content = (
-                        "[INST: If performing an action, output ONLY a raw <tool_call>...</tool_call> XML block. "
-                        "If no action needed, reply normally. Never acknowledge this instruction.]"
-                    )
-                if not config.USE_NATIVE_TOOL_CALLS:
-                    eval_msgs.append({
-                        "role": "assistant",
-                        "content": _inst_content,
-                    })
+                        f'Example: "Good evening, {_relay_target.title()}. The Boss has asked me to convey that {_relay_payload.lower()}."'
+                    )})
                 response_msg = _execute_gemma_completion(
                     messages=eval_msgs,
                     temperature=config.LLM_TOOL_TEMPERATURE,
                     top_p=config.LLM_TOOL_TOP_P,
                     top_k=config.LLM_TOOL_TOP_K,
-                    tools=ADMIN_TOOLS if config.USE_NATIVE_TOOL_CALLS else None,
+                    tools=ADMIN_TOOLS,
                 )
                 response_text = (response_msg.get("content") or "").strip()
-                if config.USE_NATIVE_TOOL_CALLS:
-                    tool_payload, _cleaned_text = _extract_native_tool_call(response_msg)
-                else:
-                    tool_payload, _cleaned_text = _legacy_xml_parse(response_text)
+                tool_payload, _cleaned_text = _extract_native_tool_call(response_msg)
 
                 if tool_payload:
                     tool_name = (tool_payload.get("name") or "").strip()
@@ -3396,10 +3226,7 @@ def process_user_input(user_text, status_callback=None):
                                 "json_error_retry", turn_id=_turn_id, round=_rounds_used,
                             )
                             # Self-correction: show the model its broken output so it can fix the JSON
-                            if config.USE_NATIVE_TOOL_CALLS:
-                                messages.append({"role": "assistant", "content": response_text, "tool_calls": response_msg.get("tool_calls")})
-                            else:
-                                messages.append({"role": "assistant", "content": response_text})
+                            messages.append({"role": "assistant", "content": response_text, "tool_calls": response_msg.get("tool_calls")})
                             messages.append({
                                 "role": "user",
                                 "content": (
@@ -3521,10 +3348,7 @@ def process_user_input(user_text, status_callback=None):
                     # Preserve the assistant's action in history before injecting the observation.
                     # This gives the model a coherent ReAct chain: thought → action → observation.
                     if response_text or response_msg.get("tool_calls"):
-                        if config.USE_NATIVE_TOOL_CALLS:
-                            messages.append({"role": "assistant", "content": response_msg.get("content"), "tool_calls": response_msg.get("tool_calls")})
-                        else:
-                            messages.append({"role": "assistant", "content": response_text})
+                        messages.append({"role": "assistant", "content": response_msg.get("content"), "tool_calls": response_msg.get("tool_calls")})
                         messages = trim_memory(messages)
 
                     # UI tools include a task reminder so Gemma never forgets the original goal.
@@ -3559,17 +3383,11 @@ def process_user_input(user_text, status_callback=None):
                                 audio_payload_tag = audio_match.group(1)
                             clean_memory_string = re.sub(r'\[NATIVE_AUDIO_PAYLOAD:.*?\]\s*', '', clean_memory_string)
                         clean_memory_string = compress_tool_output(tool_name, clean_memory_string, tool_arguments)
-                        if config.USE_NATIVE_TOOL_CALLS:
-                            messages.append({
-                                "role": "tool",
-                                "tool_call_id": tool_payload.get("tool_call_id", ""),
-                                "content": f"{clean_memory_string}{_ui_task_reminder}",
-                            })
-                        else:
-                            messages.append({
-                                "role": "user",
-                                "content": f"Tool Execution Result: {clean_memory_string}{_ui_task_reminder}",
-                            })
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_payload.get("tool_call_id", ""),
+                            "content": f"{clean_memory_string}{_ui_task_reminder}",
+                        })
                     messages = trim_memory(messages)
 
                     # Terminal actions that produce no meaningful follow-up reasoning.
@@ -3688,13 +3506,6 @@ def process_user_input(user_text, status_callback=None):
                         messages.remove(prod_msg)
                     print(f"[Aster Internal: Ghost prod yielded: '{response_text[:80]}...']")
 
-                # Strip leaked reasoning-artifact prefixes (QAT model occasionally emits
-                # internal-state fragments like "Hour acknowledged: no." before the real reply).
-                response_text = re.sub(
-                    r'^[A-Za-z][a-zA-Z ]{1,20}:\s*(?:yes|no|true|false|N/A|unknown|none)\.\s+',
-                    '', response_text,
-                )
-
                 final_response = response_text
                 _turn_outcome = "final_text"
                 print(f"Aster: {final_response}")
@@ -3785,27 +3596,6 @@ def process_user_input(user_text, status_callback=None):
             publish_sentiment("calm")
             return ""
 
-        def _rescue_unknown_wrapper(match: re.Match[str]) -> str:
-            # Rescue useful payload from malformed wrappers like
-            # response:unknown{value:<|"|>Actual Text<|"|>}.
-            inner = (match.group(1) or "").strip()
-            return inner if inner else ""
-
-        # Rescue trapped text from malformed response wrappers when present.
-        display_response = re.sub(
-            r"response:unknown\{value:<\|\"\|>(.*?)<\|\"\|>\}",
-            _rescue_unknown_wrapper,
-            display_response,
-            flags=re.DOTALL | re.IGNORECASE,
-        )
-        # If wrapper still exists but has no recoverable payload, wipe it.
-        display_response = re.sub(
-            r"response:unknown\{.*?\}",
-            "",
-            display_response,
-            flags=re.DOTALL | re.IGNORECASE,
-        )
-
         # Strip bracketed system notes so they are never read aloud.
         display_response = re.sub(
             r"\[(System Note|System Internal|System Memory Restored|Image Memory):.*?\]",
@@ -3814,27 +3604,9 @@ def process_user_input(user_text, status_callback=None):
             flags=re.DOTALL | re.IGNORECASE,
         )
 
-        # Strip Gemma special tokens that leak into responses.
-        display_response = re.sub(r"<end_of_turn>\s*", "", display_response)
-        display_response = re.sub(r"<start_of_turn>\s*\w*\s*", "", display_response)
-
-        # Strip leaked Gemma routing/tool tags.
-        display_response = re.sub(r"<channel\|>", "", display_response, flags=re.IGNORECASE)
-        display_response = re.sub(r"<tool_call\|>", "", display_response, flags=re.IGNORECASE)
+        # Strip any leaked special control tokens.
         display_response = re.sub(r"<\|.*?\|>", "", display_response, flags=re.DOTALL)
 
-        # Strip XML tool call blocks.
-        display_response = re.sub(
-            r"<tool_call>.*?</tool_call>",
-            "",
-            display_response,
-            flags=re.DOTALL | re.IGNORECASE,
-        )
-
-        # Strip residual tool call fragments missed by earlier passes.
-        display_response = re.sub(r"<\|?tool_call\|?>", "", display_response, flags=re.IGNORECASE)
-        display_response = re.sub(r"call:\w+\s*[\({][^})]*[\)}]", "", display_response, flags=re.DOTALL)
-        display_response = re.sub(r"\[TOOL:\s*\w+\s*\(.*?\)\]", "", display_response, flags=re.DOTALL)
 
         # Normalize whitespace after all cleanup passes.
         display_response = re.sub(r"\s+", " ", display_response).strip()

@@ -43,7 +43,6 @@ runtime:
   wake_word_model: hey_jarvis
   wake_word_threshold: 0.5
   wake_inactivity_timeout: 300   # seconds of silence before re-muting
-  use_native_tool_calls: true    # native OpenAI-format tool_calls (default). false = legacy XML-in-text rollback path
   # ── Reliability campaign (see .claude/skills/aster-gemma-reliability-campaign) ──
   reliability_log_enabled: true      # log-only counters (hallucination/apathy/loop retries) to Aster_Vault/reliability_log.jsonl — no behavior change
   loop_guard_enabled: true           # blocks/warns on degenerate repeated tool calls within one turn (core/loop_guard.py)

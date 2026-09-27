@@ -204,13 +204,6 @@ LLM_TOOL_TEMPERATURE = float(_cfg("settings", "llm_tool_temperature", default=LL
 LLM_TOOL_TOP_P       = float(_cfg("settings", "llm_tool_top_p",       default=LLM_TOP_P))
 LLM_TOOL_TOP_K       = int(_cfg("settings",   "llm_tool_top_k",       default=LLM_TOP_K))
 
-# When True (default), sends tools=ADMIN_TOOLS in the POST payload so llama-server
-# uses the Jinja template's native <|tool_call> grammar and the response carries
-# a structured tool_calls field instead of XML text.
-# Set runtime.use_native_tool_calls: false in self_config.yaml to revert to the
-# XML-in-text ReAct path (legacy _legacy_xml_parse functions).
-USE_NATIVE_TOOL_CALLS = bool(_cfg("runtime", "use_native_tool_calls", default=True))
-
 # ============================================================================
 # RELIABILITY CAMPAIGN — instrumentation + mitigations for Gemma agent failure
 # modes (hallucinated execution, post-tool apathy, degenerate tool loops,

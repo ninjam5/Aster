@@ -114,14 +114,12 @@ class TestExecuteGemmaCompletion:
         assert result["content"] == "hello world"
 
     def test_payload_includes_tools_when_passed(self, sample_messages, sample_admin_tools):
-        """When tools param is provided and USE_NATIVE_TOOL_CALLS is True, payload includes tools."""
-        import config
+        """When tools param is provided, payload includes tools."""
         from core.brain import _execute_gemma_completion
 
         msg = {"role": "assistant", "content": None, "tool_calls": []}
         with patch("requests.post", return_value=_make_mock_response(msg)) as mock_post:
-            with patch.object(config, "USE_NATIVE_TOOL_CALLS", True):
-                _execute_gemma_completion(messages=sample_messages, tools=sample_admin_tools)
+            _execute_gemma_completion(messages=sample_messages, tools=sample_admin_tools)
 
         sent_payload = mock_post.call_args.kwargs["json"]
         assert "tools" in sent_payload
@@ -140,19 +138,6 @@ class TestExecuteGemmaCompletion:
         assert "tools" not in sent_payload
         assert "tool_choice" not in sent_payload
 
-    def test_payload_omits_tools_when_flag_is_false(self, sample_messages, sample_admin_tools):
-        """When USE_NATIVE_TOOL_CALLS is False, tools param is ignored."""
-        import config
-        from core.brain import _execute_gemma_completion
-
-        msg = {"role": "assistant", "content": "hello"}
-        with patch("requests.post", return_value=_make_mock_response(msg)) as mock_post:
-            with patch.object(config, "USE_NATIVE_TOOL_CALLS", False):
-                _execute_gemma_completion(messages=sample_messages, tools=sample_admin_tools)
-
-        sent_payload = mock_post.call_args.kwargs["json"]
-        assert "tools" not in sent_payload
-
     def test_null_content_passes_through(self, sample_messages, sample_admin_tools):
         """None content (native tool call response) is preserved as None."""
         from core.brain import _execute_gemma_completion
@@ -164,114 +149,6 @@ class TestExecuteGemmaCompletion:
 
         assert result["content"] is None
         assert result["tool_calls"] is not None
-
-
-# ============================================================================
-# LEGACY XML PARSE TESTS
-# ============================================================================
-
-class TestLegacyXmlParse:
-    """Tests for the XML-in-text parsing path (USE_NATIVE_TOOL_CALLS = False)."""
-
-    def test_extracts_tool_name_and_args(self):
-        """Parse a well-formed XML tool call."""
-        from core.brain import _legacy_xml_parse
-
-        text = '<tool_call>{"name": "play_spotify_track", "arguments": {"query": "Bohemian Rhapsody"}}</tool_call>'
-        payload, cleaned = _legacy_xml_parse(text)
-
-        assert payload is not None
-        assert payload["name"] == "play_spotify_track"
-        assert payload["arguments"]["query"] == "Bohemian Rhapsody"
-        assert payload["error"] is None
-        assert cleaned == ""
-
-    def test_returns_none_when_no_tag(self):
-        """Normal text with no tool call returns (None, original_text)."""
-        from core.brain import _legacy_xml_parse
-
-        text = "The time is 3pm."
-        payload, cleaned = _legacy_xml_parse(text)
-
-        assert payload is None
-        assert cleaned == text
-
-    def test_normalizes_gemma_mangled_tags(self):
-        """Gemma's <|tool_call|>call> variant is normalized before matching."""
-        from core.brain import _legacy_xml_parse
-
-        text = '<|tool_call|>call>{"name": "get_current_time", "arguments": {}}</tool_call>'
-        payload, cleaned = _legacy_xml_parse(text)
-
-        assert payload is not None
-        assert payload["name"] == "get_current_time"
-
-    def test_normalizes_pipe_variant(self):
-        """<|tool_call|> (Qwen-style) is normalized to <tool_call>."""
-        from core.brain import _legacy_xml_parse
-
-        text = '<|tool_call|>{"name": "set_timer", "arguments": {"minutes": 5}}</tool_call>'
-        payload, cleaned = _legacy_xml_parse(text)
-
-        assert payload is not None
-        assert payload["name"] == "set_timer"
-        assert payload["arguments"]["minutes"] == 5
-
-    def test_json_decode_error_returns_sentinel(self):
-        """Malformed JSON returns sentinel dict with json_error=True."""
-        from core.brain import _legacy_xml_parse
-
-        text = '<tool_call>{"name": "broken", "arguments": {bad json}</tool_call>'
-        payload, _ = _legacy_xml_parse(text)
-
-        assert payload is not None
-        assert payload.get("json_error") is True
-        assert payload["name"] == ""
-
-    def test_cleaned_text_has_tag_removed(self):
-        """Text before/after the tag is preserved but the tag is stripped."""
-        from core.brain import _legacy_xml_parse
-
-        text = 'Sure!<tool_call>{"name": "get_current_time", "arguments": {}}</tool_call>Done.'
-        payload, cleaned = _legacy_xml_parse(text)
-
-        assert payload is not None
-        assert "<tool_call>" not in cleaned
-        assert "Sure!" in cleaned or "Done." in cleaned
-
-    def test_multi_extracts_all_blocks(self):
-        """_legacy_xml_parse_multi returns every tool call in document order."""
-        from core.brain import _legacy_xml_parse_multi
-
-        text = (
-            '<tool_call>{"name": "memorize_fact", "arguments": {"fact": "Fact 1"}}</tool_call>'
-            '<tool_call>{"name": "memorize_fact", "arguments": {"fact": "Fact 2"}}</tool_call>'
-        )
-        results = _legacy_xml_parse_multi(text)
-
-        assert len(results) == 2
-        assert results[0]["arguments"]["fact"] == "Fact 1"
-        assert results[1]["arguments"]["fact"] == "Fact 2"
-
-    def test_multi_skips_bad_json(self):
-        """_legacy_xml_parse_multi skips malformed blocks without crashing."""
-        from core.brain import _legacy_xml_parse_multi
-
-        text = (
-            '<tool_call>{bad}</tool_call>'
-            '<tool_call>{"name": "get_current_time", "arguments": {}}</tool_call>'
-        )
-        results = _legacy_xml_parse_multi(text)
-
-        assert len(results) == 1
-        assert results[0]["name"] == "get_current_time"
-
-    def test_multi_empty_text_returns_empty_list(self):
-        """No tool calls in text → empty list."""
-        from core.brain import _legacy_xml_parse_multi
-
-        results = _legacy_xml_parse_multi("No tool calls here.")
-        assert results == []
 
 
 # ============================================================================
@@ -390,7 +267,6 @@ class TestNativeToolCalling:
 
     def test_react_loop_native_assistant_message_format(self, sample_messages, sample_admin_tools):
         """After a tool call the assistant message in history has tool_calls field."""
-        import config
         from core.brain import _execute_gemma_completion, _extract_native_tool_call
 
         tc_msg = {
@@ -400,10 +276,9 @@ class TestNativeToolCalling:
                             "function": {"name": "get_current_time", "arguments": "{}"}}],
         }
         with patch("requests.post", return_value=_make_mock_response(tc_msg)):
-            with patch.object(config, "USE_NATIVE_TOOL_CALLS", True):
-                response_msg = _execute_gemma_completion(
-                    messages=sample_messages, tools=sample_admin_tools
-                )
+            response_msg = _execute_gemma_completion(
+                messages=sample_messages, tools=sample_admin_tools
+            )
 
         tool_payload, _ = _extract_native_tool_call(response_msg)
         assert tool_payload is not None
@@ -420,7 +295,6 @@ class TestNativeToolCalling:
 
     def test_react_loop_native_tool_result_format(self, sample_messages, sample_admin_tools):
         """Tool result is injected as role:tool with matching tool_call_id."""
-        import config
         from core.brain import _execute_gemma_completion, _extract_native_tool_call
 
         tc_msg = {
@@ -430,10 +304,9 @@ class TestNativeToolCalling:
                             "function": {"name": "get_current_time", "arguments": "{}"}}],
         }
         with patch("requests.post", return_value=_make_mock_response(tc_msg)):
-            with patch.object(config, "USE_NATIVE_TOOL_CALLS", True):
-                response_msg = _execute_gemma_completion(
-                    messages=sample_messages, tools=sample_admin_tools
-                )
+            response_msg = _execute_gemma_completion(
+                messages=sample_messages, tools=sample_admin_tools
+            )
 
         tool_payload, _ = _extract_native_tool_call(response_msg)
         tool_result = "2026-07-03 14:00:00"
@@ -446,21 +319,6 @@ class TestNativeToolCalling:
         assert tool_msg["role"] == "tool"
         assert tool_msg["tool_call_id"] == "call_abc"
         assert tool_msg["content"] == tool_result
-
-    def test_rollback_flag_uses_xml_path(self, sample_messages):
-        """When USE_NATIVE_TOOL_CALLS is False, payload has no tools key."""
-        import config
-        from core.brain import _execute_gemma_completion
-
-        msg = {"role": "assistant", "content": '<tool_call>{"name": "get_current_time", "arguments": {}}</tool_call>'}
-        with patch("requests.post", return_value=_make_mock_response(msg)) as mock_post:
-            with patch.object(config, "USE_NATIVE_TOOL_CALLS", False):
-                response_msg = _execute_gemma_completion(messages=sample_messages)
-
-        sent_payload = mock_post.call_args.kwargs["json"]
-        assert "tools" not in sent_payload
-        # XML tool call is in content, not in tool_calls
-        assert "<tool_call>" in (response_msg.get("content") or "")
 
     def test_claims_tool_execution_short_circuits_on_native_tool_calls(self):
         """_claims_tool_execution returns False immediately when tool_calls is set."""
@@ -787,7 +645,6 @@ class TestIntegrationSmoke:
 
     def test_full_native_tool_round_trip(self, sample_messages, sample_admin_tools):
         """user input → tool call → tool result message structure is correct."""
-        import config
         from core.brain import _execute_gemma_completion, _extract_native_tool_call
 
         tc_msg = {
@@ -802,20 +659,19 @@ class TestIntegrationSmoke:
         responses = [_make_mock_response(tc_msg), _make_mock_response(text_msg)]
 
         with patch("requests.post", side_effect=responses):
-            with patch.object(config, "USE_NATIVE_TOOL_CALLS", True):
                 # Round 1: tool call
-                r1 = _execute_gemma_completion(messages=messages, tools=sample_admin_tools)
-                tool_payload, _ = _extract_native_tool_call(r1)
-                assert tool_payload is not None
-                assert tool_payload["name"] == "get_current_time"
+            r1 = _execute_gemma_completion(messages=messages, tools=sample_admin_tools)
+            tool_payload, _ = _extract_native_tool_call(r1)
+            assert tool_payload is not None
+            assert tool_payload["name"] == "get_current_time"
 
-                # Inject assistant + tool result
-                messages.append({"role": "assistant", "content": None, "tool_calls": r1["tool_calls"]})
-                messages.append({"role": "tool", "tool_call_id": tool_payload["tool_call_id"], "content": "2026-07-03 14:30:00"})
+            # Inject assistant + tool result
+            messages.append({"role": "assistant", "content": None, "tool_calls": r1["tool_calls"]})
+            messages.append({"role": "tool", "tool_call_id": tool_payload["tool_call_id"], "content": "2026-07-03 14:30:00"})
 
-                # Round 2: final answer
-                r2 = _execute_gemma_completion(messages=messages)
-                assert "2026-07-03" in (r2.get("content") or "")
+            # Round 2: final answer
+            r2 = _execute_gemma_completion(messages=messages)
+            assert "2026-07-03" in (r2.get("content") or "")
 
 
 # ============================================================================

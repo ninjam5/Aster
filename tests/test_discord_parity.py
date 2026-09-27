@@ -11,7 +11,6 @@ import core.brain as brain
 
 @pytest.fixture(autouse=True)
 def _setup(monkeypatch, tmp_path):
-    monkeypatch.setattr(config, "USE_NATIVE_TOOL_CALLS", True)
     monkeypatch.setattr(config, "LOOP_GUARD_ENABLED", True)
     monkeypatch.setattr(config, "RELIABILITY_LOG_ENABLED", True)
     monkeypatch.setattr(config, "RELIABILITY_LOG_PATH", str(tmp_path / "rel.jsonl"))
