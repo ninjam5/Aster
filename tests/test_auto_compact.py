@@ -42,7 +42,7 @@ def _fill_history(n_msgs=40, chars=1000):
 
 def test_compact_replaces_history_with_restored_block(_isolated_messages):
     brain.messages.extend(_fill_history())  # ~10k tokens at 4 chars/token
-    with patch.object(brain, "_execute_gemma_completion", return_value=_mock_completion()) as mock_llm:
+    with patch.object(brain, "_execute_llm_completion", return_value=_mock_completion()) as mock_llm:
         result = brain._compact_context_locked("manual")
     assert "Compaction complete" in result
     assert len(brain.messages) == 2
@@ -58,7 +58,7 @@ def test_compact_replaces_history_with_restored_block(_isolated_messages):
 
 def test_compact_safety_lock_under_2000_tokens(_isolated_messages):
     brain.messages.append({"role": "user", "content": "short chat"})
-    with patch.object(brain, "_execute_gemma_completion") as mock_llm:
+    with patch.object(brain, "_execute_llm_completion") as mock_llm:
         result = brain._compact_context_locked("manual")
     mock_llm.assert_not_called()
     assert "wait till we hit 2000" in result
@@ -75,7 +75,7 @@ def test_compact_estimator_ignores_image_payloads(_isolated_messages):
             {"type": "text", "text": "look at this"},
         ],
     })
-    with patch.object(brain, "_execute_gemma_completion") as mock_llm:
+    with patch.object(brain, "_execute_llm_completion") as mock_llm:
         result = brain._compact_context_locked("manual")
     mock_llm.assert_not_called()  # ~256 image tokens + a few text tokens < 2000
     assert "wait till we hit 2000" in result
@@ -85,7 +85,7 @@ def test_compact_estimator_ignores_image_payloads(_isolated_messages):
 
 def _run_turn(user_text="hello there"):
     """Drive one process_user_input turn with a mocked final-text completion."""
-    with patch.object(brain, "_execute_gemma_completion", return_value=_mock_completion("Hi.")):
+    with patch.object(brain, "_execute_llm_completion", return_value=_mock_completion("Hi.")):
         return brain.process_user_input(user_text)
 
 
@@ -128,7 +128,7 @@ def test_auto_compact_flag_off_never_fires(_isolated_messages, monkeypatch):
 
 def test_manual_compact_command_uses_shared_helper(_isolated_messages):
     brain.messages.extend(_fill_history())
-    with patch.object(brain, "_execute_gemma_completion", return_value=_mock_completion()):
+    with patch.object(brain, "_execute_llm_completion", return_value=_mock_completion()):
         result = brain.process_user_input("/compact")
     assert "Compaction complete" in result
     assert len(brain.messages) == 2

@@ -205,7 +205,7 @@ LLM_TOOL_TOP_P       = float(_cfg("settings", "llm_tool_top_p",       default=LL
 LLM_TOOL_TOP_K       = int(_cfg("settings",   "llm_tool_top_k",       default=LLM_TOP_K))
 
 # ============================================================================
-# RELIABILITY CAMPAIGN — instrumentation + mitigations for Gemma agent failure
+# RELIABILITY CAMPAIGN — instrumentation + mitigations for agent failure
 # modes (hallucinated execution, post-tool apathy, degenerate tool loops,
 # long-context degradation). See .claude/skills/aster-gemma-reliability-campaign.
 # ============================================================================
@@ -250,11 +250,11 @@ AUTO_COMPACT_ENABLED   = bool(_cfg("runtime", "auto_compact", default=True))
 AUTO_COMPACT_THRESHOLD = float(_cfg("runtime", "auto_compact_threshold", default=0.75))
 
 # Icon captioner for the GUI locator's Track-2 fallback (YOLO icon boxes with
-# no readable text). "gemma" (default) captions crops with the resident Gemma 4
-# E4B via llama-server — zero extra VRAM. "off" disables captioning (Track 2
+# no readable text). "llm" (default) captions crops with the resident main
+# LLM via llama-server — zero extra VRAM. "off" disables captioning (Track 2
 # then matches OCR-readable boxes only). The Florence-2 icon_caption experiment
-# was dropped (never wired); Gemma is the sole captioner.
-ICON_CAPTIONER = str(_cfg("vision", "icon_captioner", default="gemma")).lower()
+# was dropped (never wired).
+ICON_CAPTIONER = str(_cfg("vision", "icon_captioner", default="llm")).lower()
 
 # ============================================================================
 # AUTOMATION MOTOR (DOM-first perception; see tools/dom.py, core/system1.py)
@@ -322,7 +322,7 @@ BROWSER_HUMAN_SEARCH = bool(_cfg("automation", "human_search", default=False))
 
 # Stage-3 System-1 decision kernel (core/system1.py). Default OFF: when on, the
 # DOM motor asks Laya to pick among ambiguous shortlist candidates and to answer
-# neutral-key yes/no state gates; low-margin answers escalate back to Gemma.
+# neutral-key yes/no state gates; low-margin answers escalate back to the main LLM.
 USE_LAYA_KERNEL = bool(_cfg("automation", "laya_kernel", default=False))
 LAYA_MODEL_ID = str(_cfg("automation", "laya_model",
                          default="convaiinnovations/laya"))

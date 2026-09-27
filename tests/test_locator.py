@@ -141,14 +141,14 @@ class TestTrack2:
         with patch.object(config, "ICON_CAPTIONER", "off"):
             assert _caption_crop(crop) == ""
 
-    def test_caption_crop_uses_gemma_and_lowercases(self):
+    def test_caption_crop_uses_llm_and_lowercases(self):
         import config
         import core.brain
         from tools.vision import _caption_crop
 
         crop = np.zeros((32, 32, 3), dtype=np.uint8)
-        with patch.object(config, "ICON_CAPTIONER", "gemma"), \
-             patch.object(core.brain, "_execute_gemma_completion",
+        with patch.object(config, "ICON_CAPTIONER", "llm"), \
+             patch.object(core.brain, "_execute_llm_completion",
                           return_value={"role": "assistant", "content": "  Settings Gear \n"}) as mock_llm:
             assert _caption_crop(crop) == "settings gear"
         sent = mock_llm.call_args.kwargs["messages"][0]["content"]
@@ -160,8 +160,8 @@ class TestTrack2:
         from tools.vision import _caption_crop
 
         crop = np.zeros((32, 32, 3), dtype=np.uint8)
-        with patch.object(config, "ICON_CAPTIONER", "gemma"), \
-             patch.object(core.brain, "_execute_gemma_completion", side_effect=RuntimeError("server down")):
+        with patch.object(config, "ICON_CAPTIONER", "llm"), \
+             patch.object(core.brain, "_execute_llm_completion", side_effect=RuntimeError("server down")):
             assert _caption_crop(crop) == ""
 
 

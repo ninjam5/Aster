@@ -9,7 +9,7 @@ narrow a page down. This module does exactly three deterministic things:
   3. execute    — resolve the chosen node by role+accessible-name and act
 
 A System-1 model (Laya, see core/system1.py) may later pick among ambiguous
-shortlists and Gemma remains the planner; neither is imported here. Public
+shortlists and the LLM remains the planner; neither is imported here. Public
 functions never raise: every failure returns None/[] so callers fall through
 to the existing OCR/YOLO tracks.
 

@@ -177,7 +177,7 @@ def _sanitize_topic(topic: str) -> list[str]:
 
 
 def research(topic: str) -> str:
-    """Single knowledge-lookup tool exposed to Gemma.
+    """Single knowledge-lookup tool exposed to the model.
 
     Pipeline: vault cache → Wikipedia → Firecrawl fallback.
     Auto-saves every successful result so repeat queries are instant.

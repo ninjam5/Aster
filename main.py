@@ -555,14 +555,14 @@ if config.bot:
 
             # LLM name extraction: pull the proper noun from conversational input
             try:
-                from core.brain import _execute_gemma_completion
+                from core.brain import _execute_llm_completion
                 extraction_prompt = (
                     f"Extract ONLY the person's name from this message. "
                     f"If the message is a first-person pronoun like 'It's me', 'me', or 'I', return the name '{config.OWNER_NAME}'. "
                     f"Return ONLY the exact name, with no punctuation or extra words. "
                     f"Message: '{raw_text}'"
                 )
-                clean_name = _execute_gemma_completion(
+                clean_name = _execute_llm_completion(
                     messages=[{"role": "user", "content": extraction_prompt}],
                     temperature=0.1,
                     n_predict=20,

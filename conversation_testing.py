@@ -27,7 +27,7 @@ persona's mood-adaptive rules actually fire.
 Prerequisite
 ------------
 llama-server must already be running on localhost:8080 (start.bat), serving the
-same Gemma build Aster uses. No other Aster services are needed.
+same model build Aster uses. No other Aster services are needed.
 
 Run
 ---
@@ -210,7 +210,7 @@ def load_persona(name: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Completion — same endpoint & shape as _execute_gemma_completion, but with the
+# Completion — same endpoint & shape as _execute_llm_completion, but with the
 # extra sampler knobs threaded through.
 # --------------------------------------------------------------------------- #
 def run_completion(system_prompt: str, turns: list[dict], preset: dict,
@@ -219,7 +219,7 @@ def run_completion(system_prompt: str, turns: list[dict], preset: dict,
         dict(t) for t in turns
     ]
     payload = {
-        "model": "gemma",
+        "model": "local",
         "messages": messages,
         "temperature": preset["temperature"],
         "top_p": preset["top_p"],

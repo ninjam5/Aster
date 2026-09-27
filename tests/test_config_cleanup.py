@@ -234,14 +234,14 @@ class TestReliabilityCampaignFlags:
         assert config.LLM_TOOL_TOP_P == config.LLM_TOP_P
         assert config.LLM_TOOL_TOP_K == config.LLM_TOP_K
 
-    def test_execute_gemma_completion_honors_explicit_tool_sampling(self, monkeypatch):
+    def test_execute_llm_completion_honors_explicit_tool_sampling(self, monkeypatch):
         """The admin loop's tool-round call site now passes
         config.LLM_TOOL_TEMPERATURE/_TOP_P/_TOP_K explicitly (core/brain.py) —
-        verify _execute_gemma_completion puts whatever it's given into the
+        verify _execute_llm_completion puts whatever it's given into the
         POST payload, so a divergent tool-sampling config actually takes
         effect rather than silently resolving back to the main knobs."""
         from unittest.mock import MagicMock, patch
-        from core.brain import _execute_gemma_completion
+        from core.brain import _execute_llm_completion
 
         monkeypatch.setattr(config, "LLM_TOOL_TEMPERATURE", 0.5)
         monkeypatch.setattr(config, "LLM_TOOL_TOP_P", 0.8)
@@ -253,7 +253,7 @@ class TestReliabilityCampaignFlags:
         mock_resp.json.return_value = {"choices": [{"message": {"role": "assistant", "content": "ok"}}]}
 
         with patch("requests.post", return_value=mock_resp) as mock_post:
-            _execute_gemma_completion(
+            _execute_llm_completion(
                 messages=[{"role": "user", "content": "hi"}],
                 temperature=config.LLM_TOOL_TEMPERATURE,
                 top_p=config.LLM_TOOL_TOP_P,

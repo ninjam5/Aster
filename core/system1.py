@@ -3,7 +3,7 @@
 Bounded, calibrated decisions over the DOM motor's shortlist: which operation,
 which element, is-this-state-true. Laya is a non-autoregressive, text-only
 decision model (choice / score / noul over predefined schemas) — it never
-generates text, so it cannot plan or type; Gemma plans and supplies free text,
+generates text, so it cannot plan or type; the LLM plans and supplies free text,
 deterministic code executes, and this kernel only picks among candidates.
 
 Responsibilities:
@@ -12,7 +12,7 @@ Responsibilities:
   - neutral-key choice schemas — deliberately avoids Laya's documented `noul`
     label-bias bug (#156) for yes/no gates
   - top-1/top-2 margin gating; below threshold or any failure the verdict is
-    `escalate=True` and the caller falls back to the existing Gemma/UIA path
+    `escalate=True` and the caller falls back to the existing LLM/UIA path
   - JSONL decision logging (config.LAYA_LOG_PATH) with the full distribution,
     for the Stage-4 calibration dataset
 

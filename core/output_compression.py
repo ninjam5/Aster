@@ -10,7 +10,7 @@ normalization in the loop (str(tool_result), post audio-tag extraction) keeps
 one choke point regardless of execute_tool()'s heterogeneous str|dict|None
 return type.
 
-The summarizer (core.brain._execute_gemma_completion) is injected via
+The summarizer (core.brain._execute_llm_completion) is injected via
 set_summarizer() at brain.py import time rather than imported directly, to
 avoid a core.brain <-> core.output_compression import cycle.
 
@@ -22,14 +22,14 @@ from typing import Callable, Optional
 
 import config
 
-# Injected by core/brain.py at import time: set_summarizer(_execute_gemma_completion)
+# Injected by core/brain.py at import time: set_summarizer(_execute_llm_completion)
 _summarizer: Optional[Callable[..., dict]] = None
 
 
 def set_summarizer(fn: Callable[..., dict]) -> None:
     """Register the completion function used by the 'summarize' policy.
     Expected signature: fn(messages, temperature=..., n_predict=...) -> dict
-    (same shape as core.brain._execute_gemma_completion)."""
+    (same shape as core.brain._execute_llm_completion)."""
     global _summarizer
     _summarizer = fn
 

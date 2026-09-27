@@ -29,7 +29,7 @@ import config
 AWARENESS_ACTIVE = bool(getattr(config, "AWARENESS_ACTIVE", True))
 _lock = threading.Lock()
 
-# Brain-busy semaphore — the daemon defers its Gemma call when the main brain
+# Brain-busy semaphore — the daemon defers its LLM call when the main brain
 # is mid-turn (prevents racing on the single llama-server instance).
 _brain_busy = threading.Event()
 
@@ -119,7 +119,7 @@ _SCENE_PROMPT = (
 
 
 def _brief_scene_describe(screen_b64: str | None, webcam_b64: str | None) -> dict:
-    """One Gemma call that captures screen + webcam at low token budget.
+    """One LLM call that captures screen + webcam at low token budget.
 
     Returns a dict with keys ``screen``, ``webcam``, ``lighting``. Missing
     images are tolerated (returns None for that field). Bypasses tools and
@@ -139,8 +139,8 @@ def _brief_scene_describe(screen_b64: str | None, webcam_b64: str | None) -> dic
     content.append({"type": "text", "text": _SCENE_PROMPT})
 
     try:
-        from core.brain import _execute_gemma_completion
-        reply = _execute_gemma_completion(
+        from core.brain import _execute_llm_completion
+        reply = _execute_llm_completion(
             messages=[{"role": "user", "content": content}],
             temperature=0.2,
             n_predict=120,
@@ -338,7 +338,7 @@ def _send_telegram(text: str) -> None:
 
 
 def _detect_one_change(before: str, after: str) -> str | None:
-    """Tiny Gemma call: name one concrete change between two webcam descriptions."""
+    """Tiny LLM call: name one concrete change between two webcam descriptions."""
     if not before or not after:
         return None
     prompt = (
@@ -350,8 +350,8 @@ def _detect_one_change(before: str, after: str) -> str | None:
         "No preamble, no quotes."
     )
     try:
-        from core.brain import _execute_gemma_completion
-        reply = _execute_gemma_completion(
+        from core.brain import _execute_llm_completion
+        reply = _execute_llm_completion(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
             n_predict=40,

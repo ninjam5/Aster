@@ -498,7 +498,7 @@ no preamble, no explanation, no markdown header."""
 def _generate_persona_sync(name: str, answers: dict) -> tuple[str, str]:
     """Synchronous: call the LLM to generate a persona body, save it, return (slug, body)."""
     import re as _re2
-    from core.brain import _execute_gemma_completion, _build_system_content
+    from core.brain import _execute_llm_completion, _build_system_content
     import config as _c
 
     meta = _PERSONA_GEN_META.format(
@@ -512,7 +512,7 @@ def _generate_persona_sync(name: str, answers: dict) -> tuple[str, str]:
     gen_messages = [
         {"role": "user", "content": meta},
     ]
-    body = _execute_gemma_completion(gen_messages, temperature=0.8, n_predict=600).get("content") or ""
+    body = _execute_llm_completion(gen_messages, temperature=0.8, n_predict=600).get("content") or ""
     body = body.strip()
 
     slug = _re2.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "custom"

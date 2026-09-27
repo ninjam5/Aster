@@ -405,7 +405,7 @@ def _pop_oldest_turn_unit(msg_list) -> None:
     In the native tool-calling path an assistant message carrying tool_calls
     is followed by role:"tool" messages whose tool_call_id points at it.
     Popping only the assistant half leaves orphaned tool messages that the
-    Gemma Jinja template / model can choke on — so the pair is one unit:
+    model/template can choke on — so the pair is one unit:
     the assistant message and every immediately-following role:"tool" message
     go together. A role:"tool" message found alone at index 1 is already an
     orphan and is likewise popped so it never survives a trim.

@@ -61,13 +61,13 @@ class TestFlorenceRemoval:
         with patch("config.ICON_CAPTIONER", "off"):
             assert vision._caption_crop(np.zeros((32, 32, 3), dtype=np.uint8)) == ""
 
-    def test_florence_value_falls_back_to_gemma_without_crash(self):
+    def test_florence_value_falls_back_to_llm_without_crash(self):
         """The reserved 'florence' value is gone; a stale config must not crash."""
         import core.brain
 
         crop = np.zeros((32, 32, 3), dtype=np.uint8)
         with patch("config.ICON_CAPTIONER", "florence"), \
-             patch.object(core.brain, "_execute_gemma_completion",
+             patch.object(core.brain, "_execute_llm_completion",
                           return_value={"role": "assistant", "content": "Settings Gear"}) as llm:
             assert vision._caption_crop(crop) == "settings gear"
         assert llm.called

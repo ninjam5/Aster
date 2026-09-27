@@ -86,9 +86,9 @@ automation:
   # laya_log_path: Aster_Vault/system1_log.jsonl   # decision log for calibration
 
 vision:
-  # Track-2 icon captioner for the pixel fallback. "gemma" = resident model,
+  # Track-2 icon captioner for the pixel fallback. "llm" = resident model,
   # zero extra VRAM; "off" = match only OCR-readable boxes (no captioner call).
-  icon_captioner: gemma
+  icon_captioner: llm
 
 integrations:
   # Intended state. Live availability is reported by tools/self_knowledge.py

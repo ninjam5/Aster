@@ -81,19 +81,19 @@ def llm_call(
     """
     POST to llama-server /v1/chat/completions with native tool calling enabled.
 
-    Mirrors _execute_gemma_completion() in brain.py — same payload shape (incl.
+    Mirrors _execute_llm_completion() in brain.py — same payload shape (incl.
     `tools`/`tool_choice="auto"`) — but without the debug spam.
 
     Returns:
         message     — full choices[0]["message"] dict (role/content/tool_calls),
-                      same shape _execute_gemma_completion returns
+                      same shape _execute_llm_completion returns
         metrics     — {prompt_tokens, completion_tokens, elapsed_s,
                        gen_tok_per_s, prompt_tok_per_s}
     """
     msgs = list(messages)
 
     payload = {
-        "model": "gemma",
+        "model": "local",
         "messages": msgs,
         "temperature": temperature,
         "max_tokens": n_predict,

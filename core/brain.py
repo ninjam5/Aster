@@ -74,9 +74,9 @@ def _strip_think_tags(text: str) -> str:
 
 
 # ============================================================================
-# NATIVE GEMMA REST ADAPTER — Bypasses OpenAI wrapper for mmproj vision
+# NATIVE LLM REST ADAPTER — OpenAI-format chat completions with mmproj vision
 # ============================================================================
-def _execute_gemma_completion(messages: list[dict], temperature: float = None, n_predict: int = 1000, top_p: float = None, top_k: int = None, tools: list[dict] | None = None) -> dict:
+def _execute_llm_completion(messages: list[dict], temperature: float = None, n_predict: int = 1000, top_p: float = None, top_k: int = None, tools: list[dict] | None = None) -> dict:
     """Sends messages in OpenAI chat format to llama-server /v1/chat/completions.
 
     Returns the full choices[0]["message"] dict (keys: role, content, tool_calls).
@@ -95,10 +95,10 @@ def _execute_gemma_completion(messages: list[dict], temperature: float = None, n
         top_p = config.LLM_TOP_P
     if top_k is None:
         top_k = config.LLM_TOP_K
-    print(f'[PIPELINE DEBUG] _execute_gemma_completion called with {len(messages)} messages, last message role={messages[-1]["role"]}, content type={type(messages[-1]["content"]).__name__}, has_list={isinstance(messages[-1]["content"], list)}')
+    print(f'[PIPELINE DEBUG] _execute_llm_completion called with {len(messages)} messages, last message role={messages[-1]["role"]}, content type={type(messages[-1]["content"]).__name__}, has_list={isinstance(messages[-1]["content"], list)}')
 
     payload = {
-        "model": "gemma",
+        "model": "local",
         "messages": messages,
         "temperature": temperature,
         "top_p": top_p,
@@ -156,7 +156,7 @@ def _execute_gemma_completion(messages: list[dict], temperature: float = None, n
 # Register the completion function as the summarizer for the 'research' tool's
 # output-compression policy (core/output_compression.py) — injected rather than
 # imported there to avoid a core.brain <-> core.output_compression cycle.
-_set_output_summarizer(_execute_gemma_completion)
+_set_output_summarizer(_execute_llm_completion)
 
 
 _CUTOFF_REFUSAL_RE = re.compile(
@@ -174,7 +174,7 @@ def _claims_knowledge_cutoff(response_text: str) -> bool:
     """Detect when the model refuses to answer by citing its knowledge cutoff.
 
     Returns True if the response contains a cutoff-refusal pattern, indicating
-    Gemma gave up on a question instead of calling the research tool first.
+    The model gave up on a question instead of calling the research tool first.
     """
     return bool(_CUTOFF_REFUSAL_RE.search(response_text or ""))
 
@@ -1676,10 +1676,10 @@ def _execute_tool_impl(tool_name, arguments):
                 )}
             ]
         }]
-        desc = (_execute_gemma_completion(messages=screen_msgs, temperature=0.1, n_predict=800).get("content") or "")
+        desc = (_execute_llm_completion(messages=screen_msgs, temperature=0.1, n_predict=800).get("content") or "")
         if not desc or not desc.strip():
             # Apathy fallback: retry once at higher temperature
-            desc = (_execute_gemma_completion(messages=screen_msgs, temperature=0.4, n_predict=800).get("content") or "")
+            desc = (_execute_llm_completion(messages=screen_msgs, temperature=0.4, n_predict=800).get("content") or "")
         if not desc or not desc.strip():
             desc = "[Screen description unavailable — proceed based on task context and visible element names.]"
         ui_guide = _get_ui_guide(desc)
@@ -1734,7 +1734,7 @@ def _execute_tool_impl(tool_name, arguments):
             ]
         }]
 
-        vision_result = (_execute_gemma_completion(messages=webcam_msgs, temperature=0.2).get("content") or "")
+        vision_result = (_execute_llm_completion(messages=webcam_msgs, temperature=0.2).get("content") or "")
         return f"[System Note: Webcam captured and analyzed successfully.]\n\nWebcam Analysis:\n{vision_result}"
     elif tool_name == "toggle_gesture_mode":
         import tools.gesture as gesture_mod
@@ -2299,7 +2299,7 @@ def evaluate_and_memorize(reason):
         })
         
         # 4. Execute the tool call and save every fact found in the response.
-        response_msg = _execute_gemma_completion(
+        response_msg = _execute_llm_completion(
             messages=eval_messages,
             temperature=0.3,
             tools=ADMIN_TOOLS,
@@ -2631,7 +2631,7 @@ def process_discord_chat(sender_name: str, user_message: str) -> str:
             for _ in range(4):
                 _rounds_used += 1
                 eval_msgs = list(history)
-                response_msg = _execute_gemma_completion(
+                response_msg = _execute_llm_completion(
                     messages=eval_msgs,
                     temperature=config.LLM_TEMPERATURE,
                     tools=DISCORD_TOOLS,
@@ -2844,7 +2844,7 @@ def _compact_context_locked(trigger: str = "manual") -> str:
         "content": "[SYSTEM OVERRIDE] Write a highly dense, factual summary of our entire conversation. You MUST preserve any '[Image Memory: ...]' transcriptions exactly as they were written. Do not use conversational filler."
     })
 
-    summary = (_execute_gemma_completion(messages=compact_prompt, temperature=0.3).get("content") or "")
+    summary = (_execute_llm_completion(messages=compact_prompt, temperature=0.3).get("content") or "")
 
     # Restore state, setting summary as assistant memory
     messages = [messages[0], {"role": "assistant", "content": f"[System Memory Restored: I compacted my timeline to save VRAM. Here is everything I remember, including visual data: {summary}]"}]
@@ -2962,7 +2962,7 @@ def process_user_input(user_text, status_callback=None):
             # inside the message, where purge_media_cache extracts it into the
             # _AUDIO_TOMBSTONE. No Whisper, no extra model VRAM cost.
             #
-            # We POST directly (not via _execute_gemma_completion) because Gemma
+            # We POST directly (not via _execute_llm_completion) because Gemma
             # 4 routinely emits short factual answers into `reasoning_content`
             # instead of `content` — we need to read both fields and fall back.
             # Neutral default — must NEVER imply the audio is missing, or the
@@ -2971,7 +2971,7 @@ def process_user_input(user_text, status_callback=None):
             vn_summary = "(voice note — content is in the attached audio)"
             try:
                 summary_payload = {
-                    "model": "gemma",
+                    "model": "local",
                     "messages": [
                         {"role": "system", "content": (
                             "You transcribe and summarise voice notes. An audio "
@@ -3204,7 +3204,7 @@ def process_user_input(user_text, status_callback=None):
                         f'Begin with a polite greeting to {_relay_target.title()}. '
                         f'Example: "Good evening, {_relay_target.title()}. The Boss has asked me to convey that {_relay_payload.lower()}."'
                     )})
-                response_msg = _execute_gemma_completion(
+                response_msg = _execute_llm_completion(
                     messages=eval_msgs,
                     temperature=config.LLM_TOOL_TEMPERATURE,
                     top_p=config.LLM_TOOL_TOP_P,
@@ -3351,7 +3351,7 @@ def process_user_input(user_text, status_callback=None):
                         messages.append({"role": "assistant", "content": response_msg.get("content"), "tool_calls": response_msg.get("tool_calls")})
                         messages = trim_memory(messages)
 
-                    # UI tools include a task reminder so Gemma never forgets the original goal.
+                    # UI tools include a task reminder so the model never forgets the original goal.
                     _UI_TOOL_NAMES = {
                         "look_at_screen", "smart_click", "smart_type",
                         "type_text", "press_key", "smart_scroll",
@@ -3497,7 +3497,7 @@ def process_user_input(user_text, status_callback=None):
                     }
                     messages.append(prod_msg)
 
-                    response_msg = _execute_gemma_completion(messages=messages, temperature=config.LLM_TEMPERATURE)
+                    response_msg = _execute_llm_completion(messages=messages, temperature=config.LLM_TEMPERATURE)
                     response_text = (response_msg.get("content") or "").strip()
 
                     # Append the final response, then wipe the ghost prod from history
@@ -3518,7 +3518,7 @@ def process_user_input(user_text, status_callback=None):
                 # force the LLM to summarize what it has so far
                 print(f"[Aster Internal: Hit max tool rounds ({MAX_TOOL_ROUNDS}). Forcing final response...]")
                 _turn_outcome = "max_rounds"
-                final_response = (_execute_gemma_completion(messages=messages, temperature=config.LLM_TEMPERATURE).get("content") or "")
+                final_response = (_execute_llm_completion(messages=messages, temperature=config.LLM_TEMPERATURE).get("content") or "")
                 print(f"Aster: {final_response}")
                 messages.append({"role": "assistant", "content": final_response})
                 messages = trim_memory(messages)

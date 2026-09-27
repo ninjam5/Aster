@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 # ============================================================================
 
 def _make_mock_response(message: dict):
-    """Return a mock requests.Response for _execute_gemma_completion."""
+    """Return a mock requests.Response for _execute_llm_completion."""
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.text = json.dumps({"choices": [{"message": message}]})
@@ -85,19 +85,19 @@ def sample_messages():
 
 
 # ============================================================================
-# _execute_gemma_completion TESTS
+# _execute_llm_completion TESTS
 # ============================================================================
 
-class TestExecuteGemmaCompletion:
+class TestExecuteLlmCompletion:
     """Tests for the llama-server REST adapter."""
 
     def test_returns_message_dict(self, sample_messages):
-        """_execute_gemma_completion returns the full message dict, not a bare string."""
-        from core.brain import _execute_gemma_completion
+        """_execute_llm_completion returns the full message dict, not a bare string."""
+        from core.brain import _execute_llm_completion
 
         expected_msg = {"role": "assistant", "content": "It is 3pm."}
         with patch("requests.post", return_value=_make_mock_response(expected_msg)):
-            result = _execute_gemma_completion(messages=sample_messages)
+            result = _execute_llm_completion(messages=sample_messages)
 
         assert isinstance(result, dict)
         assert result["role"] == "assistant"
@@ -105,21 +105,21 @@ class TestExecuteGemmaCompletion:
 
     def test_content_is_stripped(self, sample_messages):
         """Leading/trailing whitespace is removed from content."""
-        from core.brain import _execute_gemma_completion
+        from core.brain import _execute_llm_completion
 
         msg = {"role": "assistant", "content": "  hello world  "}
         with patch("requests.post", return_value=_make_mock_response(msg)):
-            result = _execute_gemma_completion(messages=sample_messages)
+            result = _execute_llm_completion(messages=sample_messages)
 
         assert result["content"] == "hello world"
 
     def test_payload_includes_tools_when_passed(self, sample_messages, sample_admin_tools):
         """When tools param is provided, payload includes tools."""
-        from core.brain import _execute_gemma_completion
+        from core.brain import _execute_llm_completion
 
         msg = {"role": "assistant", "content": None, "tool_calls": []}
         with patch("requests.post", return_value=_make_mock_response(msg)) as mock_post:
-            _execute_gemma_completion(messages=sample_messages, tools=sample_admin_tools)
+            _execute_llm_completion(messages=sample_messages, tools=sample_admin_tools)
 
         sent_payload = mock_post.call_args.kwargs["json"]
         assert "tools" in sent_payload
@@ -128,11 +128,11 @@ class TestExecuteGemmaCompletion:
 
     def test_payload_omits_tools_when_none(self, sample_messages):
         """When tools param is None, the payload has no 'tools' key."""
-        from core.brain import _execute_gemma_completion
+        from core.brain import _execute_llm_completion
 
         msg = {"role": "assistant", "content": "hello"}
         with patch("requests.post", return_value=_make_mock_response(msg)) as mock_post:
-            _execute_gemma_completion(messages=sample_messages)
+            _execute_llm_completion(messages=sample_messages)
 
         sent_payload = mock_post.call_args.kwargs["json"]
         assert "tools" not in sent_payload
@@ -140,12 +140,12 @@ class TestExecuteGemmaCompletion:
 
     def test_null_content_passes_through(self, sample_messages, sample_admin_tools):
         """None content (native tool call response) is preserved as None."""
-        from core.brain import _execute_gemma_completion
+        from core.brain import _execute_llm_completion
 
         tc = [{"id": "call_1", "type": "function", "function": {"name": "get_current_time", "arguments": "{}"}}]
         msg = {"role": "assistant", "content": None, "tool_calls": tc}
         with patch("requests.post", return_value=_make_mock_response(msg)):
-            result = _execute_gemma_completion(messages=sample_messages, tools=sample_admin_tools)
+            result = _execute_llm_completion(messages=sample_messages, tools=sample_admin_tools)
 
         assert result["content"] is None
         assert result["tool_calls"] is not None
@@ -267,7 +267,7 @@ class TestNativeToolCalling:
 
     def test_react_loop_native_assistant_message_format(self, sample_messages, sample_admin_tools):
         """After a tool call the assistant message in history has tool_calls field."""
-        from core.brain import _execute_gemma_completion, _extract_native_tool_call
+        from core.brain import _execute_llm_completion, _extract_native_tool_call
 
         tc_msg = {
             "role": "assistant",
@@ -276,7 +276,7 @@ class TestNativeToolCalling:
                             "function": {"name": "get_current_time", "arguments": "{}"}}],
         }
         with patch("requests.post", return_value=_make_mock_response(tc_msg)):
-            response_msg = _execute_gemma_completion(
+            response_msg = _execute_llm_completion(
                 messages=sample_messages, tools=sample_admin_tools
             )
 
@@ -295,7 +295,7 @@ class TestNativeToolCalling:
 
     def test_react_loop_native_tool_result_format(self, sample_messages, sample_admin_tools):
         """Tool result is injected as role:tool with matching tool_call_id."""
-        from core.brain import _execute_gemma_completion, _extract_native_tool_call
+        from core.brain import _execute_llm_completion, _extract_native_tool_call
 
         tc_msg = {
             "role": "assistant",
@@ -304,7 +304,7 @@ class TestNativeToolCalling:
                             "function": {"name": "get_current_time", "arguments": "{}"}}],
         }
         with patch("requests.post", return_value=_make_mock_response(tc_msg)):
-            response_msg = _execute_gemma_completion(
+            response_msg = _execute_llm_completion(
                 messages=sample_messages, tools=sample_admin_tools
             )
 
@@ -645,7 +645,7 @@ class TestIntegrationSmoke:
 
     def test_full_native_tool_round_trip(self, sample_messages, sample_admin_tools):
         """user input → tool call → tool result message structure is correct."""
-        from core.brain import _execute_gemma_completion, _extract_native_tool_call
+        from core.brain import _execute_llm_completion, _extract_native_tool_call
 
         tc_msg = {
             "role": "assistant",
@@ -660,7 +660,7 @@ class TestIntegrationSmoke:
 
         with patch("requests.post", side_effect=responses):
                 # Round 1: tool call
-            r1 = _execute_gemma_completion(messages=messages, tools=sample_admin_tools)
+            r1 = _execute_llm_completion(messages=messages, tools=sample_admin_tools)
             tool_payload, _ = _extract_native_tool_call(r1)
             assert tool_payload is not None
             assert tool_payload["name"] == "get_current_time"
@@ -670,7 +670,7 @@ class TestIntegrationSmoke:
             messages.append({"role": "tool", "tool_call_id": tool_payload["tool_call_id"], "content": "2026-07-03 14:30:00"})
 
             # Round 2: final answer
-            r2 = _execute_gemma_completion(messages=messages)
+            r2 = _execute_llm_completion(messages=messages)
             assert "2026-07-03" in (r2.get("content") or "")
 
 

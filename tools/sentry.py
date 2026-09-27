@@ -17,8 +17,8 @@ notification_cooldowns = {}
 COOLDOWN_SECONDS = 300 # 5 minutes
 
 
-def _analyze_frame_with_gemma(img_b64: str) -> str | None:
-    """Send a webcam frame to Gemma for scene analysis via native REST endpoint."""
+def _analyze_frame_with_llm(img_b64: str) -> str | None:
+    """Send a webcam frame to the vision model for scene analysis via native REST endpoint."""
     try:
         # Sanitize Base64: strip data URI prefixes, newlines, and whitespace
         clean_b64 = img_b64.split(",", 1)[-1] if "," in img_b64 else img_b64
@@ -39,10 +39,10 @@ def _analyze_frame_with_gemma(img_b64: str) -> str | None:
             ],
         }]
 
-        from core.brain import _execute_gemma_completion
-        return _execute_gemma_completion(messages=one_shot_msg, temperature=0.1, n_predict=20).get("content") or ""
+        from core.brain import _execute_llm_completion
+        return _execute_llm_completion(messages=one_shot_msg, temperature=0.1, n_predict=20).get("content") or ""
     except Exception as e:
-        print(f"[Sentry Gemma] Vision analysis failed: {e}")
+        print(f"[Sentry Vision] Vision analysis failed: {e}")
         return None
 
 
@@ -52,13 +52,13 @@ def execute_sentry_sweep():
         return
 
     try:
-        # Capture raw frame as base64 for Gemma native vision
+        # Capture raw frame as base64 for native vision
         img_b64 = capture_frame_base64()
         if not img_b64:
             return
 
-        # Route 1: Use Gemma native vision via REST endpoint
-        analysis = _analyze_frame_with_gemma(img_b64)
+        # Route 1: Use native vision via REST endpoint
+        analysis = _analyze_frame_with_llm(img_b64)
         if analysis:
             analysis_upper = analysis.upper()
             current_time = time.time()

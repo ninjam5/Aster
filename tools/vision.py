@@ -114,14 +114,14 @@ def capture_webcam_base64(camera_index=0):
 
 
 # ============================================================================
-# NATIVE MULTIMODAL VISION — Gemma mmproj direct injection
+# NATIVE MULTIMODAL VISION — direct mmproj injection
 # ============================================================================
 
 def capture_frame_base64(camera_index=0) -> str | None:
     """Captures a webcam frame and returns raw base64 for multimodal injection.
 
     Unlike capture_webcam_base64(), this does NOT run face_recognition or any
-    detection — the raw frame is sent directly to Gemma's mmproj for analysis.
+    detection — the raw frame is sent directly to the model's mmproj for analysis.
     """
     try:
         cap = cv2.VideoCapture(camera_index)
@@ -176,7 +176,7 @@ def get_primary_face_crop_rgb(frame_or_b64) -> "np.ndarray | None":
 def capture_screen_base64() -> str | None:
     """Captures the primary monitor and returns raw base64 for multimodal injection.
 
-    Bypasses YOLOv8/pytesseract — the raw screenshot is sent to Gemma's mmproj.
+    Bypasses YOLOv8/pytesseract — the raw screenshot is sent to the mmproj.
     """
     if mss is None:
         return None
@@ -294,8 +294,8 @@ def re_examine_image(filepath: str, specific_question: str) -> str:
             }
         ]
 
-        from core.brain import _execute_gemma_completion
-        answer = _execute_gemma_completion(messages=one_shot_msg, temperature=0.2).get("content") or ""
+        from core.brain import _execute_llm_completion
+        answer = _execute_llm_completion(messages=one_shot_msg, temperature=0.2).get("content") or ""
 
         if not answer:
             return "Error: Visual inference returned an empty response."
@@ -329,8 +329,8 @@ def start_screen_watcher(target_text: str) -> str:
                         {"type": "text", "text": "Extract all visible text from this screen."}
                     ]
                 }]
-                from core.brain import _execute_gemma_completion
-                screen_data = _execute_gemma_completion(messages=screen_msgs, temperature=0.1).get("content") or ""
+                from core.brain import _execute_llm_completion
+                screen_data = _execute_llm_completion(messages=screen_msgs, temperature=0.1).get("content") or ""
 
                 if not screen_data:
                     continue
@@ -611,13 +611,12 @@ _CAPTION_MAX_CROPS = 8
 def _caption_crop(crop_bgr: np.ndarray) -> str:
     """Describe an icon crop's FUNCTION using the configured captioner.
 
-    Captioner is the resident Gemma 4 E4B (config.ICON_CAPTIONER = "gemma") —
-    natively trained for UI understanding, zero extra VRAM, and a small zoomed
+    Captioner is the resident main LLM (config.ICON_CAPTIONER = "llm") —
     crop is a far easier task than full-screen grounding. "off" disables
-    captioning. (The Florence-2 icon_caption experiment was dropped — it was
-    never wired; Gemma is the sole captioner.)"""
+    captioning. (The Florence-2 icon_caption experiment was dropped —
+    never wired.)"""
     import config as _config
-    mode = getattr(_config, 'ICON_CAPTIONER', 'gemma')
+    mode = getattr(_config, 'ICON_CAPTIONER', 'llm')
     if mode == 'off':
         return ''
     try:
@@ -630,7 +629,7 @@ def _caption_crop(crop_bgr: np.ndarray) -> str:
         if not ok:
             return ''
         b64 = base64.b64encode(buf.tobytes()).decode()
-        from core.brain import _execute_gemma_completion
+        from core.brain import _execute_llm_completion
         msgs = [{
             'role': 'user',
             'content': [
@@ -642,7 +641,7 @@ def _caption_crop(crop_bgr: np.ndarray) -> str:
                 )},
             ],
         }]
-        raw = _execute_gemma_completion(messages=msgs, temperature=0.1, n_predict=24)
+        raw = _execute_llm_completion(messages=msgs, temperature=0.1, n_predict=24)
         return (raw.get('content') or '').strip().lower()
     except Exception as e:
         print(f'[Locator] caption error: {e}')
@@ -877,196 +876,13 @@ def locate_ui_elements_boxed(goal: str, threshold: float = 0.5) -> list[dict]:
     return deduped
 
 
-'''
-# ============================================================================
-# LAYER 1 — SCREEN UNDERSTANDING (Gemma Vision) [ARCHIVED — legacy YOLO pipeline]
-# ============================================================================
-def analyze_screen_for_action(goal: str) -> dict:
-    """Identify the UI element that satisfies `goal` using YOLO + free-text Gemma.
-
-    Architecture:
-      1. parse_screen() → YOLO + OCR → populates UI_ELEMENT_COORDS, returns element list
-      2. Gemma (free text, no JSON) selects which element ID to target
-      3. Returns {"element_id": N} for use with ui_click(N)
-    Returns {"error": "..."} on failure.
-    """
-    # 1. Run YOLO pipeline — use cache if still fresh
-    if time.time() - _ELEMENT_CACHE_TS > _ELEMENT_CACHE_TTL:
-        element_list_str = parse_screen()
-    else:
-        with _UI_COORDS_LOCK:
-            ids = sorted(UI_ELEMENT_COORDS.keys())
-        element_list_str = f"Cached UI elements (IDs available): {ids}"
-
-    if not element_list_str or "error" in element_list_str.lower():
-        element_list_str = parse_screen()   # force refresh if previous result was bad
-
-    if not element_list_str or element_list_str == "[]":
-        return {"error": "parse_screen returned no elements — YOLO/OCR found nothing on screen"}
-
-    # 2. Capture screenshot for Gemma visual context
-    b64 = capture_screen_base64()
-    if not b64:
-        return {"error": "Screen capture failed"}
-
-    # 3. Ask Gemma: free text, just return the element ID number (not JSON)
-    from core.brain import _execute_gemma_completion
-    prompt_msgs = [{
-        "role": "user",
-        "content": [
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-            {"type": "text", "text": (
-                f"UI elements detected on screen:\n{element_list_str}\n\n"
-                f"Goal: {goal}\n\n"
-                "Which element ID should I click? Reply with just the number, e.g.: 7"
-            )},
-        ],
-    }]
-    raw = _execute_gemma_completion(messages=prompt_msgs, temperature=0.1, n_predict=20)
-    print(f"[UI DEBUG] Gemma element selection: {repr(raw)}")
-
-    # 4. Extract integer from Gemma's free-text response
-    m = re.search(r"\b(\d+)\b", raw or "")
-    if not m:
-        return {"error": f"Gemma returned no element ID: {repr(raw)}"}
-
-    element_id = int(m.group(1))
-    with _UI_COORDS_LOCK:
-        if element_id not in UI_ELEMENT_COORDS:
-            return {"error": f"Element ID {element_id} not in cache. Call parse_screen first."}
-
-    return {"element_id": element_id}
 
 
 # ============================================================================
-# LAYER 2 — COORDINATE RESOLUTION (pytesseract + OpenCV)
-# ============================================================================
-def resolve_element_coordinates(element_info: dict) -> tuple | None:
-    """Takes Gemma's JSON output and finds the actual pixel coordinates.
-
-    Uses pytesseract for text elements and region-based center fallback for others.
-    Returns (x, y) tuple or None.
-    """
-    try:
-        with mss.mss() as sct:
-            monitor = sct.monitors[1]
-            raw = sct.grab(monitor)
-            frame_bgr = cv2.cvtColor(np.array(raw), cv2.COLOR_BGRA2BGR)
-            screen_h, screen_w = frame_bgr.shape[:2]
-    except Exception:
-        return None
-
-    # Get logical screen dimensions (what pyautogui uses) for DPI scaling
-    import pyautogui as _pg
-    logical_w, logical_h = _pg.size()
-    scale_x = logical_w / screen_w
-    scale_y = logical_h / screen_h
-
-    # Region map — divide screen into 9 zones
-    region_bounds = {
-        'top-left':      (0,             0,             screen_w//3,     screen_h//3),
-        'top-center':    (screen_w//3,   0,             2*screen_w//3,   screen_h//3),
-        'top-right':     (2*screen_w//3, 0,             screen_w,        screen_h//3),
-        'middle-left':   (0,             screen_h//3,   screen_w//3,     2*screen_h//3),
-        'middle-center': (screen_w//3,   screen_h//3,   2*screen_w//3,   2*screen_h//3),
-        'middle-right':  (2*screen_w//3, screen_h//3,   screen_w,        2*screen_h//3),
-        'bottom-left':   (0,             2*screen_h//3, screen_w//3,     screen_h),
-        'bottom-center': (screen_w//3,   2*screen_h//3, 2*screen_w//3,   screen_h),
-        'bottom-right':  (2*screen_w//3, 2*screen_h//3, screen_w,        screen_h),
-    }
-
-    region = element_info.get('region', 'middle-center')
-    element_text = element_info.get('element_text', '').strip()
-    x1, y1, x2, y2 = region_bounds.get(region, region_bounds['middle-center'])
-    roi = frame_bgr[y1:y2, x1:x2]
-
-    print(f'[UI DEBUG] Region key from Gemma: {repr(region)}')
-    print(f'[UI DEBUG] Bounds used: x1={x1}, y1={y1}, x2={x2}, y2={y2}')
-    print(f'[UI DEBUG] Frame shape: {frame_bgr.shape}')
-    print(f'[UI DEBUG] ROI shape after crop: {roi.shape}')
-
-    # Path A — Text element: use pytesseract to find exact text position
-    if element_text and pytesseract is not None:
-        try:
-            # Upscale ROI for better OCR on small text (e.g. menu bar items)
-            scale_factor = 3
-            roi_upscaled = cv2.resize(
-                roi,
-                (roi.shape[1] * scale_factor, roi.shape[0] * scale_factor),
-                interpolation=cv2.INTER_CUBIC
-            )
-            print(f'[UI DEBUG] ROI upscaled shape: {roi_upscaled.shape}')
-            gray = cv2.cvtColor(roi_upscaled, cv2.COLOR_BGR2GRAY)
-
-            # Try normal thresh
-            _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            data_normal = pytesseract.image_to_data(
-                thresh,
-                output_type=pytesseract.Output.DICT,
-                config='--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 '
-            )
-            words_normal = [w for w in data_normal['text'] if w.strip()]
-
-            # Try inverted thresh
-            thresh_inv = cv2.bitwise_not(thresh)
-            data_inv = pytesseract.image_to_data(
-                thresh_inv,
-                output_type=pytesseract.Output.DICT,
-                config='--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 '
-            )
-            words_inv = [w for w in data_inv['text'] if w.strip()]
-
-            print(f'[UI DEBUG] Normal thresh words: {words_normal}')
-            print(f'[UI DEBUG] Inverted thresh words: {words_inv}')
-
-            # Use whichever found more words
-            if len(words_inv) > len(words_normal):
-                data = data_inv
-            else:
-                data = data_normal
-
-            # Save debug images
-            cv2.imwrite('Aster_Vault/debug_roi_raw.png', roi_upscaled)
-            cv2.imwrite('Aster_Vault/debug_roi_thresh.png', thresh)
-            print(f'[UI DEBUG] ROI shape: {roi_upscaled.shape}')
-            print(f'[UI DEBUG] Searched zone: {region}')
-
-            detected_words = [w for w in data['text'] if w.strip()]
-            print(f'[UI DEBUG] OCR detected words in {region} zone: {detected_words}')
-            print(f'[UI DEBUG] Searching for: {repr(element_text)}')
-
-            search_lower = element_text.lower()
-            best_match = None
-            best_score = 0
-            for i, word in enumerate(data['text']):
-                if not word.strip():
-                    continue
-                score = difflib.SequenceMatcher(None, word.lower(), search_lower).ratio()
-                if score > best_score and score > 0.4:
-                    best_score = score
-                    bx = data['left'][i]
-                    by = data['top'][i]
-                    bw = data['width'][i]
-                    bh = data['height'][i]
-                    best_match = (
-                        int((x1 + (bx + bw // 2) / scale_factor) * scale_x),
-                        int((y1 + (by + bh // 2) / scale_factor) * scale_y)
-                    )
-            if best_match:
-                return best_match
-        except Exception:
-            pass
-
-    # Path B — Fallback: return center of the identified region
-    return (int(((x1 + x2) // 2) * scale_x), int(((y1 + y2) // 2) * scale_y))
-'''
-
-
-# ============================================================================
-# LAYER 3 — VERIFICATION (Gemma Vision)
+# LAYER 3 — VERIFICATION
 # ============================================================================
 def verify_action_result(goal: str) -> str:
-    """After a click, captures the screen and asks Gemma if the action succeeded.
+    """After a click, captures the screen and asks the model if the action succeeded.
 
     Returns a string starting with SUCCESS or FAILED followed by explanation.
     """
@@ -1075,7 +891,7 @@ def verify_action_result(goal: str) -> str:
     if not b64:
         return 'Could not verify — screen capture failed.'
 
-    from core.brain import _execute_gemma_completion
+    from core.brain import _execute_llm_completion
     verify_msgs = [{
         'role': 'user',
         'content': [
@@ -1087,465 +903,4 @@ def verify_action_result(goal: str) -> str:
             )}
         ]
     }]
-    return _execute_gemma_completion(messages=verify_msgs, temperature=0.1, n_predict=80).get("content") or ""
-
-
-'''
-# ============================================================================
-# YOLO UI PIPELINE — coordinate resolution layer for ui_click() [ARCHIVED]
-# ============================================================================
-_ELEMENT_CACHE_TS: float = 0.0    # epoch time of last parse_screen() run
-_ELEMENT_CACHE_TTL: float = 30.0  # seconds before cache is considered stale
-try:
-    import pytesseract
-except Exception:
-    pytesseract = None
-
-try:
-    from ultralytics import YOLO
-except Exception:
-    YOLO = None
-
-try:
-    import torch
-except Exception:
-    torch = None
-
-if pytesseract is not None:
-    _TESSERACT_CANDIDATES = [
-        os.getenv("TESSERACT_CMD", "").strip(),
-        r"C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
-        r"C:\\Program Files (x86)\\Tesseract-OCR\\tesseract.exe",
-    ]
-    for _candidate in _TESSERACT_CANDIDATES:
-        if _candidate and os.path.exists(_candidate):
-            pytesseract.pytesseract.tesseract_cmd = _candidate
-            break
-
-
-# Global state map for UI automation. LLM sees only IDs; backend owns coordinates.
-UI_ELEMENT_COORDS: dict[int, tuple[int, int]] = {}
-_UI_COORDS_LOCK = threading.Lock()
-
-
-def _set_ui_element_coords(new_map: dict[int, tuple[int, int]]) -> None:
-    with _UI_COORDS_LOCK:
-        UI_ELEMENT_COORDS.clear()
-        UI_ELEMENT_COORDS.update(new_map)
-
-
-def get_ui_element_coords(element_id: int) -> tuple[int, int] | None:
-    with _UI_COORDS_LOCK:
-        return UI_ELEMENT_COORDS.get(int(element_id))
-
-
-def clear_ui_element_coords() -> None:
-    with _UI_COORDS_LOCK:
-        UI_ELEMENT_COORDS.clear()
-
-
-def _capture_screen_bgr() -> tuple[np.ndarray | None, str | None]:
-    if mss is None:
-        return None, "Error: mss is unavailable. Install mss to enable parse_screen."
-
-    try:
-        with mss.mss() as sct:
-            if len(sct.monitors) < 2:
-                return None, "Error: No primary monitor found for parse_screen."
-
-            monitor = sct.monitors[1]
-            raw = sct.grab(monitor)
-
-        frame_bgr = cv2.cvtColor(np.array(raw), cv2.COLOR_BGRA2BGR)
-        return frame_bgr, None
-    except Exception as e:
-        return None, f"Error: Screen capture failed - {e}"
-
-
-def _normalize_label(label: str) -> str:
-    normalized = (label or "icon").replace("_", " ").strip()
-    return normalized.title() if normalized else "Icon"
-
-
-def _label_to_ui_type(label: str) -> str:
-    lower = (label or "").lower()
-    if any(token in lower for token in ("button", "tab", "checkbox", "radio", "menu", "switch")):
-        return "Button"
-    if any(token in lower for token in ("text", "input", "field", "search", "textbox")):
-        return "Text"
-    return "Icon"
-
-
-def _extract_detector_elements(frame_bgr: np.ndarray) -> tuple[list[dict[str, Any]], str | None]:
-    if YOLO is None:
-        return [], "Error: ultralytics is not installed. Install ultralytics for parse_screen."
-
-    model = None
-    use_cuda = bool(torch is not None and torch.cuda.is_available())
-    if not use_cuda:
-        return [], "Error: CUDA GPU is required for parse_screen but is unavailable."
-
-    model_path = os.getenv("ASTER_OMNIPARSER_MODEL", "yolov8n.pt")
-
-    try:
-        conf = float(os.getenv("ASTER_OMNIPARSER_CONF", "0.25"))
-    except ValueError:
-        conf = 0.25
-
-    try:
-        model = YOLO(model_path)
-        model.to("cuda:0")
-        predictions = model.predict(source=frame_bgr, conf=conf, device=0, verbose=False)
-
-        elements: list[dict[str, Any]] = []
-        for result in predictions:
-            names = result.names or {}
-            boxes = result.boxes
-            if boxes is None:
-                continue
-
-            xyxy = boxes.xyxy.detach().cpu().numpy()
-            cls_ids = boxes.cls.detach().cpu().numpy()
-            confs = boxes.conf.detach().cpu().numpy()
-
-            for box, cls_id, score in zip(xyxy, cls_ids, confs):
-                x1, y1, x2, y2 = [int(v) for v in box.tolist()]
-                if x2 <= x1 or y2 <= y1:
-                    continue
-
-                label = str(names.get(int(cls_id), f"class_{int(cls_id)}"))
-                elements.append(
-                    {
-                        "bbox": (x1, y1, x2, y2),
-                        "type": _label_to_ui_type(label),
-                        "content": _normalize_label(label),
-                        "score": float(score),
-                    }
-                )
-
-        return elements, None
-    except Exception as e:
-        return [], f"Error: UI detector inference failed - {e}"
-    finally:
-        # Ephemeral VRAM kill-switch: unload model and clear CUDA cache immediately.
-        if model is not None:
-            del model
-        if use_cuda and torch is not None:
-            try:
-                torch.cuda.empty_cache()
-            except Exception:
-                pass
-
-
-def _clip_bbox(
-    x: int,
-    y: int,
-    w: int,
-    h: int,
-    max_w: int,
-    max_h: int,
-    padding: int = 2,
-) -> tuple[int, int, int, int] | None:
-    x1 = max(0, x - padding)
-    y1 = max(0, y - padding)
-    x2 = min(max_w, x + w + padding)
-    y2 = min(max_h, y + h + padding)
-    if x2 <= x1 or y2 <= y1:
-        return None
-    return (x1, y1, x2, y2)
-
-
-def _build_text_region_candidates(frame_bgr: np.ndarray) -> list[tuple[int, int, int, int]]:
-    gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-    gray = cv2.bilateralFilter(gray, 5, 35, 35)
-
-    adaptive_inv = cv2.adaptiveThreshold(
-        gray,
-        255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV,
-        31,
-        9,
-    )
-
-    # Group nearby glyphs into text-line-ish blobs.
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (24, 3))
-    merged = cv2.morphologyEx(adaptive_inv, cv2.MORPH_CLOSE, kernel, iterations=1)
-
-    contours, _ = cv2.findContours(merged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    max_h, max_w = gray.shape[:2]
-
-    candidates: list[tuple[int, int, int, int]] = []
-    for contour in contours:
-        x, y, w, h = cv2.boundingRect(contour)
-        if w < 18 or h < 10:
-            continue
-        if h > int(max_h * 0.25):
-            continue
-        if w * h < 220:
-            continue
-
-        clipped = _clip_bbox(x, y, w, h, max_w=max_w, max_h=max_h, padding=4)
-        if clipped is not None:
-            candidates.append(clipped)
-
-    candidates.sort(key=lambda bbox: (bbox[1], bbox[0]))
-    return candidates
-
-
-def _ocr_text_from_crop(crop_bgr: np.ndarray) -> str:
-    if pytesseract is None:
-        return ""
-
-    if crop_bgr.size == 0:
-        return ""
-
-    # Dark mode OCR pipeline: grayscale -> invert dark images -> upscale -> threshold -> OCR.
-    gray_crop = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
-
-    # Dark mode inversion: if mostly dark background, flip to black-on-white for Tesseract.
-    if float(gray_crop.mean()) < 127:
-        gray_crop = cv2.bitwise_not(gray_crop)
-
-    upscaled = cv2.resize(gray_crop, None, fx=4.0, fy=4.0, interpolation=cv2.INTER_CUBIC)
-
-    _, otsu = cv2.threshold(upscaled, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    adaptive = cv2.adaptiveThreshold(
-        upscaled,
-        255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY,
-        31,
-        5,
-    )
-
-    thresholded_variants = [
-        otsu,
-        cv2.bitwise_not(otsu),
-        adaptive,
-        cv2.bitwise_not(adaptive),
-    ]
-
-    best_text = ""
-    best_score = -1
-
-    for prepared in thresholded_variants:
-        for psm in ("7", "6", "11"):
-            try:
-                text = pytesseract.image_to_string(prepared, config=f"--oem 3 --psm {psm}")
-            except Exception:
-                continue
-
-            cleaned = _sanitize_content(text)
-            if not cleaned:
-                continue
-
-            score = sum(ch.isalnum() for ch in cleaned)
-            if score > best_score:
-                best_score = score
-                best_text = cleaned
-
-    return best_text
-
-
-def _extract_text_elements(frame_bgr: np.ndarray) -> list[dict[str, Any]]:
-    if pytesseract is None:
-        return []
-
-    candidate_regions = _build_text_region_candidates(frame_bgr)
-    if not candidate_regions:
-        return []
-
-    elements: list[dict[str, Any]] = []
-    seen: list[dict[str, Any]] = []
-
-    for x1, y1, x2, y2 in candidate_regions[:100]:
-        crop_bgr = frame_bgr[y1:y2, x1:x2]
-        content = _ocr_text_from_crop(crop_bgr)
-
-        if len(content) < 2:
-            continue
-        if not any(ch.isalnum() for ch in content):
-            continue
-
-        candidate = {
-            "bbox": (x1, y1, x2, y2),
-            "type": "Text",
-            "content": content,
-            "score": min(1.0, max(0.15, len(content) / 48.0)),
-        }
-
-        is_duplicate = False
-        for prior in seen:
-            if _bbox_iou(candidate["bbox"], prior["bbox"]) >= 0.75:
-                is_duplicate = True
-                break
-
-        if not is_duplicate:
-            seen.append(candidate)
-            elements.append(candidate)
-
-    return elements
-
-
-def _bbox_iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
-    ax1, ay1, ax2, ay2 = a
-    bx1, by1, bx2, by2 = b
-
-    inter_x1 = max(ax1, bx1)
-    inter_y1 = max(ay1, by1)
-    inter_x2 = min(ax2, bx2)
-    inter_y2 = min(ay2, by2)
-
-    if inter_x2 <= inter_x1 or inter_y2 <= inter_y1:
-        return 0.0
-
-    inter_area = float((inter_x2 - inter_x1) * (inter_y2 - inter_y1))
-    area_a = float(max(1, (ax2 - ax1) * (ay2 - ay1)))
-    area_b = float(max(1, (bx2 - bx1) * (by2 - by1)))
-    union = area_a + area_b - inter_area
-    if union <= 0:
-        return 0.0
-    return inter_area / union
-
-
-def _dedupe_elements(elements: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    ranked = sorted(elements, key=lambda e: float(e.get("score", 0.0)), reverse=True)
-    kept: list[dict[str, Any]] = []
-
-    for cand in ranked:
-        cbox = cand["bbox"]
-        ctype = cand.get("type", "Icon")
-        duplicate = False
-
-        for selected in kept:
-            sbox = selected["bbox"]
-            stype = selected.get("type", "Icon")
-            if ctype == stype and _bbox_iou(cbox, sbox) >= 0.6:
-                duplicate = True
-                break
-
-        if not duplicate:
-            kept.append(cand)
-
-    return kept
-
-
-def _sanitize_content(content: str) -> str:
-    cleaned = (content or "").strip()
-    cleaned = cleaned.replace("\\n", " ")
-    cleaned = cleaned.replace("'", "")
-    return " ".join(cleaned.split())
-
-
-def _extract_fullscreen_text(frame_bgr: np.ndarray) -> list[dict[str, Any]]:
-    """Full-screen OCR fallback: catches floating text blocks that YOLO bounding boxes missed."""
-    if pytesseract is None:
-        return []
-
-    gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-    max_h, max_w = gray.shape[:2]
-
-    # Dark mode inversion for the full screen.
-    if float(gray.mean()) < 127:
-        gray = cv2.bitwise_not(gray)
-
-    upscaled = cv2.resize(gray, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
-
-    _, otsu = cv2.threshold(upscaled, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    adaptive = cv2.adaptiveThreshold(
-        upscaled, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 5,
-    )
-
-    variants = [otsu, cv2.bitwise_not(otsu), adaptive, cv2.bitwise_not(adaptive)]
-    best_text = ""
-    best_score = -1
-
-    for prepared in variants:
-        for psm in ("11", "6", "3"):
-            try:
-                text = pytesseract.image_to_string(prepared, config=f"--oem 3 --psm {psm}")
-            except Exception:
-                continue
-            cleaned = _sanitize_content(text)
-            if not cleaned:
-                continue
-            score = sum(ch.isalnum() for ch in cleaned)
-            if score > best_score:
-                best_score = score
-                best_text = cleaned
-
-    if not best_text or len(best_text) < 3:
-        return []
-
-    return [{
-        "bbox": (0, 0, max_w, max_h),
-        "type": "global_text",
-        "content": best_text,
-        "score": min(1.0, max(0.1, len(best_text) / 200.0)),
-    }]
-
-
-def parse_screen() -> str:
-    """
-    OmniParser-style desktop parser.
-
-    Returns a compact, ID-based string that the LLM can use for UI actions:
-    [ID: 1, Type: Text, Content: 'Search Amazon'], [ID: 2, Type: Icon, Content: 'Magnifying Glass']
-    """
-    frame_bgr, capture_error = _capture_screen_bgr()
-    if capture_error:
-        clear_ui_element_coords()
-        return capture_error
-
-    detector_elements, detector_error = _extract_detector_elements(frame_bgr)
-    text_elements = _extract_text_elements(frame_bgr)
-
-    # Full-screen OCR fallback: catch floating text that YOLO bounding boxes missed.
-    fullscreen_text = _extract_fullscreen_text(frame_bgr)
-    if fullscreen_text:
-        for fs_elem in fullscreen_text:
-            fs_content = fs_elem["content"].lower()
-            dominated = any(
-                elem["content"].lower() in fs_content or fs_content in elem["content"].lower()
-                for elem in text_elements + detector_elements
-                if elem.get("type") != "global_text"
-            )
-            if not dominated:
-                text_elements.append(fs_elem)
-
-    combined = _dedupe_elements(detector_elements + text_elements)
-    combined.sort(key=lambda e: (e["bbox"][1], e["bbox"][0]))
-
-    try:
-        max_elements = int(os.getenv("ASTER_OMNIPARSER_MAX_ELEMENTS", "80"))
-    except ValueError:
-        max_elements = 80
-    max_elements = max(1, max_elements)
-
-    coord_map: dict[int, tuple[int, int]] = {}
-    serialized: list[str] = []
-
-    for idx, element in enumerate(combined[:max_elements], start=1):
-        x1, y1, x2, y2 = element["bbox"]
-        center_x = (x1 + x2) // 2
-        center_y = (y1 + y2) // 2
-        coord_map[idx] = (center_x, center_y)
-
-        elem_type = str(element.get("type", "Icon"))
-        content = _sanitize_content(str(element.get("content", ""))) or "Unknown"
-        serialized.append(f"[ID: {idx}, Type: {elem_type}, Content: '{content}']")
-
-    _set_ui_element_coords(coord_map)
-
-    global _ELEMENT_CACHE_TS
-    _ELEMENT_CACHE_TS = time.time()
-
-    if serialized:
-        return ", ".join(serialized)
-
-    if detector_error:
-        return detector_error
-
-    return "[]"
-'''
+    return _execute_llm_completion(messages=verify_msgs, temperature=0.1, n_predict=80).get("content") or ""
