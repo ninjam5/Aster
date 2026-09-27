@@ -233,3 +233,33 @@ Reports: `…_20260927_210200.txt` (temp 1.0), `…_20260927_211553.txt` (temp 0
 → **T3 defect materially fixed** (both temps now above every prior baseline); the residual
 two auto-fails are in other categories. Loop tendency still rises at low temp (C6-01: 8
 `browse_web` calls in 9 rounds at 0.7 vs 5 in 6 at 1.0) — temp 1.0 remains the keeper.
+
+### 2026-09-27 — T6 (application smoke) RUN: vision + voice-note green; time handling had two distinct causes
+
+Boot (main.py, server at `--n-cpu-moe 26`): every expected line present — Tesseract, learned
+face, Kokoro lazy, **69 tools**, ECAPA voice learned, `llama-server reachable`, warmup via
+native REST, Telegram + LiveKit bridges, awareness daemon, face server :8000, watchdog,
+dashboard, `All systems online. Entering CLI mode.` ✅
+
+Telegram turns:
+| Turn | Result |
+|---|---|
+| text / image (photo) | ✅ **vision perfect through the full brain path** ("a selfie… clean-shaven man with blue eyes, grey t-shirt, wooden door, warm lighting") |
+| voice note | ✅ **Phase-3 route perfect**: ffmpeg → Whisper → `[Mood: neutral]` tag → brain; transcript exact; unknown speaker correctly prompted `/enroll` (enrolled voice is "Mohamed", clip was another speaker) |
+| "What time is it?" (first) | ✅ called `get_current_time` → tool returned `2026-09-27 21:41:16` → "Nine forty-one in the evening, Sir." |
+| "Wait what time is it?" (repeat) | ❌ **no new call** — reused/garbled the previous turn's result into "Nine fifty-two, Sir." |
+
+**Cause 1 (not a bug):** `AWARENESS_ACTIVE = False` on this install, so no `CURRENT CONTEXT`
+time block is injected — the tool is the only time source. (Verified: `Local time:` absent
+from every logged payload; the earlier "CURRENT CONTEXT" grep hit was the *tool-laws text*
+mentioning the tag, not an injected block.)
+
+**Cause 2 (fixed):** the model treated the previous turn's tool result as current. Added a
+staleness clause to `_shared_tool_laws.md`: *"Results from earlier turns are STALE … asking
+'what time is it?' twice must call `get_current_time` both times"*. Repeat-question probe
+(fresh brain, temp 1.0): 2/3 trials re-called correctly (trial 1 showed the known
+first-call flakiness — no call on the *first* question).
+
+**Residual (open):** first-call flakiness on terse prompts at some rate (~1/3 in this small
+sample; matches harness `C1-06` flakiness). Levers if it matters: more sampling/retries, or
+constrained decoding on the first tool call.
