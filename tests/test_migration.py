@@ -600,7 +600,7 @@ class TestMultimodalPayloadFormatting:
 # ============================================================================
 
 class TestSentryModeVision:
-    """Tests for Gemma-based sentry mode vision response parsing."""
+    """Tests for sentry mode vision response parsing."""
 
     def test_sentry_analysis_unknown_person(self):
         """Sentry analysis correctly identifies an unknown person."""
