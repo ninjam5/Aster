@@ -108,7 +108,7 @@ def test_auto_compact_fires_over_threshold(_isolated_messages, monkeypatch, tmp_
 def test_auto_compact_skips_under_threshold(_isolated_messages, monkeypatch):
     monkeypatch.setattr(config, "AUTO_COMPACT_ENABLED", True)
     monkeypatch.setattr(config, "AUTO_COMPACT_THRESHOLD", 0.75)
-    monkeypatch.setattr(config, "N_CTX", 128000)
+    monkeypatch.setattr(config, "N_CTX", 60000)
     brain.messages.extend(_fill_history(n_msgs=6, chars=400))
 
     _run_turn()

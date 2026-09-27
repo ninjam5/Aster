@@ -80,7 +80,7 @@ class TestUpdateIdentity:
         assert parsed["identity"]["owner"] == "TestOwner"
         assert parsed["contacts"]["female_names"] == ["alice", "bob"]
         assert parsed["identity"]["version"] == "1.0"  # untouched field survives
-        assert parsed["runtime"]["llm_model"] == "gemma-e4b-q4km"  # untouched section survives
+        assert parsed["runtime"]["llm_model"] == "Qwen3.6-35B-A3B-UD-IQ4_XS"  # untouched section survives
 
     def test_two_space_indented_list_survives_round_trip(self, tmp_path):
         """Regression (2026-07-11): hand-edited configs indent list items with
@@ -100,7 +100,7 @@ class TestUpdateIdentity:
             "  - emily\n"
             "\n"
             "runtime:\n"
-            "  llm_model: gemma-e4b-q4km\n",
+            "  llm_model: Qwen3.6-35B-A3B-UD-IQ4_XS\n",
             encoding="utf-8",
         )
         wizard.update_identity(
@@ -110,7 +110,7 @@ class TestUpdateIdentity:
         new_text = scratch.read_text(encoding="utf-8")
         parsed = yaml.safe_load(new_text)  # must not raise
         assert parsed["contacts"]["female_names"] == ["alice"]
-        assert parsed["runtime"]["llm_model"] == "gemma-e4b-q4km"  # section after the list survives
+        assert parsed["runtime"]["llm_model"] == "Qwen3.6-35B-A3B-UD-IQ4_XS"  # section after the list survives
         assert "# comment above the list" in new_text
 
     def test_empty_female_names_produces_empty_list(self, tmp_path):

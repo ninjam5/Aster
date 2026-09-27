@@ -105,7 +105,7 @@ def list_my_capabilities() -> str:
             "wake_word": _safe_get(cfg, "runtime", "wake_word_model", default="hey_jarvis"),
         },
         "memory": {
-            "short_term": f"context window ({getattr(config, 'N_CTX', 131072)} tokens)",
+            "short_term": f"context window ({getattr(config, 'N_CTX', 60000)} tokens)",
             "long_term": "ChromaDB vector store",
             "markdown_vault": _safe_get(cfg, "memory", "memory_file", default="Aster_Vault/memory.md"),
             "rag_vault": _safe_get(cfg, "memory", "rag_vault_dir", default="Aster_Vault/database"),
@@ -198,8 +198,8 @@ def get_my_status() -> str:
             "memory_db": bool(getattr(config, "MEMORY_AVAILABLE", False)),
         },
         "llm_engine": "llama-server at http://localhost:8080",
-        "model": _safe_get(cfg, "runtime", "llm_model", default="gemma-e4b-q4km"),
-        "context_window": int(getattr(config, "N_CTX", 131072)),
+        "model": _safe_get(cfg, "runtime", "llm_model", default="Qwen3.6-35B-A3B-UD-IQ4_XS"),
+        "context_window": int(getattr(config, "N_CTX", 60000)),
     }
 
     try:

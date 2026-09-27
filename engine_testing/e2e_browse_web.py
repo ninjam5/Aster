@@ -25,7 +25,7 @@ URL = "http://localhost:8080/v1/chat/completions"
 DEFAULT_USER = "[Mood: neutral] Can u check the prices of potatoes on amazon.eg?"
 
 
-def _ask(messages, tools, model="gemma-e4b-q4km"):
+def _ask(messages, tools, model="Qwen3.6-35B-A3B-UD-IQ4_XS"):
     r = requests.post(URL, json={"model": model, "messages": messages, "tools": tools,
                                  "tool_choice": "auto", "temperature": 1.0}, timeout=240)
     r.raise_for_status()

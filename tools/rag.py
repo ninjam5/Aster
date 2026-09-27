@@ -146,7 +146,7 @@ def _firecrawl_search(topic: str) -> str | None:
                 title = item.get("title", "")
                 url = item.get("url", "")
                 body = item.get("markdown") or item.get("description", "")
-                body = body[:5000]  # 9 results × 5k chars ≈ 11k tokens, well within 128k context
+                body = body[:5000]  # 9 results × 5k chars ≈ 11k tokens, well within the 60k context
                 dossier += f"- {title} ({url})\n{body}\n\n"
         return dossier.strip()
     except Exception as e:

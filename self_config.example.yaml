@@ -32,11 +32,11 @@ contacts:
   female_names: []
 
 runtime:
-  llm_model: gemma-e4b-q4km
+  llm_model: Qwen3.6-35B-A3B-UD-IQ4_XS
   llm_engine: llama-server (llama.cpp, OpenAI-compatible REST)
-  context_window: 131072         # must match llama-server --ctx-size
+  context_window: 60000          # must match llama-server --ctx-size
   vision_enabled: true
-  vision_model: gemma-e4b (mmproj-F16)
+  vision_model: Qwen3.6-35B-A3B (mmproj-F16)
   audio_input: faster-whisper (medium.en)
   audio_output: kokoro-tts (82M)
   wake_word_enabled: true
@@ -53,7 +53,7 @@ runtime:
   tts_chunk_streaming: true          # LiveKit calls: start speaking after the first Kokoro segment instead of synthesizing the whole reply first (local_tts.py)
   structured_tool_results: true      # exact ToolResult(ok, text) failure detection for migrated tools; false = legacy FAILED/Error prefix-regex heuristic everywhere (core/tool_result.py)
   auto_compact: true                 # auto-run the /compact summarize-and-replace when context crosses the threshold below
-  auto_compact_threshold: 0.75       # fraction of context_window that triggers auto-compaction (0.75 × 128k ≈ 96k tokens)
+  auto_compact_threshold: 0.75       # fraction of context_window that triggers auto-compaction (0.75 × 60k ≈ 45k tokens)
 
 automation:
   # DOM-first perception motor (tools/dom.py). When enabled, web tasks are
@@ -76,7 +76,7 @@ automation:
   human_search: true             # site+query opens the site's home page and the model drives its own search bar (open site -> search box -> type -> submit -> read), like Astra. false = the pre-mapped search URLs (rollback path).
   # Stage-3 System-1 decision kernel (core/system1.py). Lazy + ref-counted,
   # CPU-first. Default OFF; when on it picks among ambiguous shortlist
-  # candidates and answers neutral-key yes/no state gates, escalating to Gemma
+  # candidates and answers neutral-key yes/no state gates, escalating to the main LLM
   # on low margin. Requires `python -m pip install laya` (+ first-load download).
   laya_kernel: false
   laya_model: convaiinnovations/laya
@@ -138,7 +138,7 @@ paths:
   models_dir: Aster_Vault/Models
   faces_dir: Aster_Vault/Faces
   voice_ref_dir: Aster_Vault/Voice
-  gemma_jinja: Aster_Vault/gemma4-multimodal.jinja
+  chat_template: E:\Models\qwen36_chat_template.jinja
   notes_file: Aster_Vault/notes.md
   system_prompts_dir: Aster_Vault/System_Prompts
   conversations_dir: Aster_Vault/Conversations

@@ -44,7 +44,7 @@ _diagnostics.install()
 
 LIVEKIT_ROOM_NAME = os.getenv("LIVEKIT_ROOM", "aster-command-center")
 
-# Boot the llama-cpp-python engine (full GPU offload, 128k context, mmproj)
+# Verify the llama-server engine is reachable (60000-token context, mmproj vision)
 try:
     config.load_engine()
 except Exception as e:

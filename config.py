@@ -161,11 +161,11 @@ DIAGNOSTICS_MODE = False     # Set by /diagnostics on|off — forwards stdout to
 
 # Model name sent as the `model=` parameter to llama-server (server ignores it
 # when only one model is loaded, but the field is required by the OpenAI schema).
-MODEL_NAME = "gemma-e4b-q4km"
+MODEL_NAME = "Qwen3.6-35B-A3B-UD-IQ4_XS"
 
 # Context window ceiling — must match llama-server's --ctx-size.
-# Kept at 128k to leave VRAM headroom for the multimodal image pipeline.
-N_CTX = int(_cfg("runtime", "context_window", default=131072))
+# 60k leaves VRAM headroom for the multimodal image pipeline on a 12 GB card.
+N_CTX = int(_cfg("runtime", "context_window", default=60000))
 
 # Utterance coalescing debounce — how long to wait after a VAD segment ends
 # before sending to the brain. Rapid mid-sentence pauses within this window

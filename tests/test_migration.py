@@ -423,7 +423,7 @@ class TestToolSchemaCompatibility:
 # ============================================================================
 
 class TestContextWindowManagement:
-    """Tests for 128k context sliding window and trimming."""
+    """Tests for context sliding window and trimming."""
 
     def test_trim_preserves_system_prompt(self):
         """trim_memory always keeps the system prompt at index 0."""
@@ -491,9 +491,9 @@ class TestContextWindowManagement:
         contents = [m["content"] for m in result]
         assert "D" * 1000 in contents
 
-    def test_128k_boundary_estimation(self):
-        """Token estimation for 128k context boundary."""
-        max_tokens = 131072
+    def test_context_boundary_estimation(self):
+        """Token estimation at the context boundary."""
+        max_tokens = 60000
         max_chars = max_tokens * 4
         boundary_message = {"role": "user", "content": "A" * max_chars}
         estimated_tokens = len(boundary_message["content"]) // 4

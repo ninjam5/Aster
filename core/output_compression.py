@@ -1,7 +1,7 @@
 """
 Tool-output compression — truncates or summarizes oversized tool results
 before they enter conversation history, to slow long-context degradation on
-the Q4_0-quantized 128k KV cache.
+the KVarN-quantized 60k KV cache.
 
 Per-tool policy: short/UI/dict results pass through untouched; verbose
 file/listing tools are head/tail-truncated with a tombstone; `research` is
