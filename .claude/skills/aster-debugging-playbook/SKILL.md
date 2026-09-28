@@ -180,6 +180,20 @@ budget; `/compact` replaces history with a summary block. Both are features.
   additionally need Awareness running + initiative ≥ medium + quiet ≥ 90 s. Most
   "bugs" here are the gates working.
 
+## browse_web / research OOM (2026-09-28)
+
+**Symptom:** a research/browse turn dies with an out-of-memory error (or Chrome fails to
+start) while the model and VRAM look fine.
+**Cause:** system RAM/commit exhaustion - Aster's own Chrome launches on top of
+llama-server's mmap'd MoE experts. Measured trigger: 2.1 GB RAM free, 41.9 of 47.5 GB
+commit; the owner's own Chrome with many tabs is usually the biggest consumer.
+**Fix / guard:** `config.BROWSER_MIN_FREE_RAM_GB` (`automation.browser_min_free_ram_gb`,
+default 1.5) makes `tools/dom.py` refuse the launch deterministically (no failure
+cooldown) and the model receives "FAILED - could not read the web page: only X GB RAM
+free...". Operationally: close tabs/apps before research turns. Note the model may then
+report a *stale* answer ("my research turned up information through mid-2025") - that is
+the post-tool refusal family, not the OOM.
+
 ## Provenance and maintenance
 
 Authored 2026-07-05 against live code.
