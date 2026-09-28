@@ -1719,7 +1719,7 @@ def _execute_tool_impl(tool_name, arguments):
         return set_system_state(arguments.get("action", ""))
     elif tool_name == "set_volume":
         return set_volume(
-            arguments.get("level_percentage", 50), arguments.get("mute", False)
+            arguments.get("level_percentage", 50), _as_bool(arguments.get("mute", False))
         )
     elif tool_name == "boss_key":
         return boss_key()
@@ -1744,7 +1744,7 @@ def _execute_tool_impl(tool_name, arguments):
     elif tool_name == "previous_spotify_track":
         return previous_spotify_track()
     elif tool_name == "shuffle_spotify":
-        return shuffle_spotify(arguments.get("state", True))
+        return shuffle_spotify(_as_bool(arguments.get("state", True)))
     elif tool_name == "set_timer":
         return set_timer(
             minutes=arguments.get("minutes"),
@@ -1920,7 +1920,7 @@ def _execute_tool_impl(tool_name, arguments):
         print(f"\n[Aster Internal: Sentry Mode toggled {status}]")
         return f"[System Note: Sentry Mode is now {status}.]"
     elif tool_name == "toggle_intervention_mode":
-        return intervention.toggle_intervention(arguments.get("state", True))
+        return intervention.toggle_intervention(_as_bool(arguments.get("state", True)))
     elif tool_name == "close_distraction_window":
         return intervention.close_flagged_window()
     elif tool_name == "snooze_intervention":
@@ -2380,16 +2380,18 @@ def _clear_pending_relay_confirm() -> None:
     _pending_relay_confirm.update(target=None, at=0.0)
 
 
-def _should_force_relay_confirm(intent, user_text: str) -> bool:
-    """Should this relay turn force `confirm=False`/`assume_guess=True`? (QA round 10)
+def _should_force_relay_confirm(intent, user_text: str, had_pending: bool = None) -> bool:
+    """Should this relay turn force `confirm=False`/`assume_guess=True`? (QA round 10/11)
 
-    True for a non-exact relay UNLESS the owner is answering the confirmation question we
-    actually asked (a pending confirmation + an affirmative reply). Extracted so the
-    decision is unit-testable without driving a whole turn.
+    True for a non-exact relay UNLESS the owner is answering a confirmation question we
+    asked on an EARLIER turn. `had_pending` must be captured at the START of the turn —
+    the brain marks a new pending while building this turn's directive, so reading the
+    live flag here would let a same-turn "ok tell geroge …" skip its own gate (round 11).
     """
     if not isinstance(intent, dict) or intent.get("exact"):
         return False
-    return not (_looks_affirmative(user_text) and _pending_relay_is_fresh())
+    pending = _pending_relay_is_fresh() if had_pending is None else bool(had_pending)
+    return not (_looks_affirmative(user_text) and pending)
 
 
 def _as_bool(value) -> bool:
@@ -3512,6 +3514,9 @@ def process_user_input(user_text, status_callback=None):
         _log_turn_mood(user_text)
 
     discord_intent = _extract_discord_message_intent(user_text)
+    # QA round 11: capture the pending-confirmation state BEFORE this turn can mark a new
+    # one, so a same-turn "ok tell geroge …" cannot authorise itself.
+    _relay_confirm_was_pending = _pending_relay_is_fresh()
     # CACHE/COST (QA round 2): derive the boolean WITHOUT re-parsing. This used to call
     # `_is_discord_message_request` (which parses again) and then parse a third time —
     # up to 6 Laya passes for a plain "tell me a joke".
@@ -3758,7 +3763,8 @@ def process_user_input(user_text, status_callback=None):
                             # succeeded and the confirmation was skipped. `assume_guess`
                             # tells the tool the target was inferred, so it refuses
                             # without an explicit confirm.
-                            if _should_force_relay_confirm(discord_intent, user_text):
+                            if _should_force_relay_confirm(discord_intent, user_text,
+                                                           _relay_confirm_was_pending):
                                 # QA round 5: force it OFF on the automated relay turn.
                                 # Preserving a model-supplied confirm=true let the model
                                 # self-approve a guessed target with no owner input. The

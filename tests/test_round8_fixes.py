@@ -61,10 +61,16 @@ class TestConfirmSendStringBypass:
 
     def test_smart_type_submit_with_the_string_false_is_blocked(self, monkeypatch):
         monkeypatch.setattr(dom, "_send_policy", lambda: "confirm")
-        monkeypatch.setattr(brain, "locate_ui_element_ex", MagicMock(), raising=False)
+        # QA round 11: a bare MagicMock loc made is_send_like raise, so the FOCUS gate's
+        # fail-closed produced the same BLOCKED string. Use a benign loc + benign
+        # is_send_like and assert the submit-specific wording.
+        monkeypatch.setattr(brain, "locate_ui_element_ex",
+                            lambda goal: {"x": 1, "y": 2, "source": "uia",
+                                          "text": "Message", "score": 0.9}, raising=False)
+        monkeypatch.setattr(dom, "is_send_like", lambda node: False, raising=False)
         out = brain.execute_tool("smart_type", {"goal": "the login form", "text": "u",
                                                 "submit": True, "confirm_send": "false"})
-        assert "BLOCKED" in out
+        assert "would submit a form" in out
 
     def test_boolean_true_still_bypasses(self, monkeypatch):
         monkeypatch.setattr(dom, "_send_policy", lambda: "confirm")
@@ -301,36 +307,44 @@ class TestAffirmativeConfirmation:
         exact = {"target": "george", "payload": "x", "exact": True}
 
         brain._clear_pending_relay_confirm()
-        # a fresh guess is always forced
-        assert brain._should_force_relay_confirm(guess, "tell geroge I'm late") is True
-        # an affirmative prefix with NO pending confirmation is still a new guess
-        assert brain._should_force_relay_confirm(guess, "ok tell geroge I'm late") is True
+        # a fresh guess is always forced (had_pending is captured BEFORE this turn)
+        assert brain._should_force_relay_confirm(guess, "tell geroge I'm late", False) is True
+        # an affirmative prefix with NO pre-turn pending is still a new guess
+        assert brain._should_force_relay_confirm(guess, "ok tell geroge I'm late", False) is True
         # an exact relay is never forced
-        assert brain._should_force_relay_confirm(exact, "tell george I'm late") is False
-        # after we actually asked, an affirmative reply is the confirmation
-        brain._mark_pending_relay_confirm("george")
-        assert brain._should_force_relay_confirm(guess, "yes, send it to george") is False
-        assert brain._should_force_relay_confirm(guess, "[Mood: happy] yes, do it") is False
+        assert brain._should_force_relay_confirm(exact, "tell george I'm late", True) is False
+        # after we actually asked (pending from an EARLIER turn), an affirmative confirms
+        assert brain._should_force_relay_confirm(guess, "yes, send it to george", True) is False
+        assert brain._should_force_relay_confirm(guess, "[Mood: happy] yes, do it", True) is False
         # ... but a NEW command in the same window is still forced
-        assert brain._should_force_relay_confirm(guess, "tell geroge I'm late") is True
+        assert brain._should_force_relay_confirm(guess, "tell geroge I'm late", True) is True
+        # and the live flag alone must NOT authorise (the same-turn trap)
+        brain._mark_pending_relay_confirm("george")
+        assert brain._should_force_relay_confirm(guess, "ok tell geroge I'm late", False) is True
         brain._clear_pending_relay_confirm()
-        assert brain._should_force_relay_confirm(guess, "yes, send it to george") is True
 
     def test_the_tagged_affirmative_is_recognised(self):
         assert brain._looks_affirmative("[Mood: happy] yes, send it to george") is True
 
     def test_the_four_toggle_tools_accept_a_string_state(self, monkeypatch):
-        """QA round 10: an undefined _as__as_bool left these raising NameError."""
+        """QA round 10/11: an undefined _as__as_bool left these raising NameError, and
+        the first version asserted only 'not an error' — a deleted handler returns None
+        and also passed. Assert the POLARITY."""
+        import tools.awareness as _aw
+        monkeypatch.setattr(config, "MOOD_ACTIONS_ENABLED", True, raising=False)
+        monkeypatch.setattr(config, "MOOD_CHECKIN_ENABLED", True, raising=False)
+        monkeypatch.setattr(config, "FACE_EMOTION_ENABLED", True, raising=False)
+        monkeypatch.setattr(config, "AMBIENT_AUDIO_ENABLED", True, raising=False)
+        monkeypatch.setattr(_aw, "AWARENESS_ACTIVE", True, raising=False)
         for tool in ("toggle_mood_actions", "toggle_mood_checkins",
                      "toggle_face_emotion", "toggle_ambient_audio"):
             out = brain.execute_tool(tool, {"state": "false"})
-            assert not str(out).startswith("Error executing"), (tool, out)
-    def test_the_tagged_affirmative_is_recognised(self):
-        assert brain._looks_affirmative("[Mood: happy] yes, send it to george") is True
+            assert "OFF" in str(out), (tool, out)
 
-    def test_the_four_toggle_tools_accept_a_string_state(self, monkeypatch):
-        """QA round 10: an undefined _as__as_bool left these raising NameError."""
-        for tool in ("toggle_mood_actions", "toggle_mood_checkins",
-                     "toggle_face_emotion", "toggle_ambient_audio"):
-            out = brain.execute_tool(tool, {"state": "false"})
-            assert not str(out).startswith("Error executing"), (tool, out)
+
+@pytest.fixture(autouse=True)
+def _reset_pending_relay(monkeypatch):
+    """QA round 11: `_pending_relay_confirm` is module-global."""
+    brain._clear_pending_relay_confirm()
+    yield
+    brain._clear_pending_relay_confirm()

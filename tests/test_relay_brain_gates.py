@@ -118,3 +118,32 @@ def _isolate_brain_turn(tmp_path, monkeypatch):
     monkeypatch.setattr(_c, "CONVERSATIONS_DIR", str(tmp_path / "Conversations"), raising=False)
     monkeypatch.setattr(_c, "MOOD_LOG_PATH", str(tmp_path / "emotion_log.jsonl"), raising=False)
     monkeypatch.setattr(brain, "_maybe_tag_text_mood", lambda t: t, raising=False)
+
+
+class TestAffirmativePrefixFullTurn:
+    def test_an_affirmative_prefixed_guess_is_forced(self, monkeypatch, relay_env):
+        """QA round 11 regression: the pending marker is created in the SAME turn as the
+        decision, so a same-turn 'ok tell geroge …' used to authorise itself and DM a
+        guessed target. A full turn is required — the helper test alone cannot see the
+        ordering."""
+        sent = {}
+        monkeypatch.setattr(brain, "_extract_discord_message_intent",
+                            lambda t: {"target": "george", "payload": t, "exact": False,
+                                       "via": "test"}, raising=False)
+        monkeypatch.setattr(brain, "send_discord_message",
+                            lambda target, msg, confirm=False, assume_guess=False:
+                            sent.update(target=target, confirm=confirm,
+                                        assume_guess=assume_guess) or
+                            "FAILED — [CONFIRM REQUIRED]")
+        monkeypatch.setattr(
+            brain, "_execute_llm_completion",
+            lambda **k: _tool_call("send_discord_message",
+                                   '{"target_name": "george", "message": "Hi", "confirm": true}'),
+            raising=False)
+        brain._clear_pending_relay_confirm()
+        brain.messages[:] = [brain.messages[0]]
+        brain.process_user_input("ok tell geroge I am late", None)
+
+        assert sent, "send_discord_message was never called"
+        assert sent["confirm"] is False, "an affirmative PREFIX authorised a fresh guess"
+        assert sent["assume_guess"] is True
