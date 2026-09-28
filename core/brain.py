@@ -31,7 +31,9 @@ from tools.vision import (
 )
 from tools.uia import get_foreground_window_title, focused_control_type, EDITABLE_CONTROL_TYPES
 from tools.assist import highlight_regions
-from tools.discord_api import CONTACTS, send_discord_message
+from tools.discord_api import (
+    contact_names, laya_pick_contact, resolve_contact, send_discord_message,
+)
 from tools.memory_manager import (
     get_user_facts,
     save_fact as save_discord_fact,
@@ -721,17 +723,21 @@ ADMIN_TOOLS = [
         "type": "function",
         "function": {
             "name": "send_discord_message",
-            "description": "Sends a direct message to a known Discord contact name using the official Discord REST API and bot token.",
+            "description": "Sends a direct message to a known Discord contact name using the official Discord REST API and bot token. An exact contact name sends immediately; a nickname or fuzzy name is resolved by the local kernel and MUST be confirmed with confirm=true (the first call returns a CONFIRM REQUIRED note and sends nothing).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "target_name": {
                         "type": "string",
-                        "description": "The contact name from the Discord address book, e.g. 'alex' or 'sam'.",
+                        "description": "The contact name from the Discord address book, e.g. 'alex' or 'sam'. A nickname or description is allowed but then requires confirm=true.",
                     },
                     "message": {
                         "type": "string",
                         "description": "The DM content to send.",
+                    },
+                    "confirm": {
+                        "type": "boolean",
+                        "description": "Set true ONLY after the owner has confirmed a fuzzy/nickname target. Ignored for an exact contact name.",
                     }
                 },
                 "required": ["target_name", "message"],
@@ -1763,6 +1769,7 @@ def _execute_tool_impl(tool_name, arguments):
         return f"[Screen state — internal navigation only, do NOT repeat to user]\n{desc}{guide_section}"
     elif tool_name == "send_discord_message":
         target_name = arguments.get("target_name", "")
+        confirm = bool(arguments.get("confirm", False))
         raw_message = arguments.get("message", "").strip()
         if not raw_message:
             return (
@@ -1771,9 +1778,13 @@ def _execute_tool_impl(tool_name, arguments):
                 "and call send_discord_message again."
             )
         outbound_message = _enforce_discord_honorific(target_name, raw_message)
-        result = send_discord_message(target_name, outbound_message)
-        if isinstance(result, str) and not result.startswith("Error"):
-            _inject_outbound_discord_message_into_session(target_name, outbound_message)
+        result = send_discord_message(target_name, outbound_message, confirm=confirm)
+        # Mirror into the session ONLY when it was actually delivered — a CONFIRM
+        # REQUIRED note (fuzzy target) means nothing was sent.
+        if isinstance(result, str) and result.startswith("[System Note: Message delivered"):
+            _resolved = resolve_contact(target_name)
+            _inject_outbound_discord_message_into_session(
+                _resolved[0] if _resolved else target_name, outbound_message)
         return result
     elif tool_name == "forward_to_owner":
         return forward_to_owner(
@@ -2164,8 +2175,17 @@ def execute_tool(tool_name, arguments):
     return execute_tool_ex(tool_name, arguments)[1]
 
 
-def _extract_discord_message_intent(user_text: str) -> tuple[str, str] | None:
-    """Parse Discord relay requests into (target_name, message)."""
+def _extract_discord_message_intent(user_text: str) -> dict | None:
+    """Parse a Discord relay request into {"target", "payload", "exact", "via"}.
+
+    Target resolution (ID 15):
+      - an EXACT contact name in the text (case-insensitive) wins, no model call;
+      - otherwise Laya picks among the known contacts (Part B) and the result is a
+        GUESS, so `exact` is False and the caller must confirm before sending;
+      - Laya may also recognise a relay that the verb regex misses (Part C).
+
+    Returns None when this is not a relay request at all.
+    """
     if not isinstance(user_text, str):
         return None
 
@@ -2178,29 +2198,76 @@ def _extract_discord_message_intent(user_text: str) -> tuple[str, str] | None:
         text,
         flags=re.IGNORECASE,
     )
-    if not match:
-        return None
 
-    target_name = match.group(2).strip().strip("\"'“”").lower()
-    payload = match.group(3).strip()
-    payload_lower = payload.lower()
+    # ── target + payload ─────────────────────────────────────────────────────
+    if match:
+        raw_name = match.group(2).strip().strip("\"'“”")   # NOT lowercased (Part A)
+        payload = match.group(3).strip()
+        payload_lower = payload.lower()
+        if payload_lower.startswith("on discord "):
+            payload = payload[11:].strip()
+        payload = re.sub(r"\s+on\s+discord\s*$", "", payload, flags=re.IGNORECASE).strip()
+        payload = payload.strip("\"'“”")
+        payload = re.sub(r"\s+", " ", payload)
+        resolved = resolve_contact(raw_name)
+        if resolved:
+            return {"target": resolved[0], "payload": payload, "exact": True, "via": "regex+exact"}
+        # The captured token is not a contact — ask Laya about the WHOLE request,
+        # because the regex tokenises phrasings badly ("text my brother saying hi"
+        # captures "my" as the name).
+        pick = laya_pick_contact(text)
+        if pick.get("name"):
+            # The regex tokenised the name badly, so its payload is unreliable too —
+            # hand the model the whole request and let it compose from that.
+            return {"target": pick["name"], "payload": text, "exact": pick.get("exact", False),
+                    "via": f"regex+laya ({pick.get('reason', '')})"}
+        if "discord" in payload_lower or "discord" in text.lower():
+            # Explicitly about Discord but no known contact — keep the raw phrasing so
+            # send_discord_message can report it honestly.
+            return {"target": raw_name, "payload": payload, "exact": False, "via": "regex+unknown"}
 
-    has_explicit_discord = "discord" in payload_lower or "discord" in text.lower()
-
-    if payload_lower.startswith("on discord "):
-        payload = payload[11:].strip()
-    payload = re.sub(r"\s+on\s+discord\s*$", "", payload, flags=re.IGNORECASE).strip()
-    payload = payload.strip("\"'“”")
-    payload = re.sub(r"\s+", " ", payload)
-
-    # Avoid hijacking normal phrases like "tell me a joke" unless Discord is explicit.
-    if target_name not in CONTACTS and not has_explicit_discord:
-        return None
-
-    if target_name and payload:
-        return target_name, payload
-
+    # ── Part C: no verb+name match — is this a relay at all? ──────────────────
+    if _laya_relay_intent(text):
+        pick = laya_pick_contact(text)
+        if pick.get("name"):
+            return {"target": pick["name"], "payload": text, "exact": pick.get("exact", False),
+                    "via": f"laya-intent ({pick.get('reason', '')})"}
     return None
+
+
+_RELAY_HINT_RE = re.compile(
+    r"\b(?:tell|ask|text|message|dm|send|relay|forward|let\s+\w+\s+know|ping|notify|inform)\b",
+    re.IGNORECASE,
+)
+
+
+def _laya_relay_intent(text: str) -> bool:
+    """Conservative Laya gate: is this a request to send a Discord message? (Part C)
+
+    Only reached for texts that mention a known contact OR a send-ish verb (cheap
+    pre-filter) — this runs on real turns, so it must not cost a Laya call for
+    ordinary chat. Returns False on any doubt: this path can FORCE a send, so a false
+    positive is worse than a miss.
+    """
+    lowered = text.lower()
+    if not (_RELAY_HINT_RE.search(text)
+            or any(n.lower() in lowered for n in contact_names())):
+        return False
+    try:
+        import core.system1 as system1
+        if not system1.kernel_enabled():
+            return False
+        verdict = system1.check_state(
+            "Is this a request to send a message to a person on the owner's behalf?",
+            yes_description="yes — the owner is asking to send/relay a message to someone",
+            no_description=("no — it is ordinary conversation, a question, or a command for the "
+                            "computer, not a message to another person"),
+            state_text=f"request: {text[:400]}",
+            min_margin=0.5,
+        )
+    except Exception:
+        return False
+    return (not verdict.get("escalate")) and verdict.get("answer") is True
 
 
 def _is_discord_message_request(user_text: str) -> bool:
@@ -3242,16 +3309,27 @@ def process_user_input(user_text, status_callback=None):
                 # For Discord relay on the first round, supply a concrete formatting directive
                 # with the live target/payload so the model can't get the format wrong.
                 if discord_message_request and discord_intent and tool_round == 0:
-                    _relay_target = discord_intent[0]
-                    _relay_payload = discord_intent[1]
-                    eval_msgs.append({"role": "system", "content": (
-                        f'This is a Discord relay to "{_relay_target}". '
-                        f'Call send_discord_message with target_name="{_relay_target}". '
-                        f'For the "message" argument you MUST compose a formal butler message that '
-                        f'attributes the following to "the Boss": {_relay_payload!r}. '
-                        f'Begin with a polite greeting to {_relay_target.title()}. '
-                        f'Example: "Good evening, {_relay_target.title()}. The Boss has asked me to convey that {_relay_payload.lower()}."'
-                    )})
+                    _relay_target = discord_intent["target"]
+                    _relay_payload = discord_intent["payload"]
+                    if discord_intent.get("exact"):
+                        eval_msgs.append({"role": "system", "content": (
+                            f'This is a Discord relay to "{_relay_target}". '
+                            f'Call send_discord_message with target_name="{_relay_target}". '
+                            f'For the "message" argument you MUST compose a formal butler message that '
+                            f'attributes the following to "the Boss": {_relay_payload!r}. '
+                            f'Begin with a polite greeting to {_relay_target.title()}. '
+                            f'Example: "Good evening, {_relay_target.title()}. The Boss has asked me to convey that {_relay_payload.lower()}."'
+                        )})
+                    else:
+                        # ID 15: a GUESSED target is never sent silently — confirm first.
+                        eval_msgs.append({"role": "system", "content": (
+                            f'This looks like a Discord relay, but the recipient was not named exactly. '
+                            f'It resolved to "{_relay_target}" — which is a GUESS. '
+                            f'Do NOT call send_discord_message yet. Ask {config.OWNER_NAME} a short '
+                            f'question to confirm that he wants this sent to {_relay_target.title()}, '
+                            f'mentioning the gist ({_relay_payload!r}). If he confirms, call '
+                            f'send_discord_message with target_name="{_relay_target}" and confirm=true.'
+                        )})
                 response_msg = _execute_llm_completion(
                     messages=eval_msgs,
                     temperature=config.LLM_TOOL_TEMPERATURE,
@@ -3293,7 +3371,10 @@ def process_user_input(user_text, status_callback=None):
                     else:
                         if tool_name == "send_discord_message" and discord_intent is not None:
                             if not tool_arguments.get("target_name"):
-                                tool_arguments["target_name"] = discord_intent[0]
+                                # Use the REAL contact key (case preserved) — the old code
+                                # forced the lowercased token, which is what made a
+                                # capitalised contact ('Adham') unreachable.
+                                tool_arguments["target_name"] = discord_intent["target"]
                             # Do NOT fall back to the raw discord_intent payload for the message —
                             # the model must craft a butler-formatted message itself.
                             # If message is missing, execute_tool will return an error that

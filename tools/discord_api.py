@@ -1,5 +1,7 @@
+import difflib
 import json
 import os
+import re
 from typing import Any
 
 import requests
@@ -38,6 +40,100 @@ def _load_contacts() -> dict:
 CONTACTS: dict = _load_contacts()
 
 
+def contact_names() -> list:
+    """Canonical contact names — the real JSON keys, case preserved (ID 15)."""
+    return list(CONTACTS.keys())
+
+
+def resolve_contact(name):
+    """(canonical_name, id) for an EXACT case/whitespace-insensitive name, else None.
+
+    Fixes the live 'Adham' bug (Part A): the keys in discord_contacts.json are not all
+    lowercase, but every lookup path lowercased the input first, so a capitalised key
+    was unreachable — "Unknown Discord contact 'Adham'" for a contact that exists.
+    """
+    key = str(name or "").strip().lower()
+    if not key:
+        return None
+    for canonical, recipient_id in CONTACTS.items():
+        if canonical.strip().lower() == key:
+            return canonical, recipient_id
+    return None
+
+
+def _fuzzy_token_match(text: str):
+    """Deterministic typo resolution against the contact names (no model).
+
+    Measured 2026-09-28: `difflib` resolves misspellings cleanly ('geroge' -> george,
+    'farrah' -> farah, 'maski' -> masky) and correctly returns nothing for words that
+    are not names ('brother', 'plumber') — while Laya's margins on the same typos were
+    0.15-0.37 (it even guessed 'tiger' for "my brother"). So typos go to difflib and
+    semantics go to Laya.
+    """
+    tokens = re.findall(r"[A-Za-z0-9_.@-]+", str(text or "").lower())
+    lowered = [n.lower() for n in contact_names()]
+    for token in tokens:
+        if len(token) < 4:
+            continue
+        hit = difflib.get_close_matches(token, lowered, n=1, cutoff=0.8)
+        if hit:
+            for canonical in contact_names():
+                if canonical.lower() == hit[0]:
+                    return canonical
+    return None
+
+
+def laya_pick_contact(request_text: str) -> dict:
+    """Laya: which known contact does this request address? (ID 15 / Part B)
+
+    Returns {"name": canonical or None, "exact": bool, "escalate": bool, "reason": str}.
+    `exact` is True only when that contact's name appears verbatim (case-insensitive)
+    in the request — those may send without confirmation. Anything else is a guess, so
+    the caller must confirm it first (the owner's choice: never DM a guessed contact
+    silently).
+
+    Uses Laya's strong shape — candidates as `criteria`, the request in the state —
+    and never invents a contact: no match, low margin, kernel off or failure all come
+    back with name=None.
+    """
+    names = contact_names()
+    if not names:
+        return {"name": None, "exact": False, "escalate": True, "reason": "no contacts configured"}
+    text = str(request_text or "")
+    lowered = text.lower()
+    for canonical in names:
+        if canonical.strip().lower() in lowered:
+            return {"name": canonical, "exact": True, "escalate": False,
+                    "reason": "name appears verbatim in the request"}
+
+    # Typo/misspelling -> deterministic fuzzy match (still a guess: confirm first).
+    typo = _fuzzy_token_match(text)
+    if typo:
+        return {"name": typo, "exact": False, "escalate": False,
+                "reason": f"close spelling match for '{typo}' (confirm before sending)"}
+
+    try:
+        import core.system1 as system1
+        if not system1.kernel_enabled():
+            return {"name": None, "exact": False, "escalate": True, "reason": "kernel disabled"}
+        criteria = {chr(65 + i): n for i, n in enumerate(names[:18])}
+        criteria["Z"] = "none of these — no known contact matches"
+        verdict = system1.choose(
+            "Which known contact is this message meant for?",
+            criteria, key="contact", state={"request": text[:400]}, min_margin=0.5)
+    except Exception as e:
+        return {"name": None, "exact": False, "escalate": True,
+                "reason": f"kernel error ({e.__class__.__name__})"}
+    if verdict.get("escalate"):
+        return {"name": None, "exact": False, "escalate": True,
+                "reason": verdict.get("reason") or "low or unavailable margin"}
+    choice = verdict.get("choice")
+    if not choice or choice == "Z":
+        return {"name": None, "exact": False, "escalate": False, "reason": "no matching contact"}
+    return {"name": criteria.get(choice), "exact": False, "escalate": False,
+            "reason": "Laya pick (not an exact name in the request)"}
+
+
 DISCORD_API_BASE = "https://discord.com/api/v10"
 DISCORD_BOT_TOKEN = config._secret("discord", "bot_token", default="")
 
@@ -56,22 +152,42 @@ def _extract_error_detail(response: requests.Response) -> str:
     return text[:280] if text else "Unknown Discord API error"
 
 
-def send_discord_message(target_name, message):
-    """Send a Discord DM via bot token + REST API only (no discord.py)."""
-    lookup_name = str(target_name or "").strip().lower()
+def send_discord_message(target_name, message, confirm=False):
+    """Send a Discord DM via bot token + REST API only (no discord.py).
+
+    Target resolution (ID 15):
+      1. an EXACT case-insensitive name match sends immediately;
+      2. otherwise Laya picks among the known contacts, and unless `confirm=True` the
+         tool REFUSES and reports the guess so it can be confirmed first — a wrong
+         guess must never DM the wrong person silently.
+    """
     original_name = str(target_name or "").strip()
     content = str(message or "").strip()
 
-    if not lookup_name:
+    if not original_name:
         return "Error: target_name is required."
     if not content:
         return "Error: message is required."
 
-    recipient_id = CONTACTS.get(lookup_name)
-    if not recipient_id:
-        return f"Error: Unknown Discord contact '{original_name}'."
+    resolved = resolve_contact(original_name)
+    if resolved:
+        canonical_name, recipient_id = resolved
+    else:
+        pick = laya_pick_contact(original_name)
+        if not pick.get("name"):
+            extra = f" ({pick.get('reason')})" if pick.get("reason") else ""
+            return f"Error: Unknown Discord contact '{original_name}'.{extra}"
+        if not confirm:
+            return (
+                f"[CONFIRM REQUIRED: '{original_name}' is not an exact contact name — it "
+                f"resolves to '{pick['name']}'. Ask {config.OWNER_NAME} to confirm, then "
+                f"re-call send_discord_message with target_name='{pick['name']}' and "
+                f"confirm=true. Nothing was sent.]"
+            )
+        canonical_name, recipient_id = pick["name"], CONTACTS.get(pick["name"])
+
     if str(recipient_id).startswith("INSERT_ID_HERE"):
-        return f"Error: Contact '{lookup_name}' does not have a real Discord ID configured yet."
+        return f"Error: Contact '{canonical_name}' does not have a real Discord ID configured yet."
 
     token = DISCORD_BOT_TOKEN.strip()
     if not token:
@@ -126,4 +242,4 @@ def send_discord_message(target_name, message):
             f"(HTTP {msg_response.status_code}) - {detail}"
         )
 
-    return f"[System Note: Message delivered to {lookup_name} on Discord.]"
+    return f"[System Note: Message delivered to {canonical_name} on Discord.]"

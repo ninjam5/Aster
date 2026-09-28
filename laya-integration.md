@@ -346,6 +346,33 @@ the high-risk cache-sensitive change (tool shortlisting) plus the low-value micr
 > and it covers the whole outbound-message path — `send_discord_message` *and* the relay
 > parser — not just typos: **Laya picks the contact.** (Bumped: do it early in Phase 3.)
 
+**STATUS — DONE 2026-09-28 (Parts A + B + C).** Owner decision: a non-exact match must be
+**confirmed before sending**.
+
+| Part | What shipped |
+|------|--------------|
+| **A** | `tools/discord_api.resolve_contact` — case/whitespace-insensitive lookup. Fixes the **live bug**: `discord_contacts.json` has `'Adham'` (capital) while every path lowercased the input first, so that contact was unreachable ("Unknown Discord contact 'Adham'") and the brain *forced* the lowercased name into the tool call. |
+| **B** | `laya_pick_contact` — Laya picks among the real contact keys (candidates as `criteria`); returns the **canonical key**, so case is preserved by construction. |
+| **C** | `_laya_relay_intent` — conservative neutral-key gate so phrasings the verb regex misses ("let George know…") are still recognised. Runs only after a cheap pre-filter (a send verb or a contact name in the text), and returns False on any doubt — this path can *force a send*, so a false positive is worse than a miss. |
+
+**Measured live (the design follows the evidence):**
+
+- **Typos are difflib's job, not Laya's.** `get_close_matches` resolved `geroge→george`,
+  `farrah→farah`, `maski→masky`, and correctly returned *nothing* for "brother"/"plumber".
+  Laya's margins on the same typos were **0.15–0.37** — and it guessed **tiger** for
+  "my brother" (margin 0.19). So: exact → difflib (typos) → Laya (semantics).
+- Laya *is* good at the semantic/verbatim case: "tell the ninja guy hello" → `ninja`,
+  margin **0.62**.
+- Verified end-to-end: `Adham`/`adham`/`ADHAM` all resolve to the `'Adham'` key;
+  "tell geroge I will be late" → `george` (not exact → confirm); "tell my brother" and
+  "message the plumber" → **no guess** (escalate).
+
+**Confirmation gate:** `send_discord_message(target_name, message, confirm=False)` sends
+immediately only for an **exact** name; a fuzzy/typo/Laya pick returns
+`[CONFIRM REQUIRED: … resolves to 'X' … re-call with confirm=true]` and sends **nothing**.
+The relay directive tells the model to ask the owner first when the target is a guess.
+(The tool-level check also covers model-initiated sends, not just the relay path.)
+
 - **Where:** `tools/discord_api.py:59-74` (`send_discord_message`), regex parser
   `core/brain.py:2151-2188` (`:2181` membership test).
 - **What:** `choice` over the known contact names (nickname/typo/case tolerance).

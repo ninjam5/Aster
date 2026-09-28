@@ -101,13 +101,22 @@ import core.brain as brain, core.memory as memory, core.system1 as system1, tool
 | ID | E2E test | Expected |
 |----|----------|----------|
 | **15a** | In-persona: "text George and say I'll be late" (exact name) | `send_discord_message` resolves the contact and sends |
-| **15b** | Same with a nickname / typo / wrong case ("text adham") | Laya picks the right contact; **no** "Unknown Discord contact" |
-| **15c** | A name not in `CONTACTS` at all | asks for clarification, does **not** guess a contact |
+| **15b** | Same with a nickname / typo / wrong case ("text adham", "tell geroge…") | the right contact is resolved (**no** "Unknown Discord contact"); case is preserved; a typo/guess asks for confirmation first |
+| **15c** | A name not in `CONTACTS` at all ("tell my brother", "message the plumber") | asks for clarification, does **not** guess a contact, nothing is sent |
+| **15d** | Confirm flow: reply "yes" to the CONFIRM REQUIRED question | the send then happens (with `confirm=true`) |
+| **15e** | "let George know I'll be late" (no verb+name pattern) | recognised as a relay via the Part C gate |
 | **13a** | Discord: a friend whose gender Laya cannot tell | Aster **asks** them; the answer is saved |
 | **13b** | Second time that friend messages | no repeat question (the saved record is used) |
 | **14** | A new contact's relationship | classified once, cached, and not re-asked |
 | **16** | A friend with many stored facts | only the relevant ones are injected (prompt shrinks) |
 | **12** | `recall_memory` on a query with near-duplicate stored lines | the correct fact is ranked first (rerank) |
+
+> **ID 15 status: Layer A DONE, Layer B TODO.** Verified live (2026-09-28): `Adham` /
+> `adham` / `ADHAM` all resolve to the `'Adham'` key; `geroge`→george and `farrah`→farah via
+> difflib; "ninja guy"→ninja via Laya (margin 0.62); "my brother" / "the plumber" correctly
+> guess nothing. The `[CONFIRM REQUIRED]` path and the relay directive were verified with
+> mocked sends — **the live send + confirmation round-trip (15a/15d) still needs a real
+> Discord run with a safe target.**
 
 ---
 
