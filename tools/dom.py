@@ -1090,8 +1090,11 @@ def _web_type_on_page(page, goal: str, text: str, submit: bool = False):
                 page.keyboard.press("Enter")
                 page.wait_for_timeout(1500)
                 note += " — submitted with Enter"
-            except Exception:
-                pass
+            except Exception as e:
+                # QA round 5: this used to `pass` and still return the success-shaped
+                # string, so a failed submit looked like it worked.
+                note += (f" — WARNING: pressing Enter FAILED ({e.__class__.__name__}); "
+                         f"the form was NOT submitted.")
         return (f"Typed {text!r} into '{goal}' in the browser ({note}). "
                 f"[Verify silently — continue with next action.]")
     return None

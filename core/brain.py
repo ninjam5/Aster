@@ -2062,22 +2062,19 @@ def _execute_tool_impl(tool_name, arguments):
                 if is_send_like({"role": loc.get("source", ""),
                                  "name": loc.get("text", ""), "text": loc.get("text", "")}):
                     return tool_fail(
-                        f'BLOCKED — "{goal}" looks like a send/destructive action. '
+                        f'FAILED — BLOCKED — "{goal}" looks like a send/destructive action. '
                         f'Nothing was clicked. Confirm with the owner, then re-call '
                         f'smart_click with confirm_send=true.')
         except Exception as e:
-            # QA round 4: FAIL CLOSED. The broad except used to print and fall through
-            # to the click, so an import failure clicked a send-like control.
+            # QA round 5: FAIL CLOSED UNCONDITIONALLY. The round-4 version re-imported
+            # tools.dom inside the except, so if THAT import was what failed, control
+            # still reached pyautogui.click. No import here — just refuse.
             print(f"[DOM] native send-gate error ({e}); failing closed")
-            try:
-                from tools.dom import _send_policy
-                if _send_policy() == "confirm" and not arguments.get("confirm_send"):
-                    return tool_fail(
-                        f'BLOCKED — could not verify that "{goal}" is safe to click '
-                        f'(the send/destructive check errored). Confirm with the owner, '
-                        f'then re-call with confirm_send=true.')
-            except Exception:
-                pass
+            if not arguments.get("confirm_send"):
+                return tool_fail(
+                    f'FAILED — BLOCKED — could not verify that "{goal}" is safe to click '
+                    f'(the send/destructive check errored). Confirm with the owner, then '
+                    f're-call with confirm_send=true.')
         coords = (loc["x"], loc["y"])
         pre_frame = capture_screen_small_gray()
         pyautogui.click(coords[0], coords[1])
@@ -2112,14 +2109,14 @@ def _execute_tool_impl(tool_name, arguments):
                 from tools.dom import submit_needs_confirm
                 if submit_needs_confirm(goal) and not arguments.get("confirm_send"):
                     return tool_fail(
-                        f'BLOCKED — pressing Enter for "{goal}" would submit a form '
+                        f'FAILED — BLOCKED — pressing Enter for "{goal}" would submit a form '
                         f'(a send/destructive action). Nothing was typed or submitted. '
                         f'Confirm with the owner, then re-call with confirm_send=true.')
             except Exception as e:
                 print(f"[DOM] submit gate error ({e}); failing closed")
                 if not arguments.get("confirm_send"):
                     return tool_fail(
-                        f'BLOCKED — could not verify that submitting "{goal}" is safe '
+                        f'FAILED — BLOCKED — could not verify that submitting "{goal}" is safe '
                         f'(the check errored). Re-call with confirm_send=true.')
         if config.USE_DOM_MOTOR:
             try:
@@ -2183,6 +2180,24 @@ def _execute_tool_impl(tool_name, arguments):
         key = str(arguments.get("key", "")).strip().lower()
         if not key:
             return "Error: key parameter is required."
+        if key in ("enter", "return"):
+            # QA round 5: Enter submits the focused form — the submit gate must cover it,
+            # or the model bypasses it with smart_type(submit=false) + press_key('enter').
+            # Search-like / dialog windows stay exempt so ordinary navigation still works
+            # (set automation.dom_motor_send_policy: allow to disable the gate entirely).
+            if not arguments.get("confirm_send"):
+                try:
+                    from tools.dom import submit_needs_confirm
+                    if submit_needs_confirm("", get_foreground_window_title()):
+                        return tool_fail(
+                            "FAILED — BLOCKED — pressing Enter submits the focused form "
+                            "(a send/destructive action). Confirm with the owner, then "
+                            "re-call press_key with confirm_send=true.")
+                except Exception as e:
+                    print(f"[DOM] press_key submit gate error ({e}); failing closed")
+                    return tool_fail(
+                        "FAILED — BLOCKED — could not verify that pressing Enter is safe "
+                        "(the check errored). Re-call with confirm_send=true.")
         pyautogui.press(key)
         invalidate_screen_cache()
         time.sleep(0.5)
@@ -2366,8 +2381,12 @@ def _laya_relay_intent(text: str) -> bool:
     positive is worse than a miss.
     """
     lowered = text.lower()
-    if not (_RELAY_HINT_RE.search(text)
-            or any(n.lower() in lowered for n in contact_names())):
+    # QA round 5: require a CONTACT NAME or an explicit "discord" mention. The send-verb
+    # hint alone matched ordinary narration ("what did she tell you", "I'll text you
+    # later") and cost a Laya pass every such turn. A relay to an unnamed person cannot
+    # be sent anyway (there is no contact to resolve), so nothing is lost.
+    if not ("discord" in lowered
+            or any(str(n).lower() in lowered for n in contact_names())):
         return False
     try:
         import core.system1 as system1
@@ -2754,27 +2773,24 @@ def evaluate_and_memorize(reason, force: bool = False):
             tools=ADMIN_TOOLS,
         )
         all_tool_calls = _extract_all_native_tool_calls(response_msg)
-        _saved = 0
+        _attempts = 0
         for tool_payload in all_tool_calls:
             if tool_payload.get("name") != "memorize_fact":
                 continue
-            # QA 2026-09-28: the gate costs 1-2 serialized Laya passes per fact, so an
-            # unbounded list could stall every other kernel caller. Cap per pass.
-            if _saved >= 8:
-                print("[Aster Internal: consolidation fact cap reached (8); "
+            # QA round 5: bound ATTEMPTS, not just writes. The gate costs 1-2 serialized
+            # Laya passes per fact, and counting only successful writes meant a response
+            # full of duplicates/junk ran unbounded passes.
+            if _attempts >= 8:
+                print("[Aster Internal: consolidation attempt cap reached (8); "
                       "remaining facts will be picked up next pass.]")
                 break
+            _attempts += 1
             tool_args = tool_payload.get("arguments") or {}
             if not isinstance(tool_args, dict):
                 continue
             fact = tool_args.get("fact", "").strip()
             if fact:
-                _res = execute_tool("memorize_fact", {"fact": fact})
-                # QA round 2/3: only a REAL write counts against the cap. A gate skip
-                # ("NOT saved"), an is_fact_already_known duplicate, or an offline
-                # return must not consume the budget and starve a new fact.
-                if isinstance(_res, str) and "Successfully committed" in _res:
-                    _saved += 1
+                execute_tool("memorize_fact", {"fact": fact})
     except Exception as e:
         print(f"[Aster Internal: Memory consolidation failed: {e}]")
 
@@ -3618,13 +3634,14 @@ def process_user_input(user_text, status_callback=None):
                             # tells the tool the target was inferred, so it refuses
                             # without an explicit confirm.
                             if not discord_intent.get("exact"):
-                                # QA round 4: don't reset an EXPLICIT confirm the model
-                                # passed — that arrives on the turn AFTER the owner said
-                                # yes, and resetting it made the confirmation loop
-                                # forever. Only the automatic relay turn is forced off.
+                                # QA round 5: force it OFF on the automated relay turn.
+                                # Preserving a model-supplied confirm=true let the model
+                                # self-approve a guessed target with no owner input. The
+                                # owner's "yes" arrives on a LATER turn, where the parser
+                                # finds no relay (so nothing is forced) and an exact/
+                                # confirmed send goes through normally.
+                                tool_arguments["confirm"] = False
                                 tool_arguments["assume_guess"] = True
-                                if "confirm" not in tool_arguments:
-                                    tool_arguments["confirm"] = False
                             # Do NOT fall back to the raw discord_intent payload for the message —
                             # the model must craft a butler-formatted message itself.
                             # If message is missing, execute_tool will return an error that
