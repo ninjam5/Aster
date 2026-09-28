@@ -338,3 +338,44 @@ With main.py running: text 470 tok/s / image 310 tok/s. With main.py stopped: 51
 core across 84 threads). The earlier "app costs 2.6-4.3x" reading (185 / 63 tok/s) was
 taken while the DESKTOP was busy (video playback) — **desktop load is the dominant
 variable: the same config measured 63 tok/s then and 310 tok/s on an idle machine (5x).**
+
+---
+
+### 2026-09-28 — INCIDENT: live web was dead; research answered from the wrong Wikipedia page
+
+**Reported:** *"why is the agent refusing to use its research tool"* — asked about
+Netanyahu at the UNGA on 2026-09-27, Aster offered a live search, then denied it could
+search, then refused citing its knowledge cutoff.
+
+**What actually happened (reliability_log.jsonl):**
+
+| time | rounds | tool_calls | executed | what the model said |
+|---|---|---|---|---|
+| 11:53:58 | 3 | **2** | true | "My research turned up information on ICC warrants ... through mid-2025 ... shall I try a live web search?" |
+| 12:32:44 | 1 | 0 | false | "I'm afraid I cannot directly execute a web search. I can only access information from my training data." |
+| 12:33:32 | 1 | 0 | false | cutoff refusal + "I'll search for information about this meeting" (no call) |
+
+So research DID run — twice. Three defects made it useless:
+
+1. **Live web was never reachable.** `FIRECRAWL_API_KEY` was empty in `secrets.yaml`,
+   and `_firecrawl_search` used the **v1** result shape (`result.data` / `item["markdown"]`)
+   against the installed **firecrawl 4.x** SDK (`SearchData.web` / `Document.markdown` +
+   `metadata.title`). The AttributeError was swallowed as "Firecrawl error" -> `None`.
+2. **Wikipedia answered with the wrong article and cached it.** Two files were written
+   under the question's name: one with the **Matteo Renzi** article (84k chars — the
+   `auto_suggest=True` path had no relevance check), one with a Nov-2024 ICC-warrant
+   article. Both were served as fresh cache (90-day TTL).
+3. **No detector fired.** The cutoff regex missed "not current enough" and "provide
+   **that** information"; `_claims_tool_execution` had no research pattern; no
+   capability-denial detector existed at all.
+
+**Verification after the fix (live, with the real key):**
+`research("did the prime minister of israel attend the United nations meeting on
+september 27th 2026?")` -> `[Source: Firecrawl | live web]`, first hit
+*"Israel - General Debate, 81st Session | UN Web TV"* (Netanyahu addressing UNGA),
+no Renzi. `_wikipedia_lookup(<same question>)` -> `None` (Renzi rejected).
+Detectors on the three verbatim live texts: cutoff T1/T3 true, denial T2 true,
+narration T1/T3 true; benign replies stay false. 2 poisoned vault files deleted.
+37 new tests -> suite **458 passed**.
+
+**Status:** fixed in code + tests. **Needs a `main.py` restart** to be live.

@@ -166,7 +166,30 @@ _CUTOFF_REFUSAL_RE = re.compile(
     r"not\s+(?:yet\s+)?(?:widely\s+)?(?:documented|available|published|released)\b|"
     r"(?:my|the)\s+(?:training\s+)?(?:data|knowledge|information)\s+(?:does\s+not|doesn'?t|is\s+not)\s+(?:include|cover|have|extend)|"
     r"(?:unavailable|inaccessible)\s+in\s+(?:my|the)\s+(?:current\s+)?(?:dataset|knowledge|database)|"
-    r"cannot\s+(?:confirm|verify|provide)\s+(?:this\s+)?(?:information|data|specs?)\b",
+    r"cannot\s+(?:confirm|verify|provide)\s+(?:this|that|any|the)?\s*(?:information|data|specs?)\b|"
+    # Added 2026-09-28 after the live refusal slipped through both nets:
+    # "I cannot provide that information as my knowledge is not current enough..."
+    r"not\s+(?:current|up.to.date|updated|recent)\s+enough|"
+    r"(?:my|the)\s+(?:training\s+)?(?:data|knowledge|information)\s+(?:is|isn'?t|was)\s+(?:not\s+)?(?:current|up.to.date|updated|recent|outdated)|"
+    r"(?:training\s+)?(?:data|knowledge)\s+(?:only\s+)?(?:goes|extends|reaches|stretches)\s+(?:up\s+)?(?:to|through)|"
+    r"doesn'?t\s+go\s+(?:quite\s+)?that\s+far|"
+    r"my\s+(?:research|lookup)\s+(?:turned\s+up|found|shows?|revealed)\s+(?:nothing|no\s+specific)",
+    re.IGNORECASE,
+)
+
+
+# Added 2026-09-28: the model told the owner "I'm afraid I cannot directly execute a
+# web search. I can only access information from my training data." — a flat denial of
+# a capability the tools DO provide (research / browse_web). Nothing detected it.
+_CAPABILITY_DENIAL_RE = re.compile(
+    r"(?:i\s+)?(?:can'?t|cannot|can\s+not|am\s+unable\s+to|don'?t\s+have)\s+"
+    r"(?:directly\s+|actually\s+|currently\s+)?"
+    r"(?:execute|perform|run|do|access|use|browse|search)\s+"
+    r"(?:a\s+|the\s+|any\s+)?(?:web\s+search|internet|online|web|browser|live\s+web|external\s+sites?)|"
+    r"(?:i\s+)?(?:don'?t|do\s+not)\s+have\s+(?:access\s+to\s+)?(?:the\s+)?(?:internet|web|live\s+web|a\s+browser)|"
+    r"(?:i\s+)?(?:can\s+only|am\s+limited\s+to)\s+(?:access|use)\s+(?:information\s+)?(?:from\s+)?(?:my\s+)?(?:training\s+data|training|knowledge\s+base)|"
+    r"(?:i'?m|i\s+am)\s+afraid\s+i\s+cannot\s+(?:directly\s+)?(?:execute|perform|access)|"
+    r"i\s+do\s+not\s+have\s+the\s+ability\s+to\s+(?:search|browse|access\s+the\s+web)",
     re.IGNORECASE,
 )
 
@@ -178,6 +201,14 @@ def _claims_knowledge_cutoff(response_text: str) -> bool:
     The model gave up on a question instead of calling the research tool first.
     """
     return bool(_CUTOFF_REFUSAL_RE.search(response_text or ""))
+
+
+def _denies_capability(response_text: str) -> bool:
+    """Detect a flat denial of a capability Aster's tools provide (web search,
+    browsing, the screen, the webcam...). Such denials are always wrong — the
+    correct move is a tool call — and they poison later turns, which imitate
+    the denial. Returns True when the reply claims it cannot do these things."""
+    return bool(_CAPABILITY_DENIAL_RE.search(response_text or ""))
 
 
 def _claims_tool_execution(user_text: str, response_text: str, message: dict = None) -> bool:
@@ -212,6 +243,19 @@ def _claims_tool_execution(user_text: str, response_text: str, message: dict = N
         (r"\bset\s+(?:an?\s+)?alarm\b", r"\b(?:setting|alarm)\b"),
         # App launching
         (r"\bopen\s+\w+\b", r"\b(?:launching|opening|starting|launched|opened)\b"),
+        # Research / live web — the model narrates a search ("I'll search...",
+        # "my research turned up...") without emitting a tool call. Added 2026-09-28:
+        # the live turn said "I'll search for information about this meeting" with 0
+        # tool calls and nothing caught it.
+        (
+            r"\b(?:who|what|when|where|which|did|does|do|is|are|was|were|how|why|"
+            r"latest|news|current|search|research|look\s+up|find\s+out)\b",
+            r"\b(?:let\s+me|i'?ll|i\s+will|i'?m\s+going\s+to|i\s+am\s+going\s+to|"
+            r"allow\s+me\s+to)\s+(?:go\s+ahead\s+and\s+)?"
+            r"(?:search|look\s+(?:it|this|that|them)?\s*up|research|check|find\s+(?:out|that|this))\b"
+            r"|\bmy\s+research\s+(?:turned\s+up|found|shows?|revealed)\b"
+            r"|\bi'?ll\s+search\b|\bsearching\s+(?:now|for)\b",
+        ),
     ]
 
     user_lower = (user_text or "").lower()
@@ -2938,6 +2982,7 @@ def process_user_input(user_text, status_callback=None):
             tools_executed = False
             hallucination_retried = False
             cutoff_retried = False
+            denial_retried = False
             failure_retried = False
             # Tools that FAILED this turn and were never successfully retried —
             # used to block the model from reporting success after a failure.
@@ -3241,6 +3286,25 @@ def process_user_input(user_text, status_callback=None):
                     })
                     continue  # Retry the loop
 
+                # Capability-denial retry: the model claimed it CANNOT do something a
+                # tool provides ("I cannot directly execute a web search"). These denials
+                # are always false, and they poison later turns which imitate them.
+                if not denial_retried and response_text and _denies_capability(response_text):
+                    print("[Aster Internal: Capability denial detected — forcing a live-web tool call...]")
+                    denial_retried = True
+                    instrumentation.record_event("denial_retry", turn_id=_turn_id, round=_rounds_used)
+                    messages.append({"role": "assistant", "content": response_text})
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "[System: That denial is FALSE — you DO have live web access. The `research` "
+                            "tool performs a live web search, and `browse_web` drives a real browser. "
+                            f"Never tell {config.OWNER_NAME} you cannot search the web. Call `research` "
+                            "NOW with the topic he asked about and answer from its result.]"
+                        ),
+                    })
+                    continue  # Retry the loop
+
                 # Failure-blind retry: an action tool FAILED earlier this turn (and never
                 # succeeded on a retry), yet the model is replying without acknowledging
                 # it — i.e. about to report success for an action that did not happen.
@@ -3339,6 +3403,7 @@ def process_user_input(user_text, status_callback=None):
                 tools_executed=locals().get("tools_executed"),
                 hallucination_retried=locals().get("hallucination_retried"),
                 cutoff_retried=locals().get("cutoff_retried"),
+                denial_retried=locals().get("denial_retried"),
                 failure_retried=locals().get("failure_retried"),
                 outcome=locals().get("_turn_outcome", "unknown"),
             )

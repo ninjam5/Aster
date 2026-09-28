@@ -11,6 +11,72 @@ os.makedirs(VAULT_DIR, exist_ok=True)
 
 _MIN_WIKI_CHARS = 500  # below this Wikipedia returned a stub; fall through to Firecrawl
 
+# ── relevance guards (2026-09-28) ─────────────────────────────────────────────
+# Incident: a "did Netanyahu attend the UNGA Sept 27 2026?" question was answered
+# from the Wikipedia article on MATTEO RENZI (84k chars), cached under the
+# question's own filename, and served for 90 days. Two causes: the search
+# fallback accepted anything scoring >= 0.15 Jaccard, and the auto_suggest path
+# accepted a page with NO check at all. A page is now only accepted when its
+# TITLE shares a distinctive token with the query.
+_WIKI_MIN_SCORE = 0.5
+
+# Question words and generic ROLE words (so "Prime Minister of Italy" still
+# matches the query "who is the prime minister of italy" via "italy").
+_STOPWORDS = {
+    "what", "when", "where", "which", "who", "whom", "whose", "why", "how",
+    "did", "does", "do", "is", "are", "was", "were", "be", "been", "being",
+    "the", "this", "that", "these", "those", "and", "or", "but", "for", "with",
+    "from", "into", "about", "attend", "attended", "attendance", "meeting",
+    "latest", "news", "current", "today", "yesterday", "update", "updates",
+    "prime", "minister", "president", "general", "assembly", "session",
+}
+
+
+def _distinctive_words(text: str) -> set[str]:
+    """Lowercase words >= 4 chars that carry identity (no question/role stopwords)."""
+    return {w for w in re.split(r"[^a-z0-9]+", (text or "").lower())
+            if len(w) >= 4 and w not in _STOPWORDS}
+
+
+def _tokens_match(a: str, b: str) -> bool:
+    """Fuzzy identity match: exact, prefix ("israel"/"israeli"), or a close typo
+    ("netanyhau"/"netanyahu"). Guards against both false hits (Renzi) and the
+    over-strict rejection of a legitimately relevant page."""
+    if a == b:
+        return True
+    if len(a) >= 4 and len(b) >= 4 and (a.startswith(b) or b.startswith(a)):
+        return True
+    if len(a) >= 5 and len(b) >= 5:
+        from difflib import SequenceMatcher
+        return SequenceMatcher(None, a, b).ratio() >= 0.85
+    return False
+
+
+def _wiki_title_relevant(title: str, topic: str) -> bool:
+    """True when the article title shares a distinctive token with the query."""
+    title_words = _distinctive_words(title)
+    topic_words = _distinctive_words(topic)
+    return any(_tokens_match(t, q) for t in title_words for q in topic_words)
+
+
+_CURRENT_EVENT_RE = re.compile(
+    r"\b(?:latest|breaking|news|today|yesterday|tonight|this\s+(?:week|month|year)|"
+    r"current(?:ly)?|right\s+now|just\s+(?:now|announced|happened)|upcoming)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_current_events(topic: str) -> bool:
+    """True for time-sensitive topics, where Wikipedia is the WRONG source.
+
+    Fires on recency words and on any year >= the current year — a question about
+    September 2026 must never be answered from an encyclopedic snapshot.
+    """
+    if _CURRENT_EVENT_RE.search(topic or ""):
+        return True
+    years = [int(y) for y in re.findall(r"\b(20\d{2})\b", topic or "")]
+    return any(y >= datetime.now().year for y in years)
+
 
 # ── internal helpers ──────────────────────────────────────────────────────────
 
@@ -56,13 +122,16 @@ def _save_to_vault(topic: str, content: str) -> None:
         print(f"[Aster Internal: Vault save error: {e}]")
 
 
-def _wikipedia_lookup(topic: str) -> str | None:
-    """Returns Wikipedia article content for topic, or None if not found/too short/irrelevant.
+def _wikipedia_lookup(topic: str) -> dict | None:
+    """Returns {"title", "content"} for a RELEVANT Wikipedia article, else None.
 
     Two-step strategy:
     1. Direct page lookup with auto_suggest — handles exact titles and common phrasings fast.
     2. Search fallback — scores all candidates by word-overlap and picks the best match,
-       NOT the first result. Falls through to Firecrawl if no candidate is relevant enough.
+       NOT the first result. Falls through to live web if no candidate is relevant enough.
+
+    Both paths require the article TITLE to share a distinctive token with the query
+    (`_wiki_title_relevant`) — relevance, not just length.
     """
     print(f"[Aster Internal: Wikipedia lookup for '{topic}']")
     wikipedia.set_user_agent("Aster/1.0 (local autonomous agent)")
@@ -73,14 +142,17 @@ def _wikipedia_lookup(topic: str) -> str | None:
     for auto_suggest in (False, True):
         try:
             page = wikipedia.page(topic, auto_suggest=auto_suggest)
-            if len(page.content) >= _MIN_WIKI_CHARS:
+            if len(page.content) >= _MIN_WIKI_CHARS and _wiki_title_relevant(page.title, topic):
                 print(f"[Aster Internal: Wikipedia direct hit -> '{page.title}']")
-                return page.content
+                return {"title": page.title, "content": page.content}
+            if len(page.content) >= _MIN_WIKI_CHARS:
+                print(f"[Aster Internal: Wikipedia rejected unrelated hit "
+                      f"'{page.title}' for '{topic}']")
         except wikipedia.DisambiguationError as e:
             try:
                 page = wikipedia.page(e.options[0], auto_suggest=False)
-                if len(page.content) >= _MIN_WIKI_CHARS:
-                    return page.content
+                if len(page.content) >= _MIN_WIKI_CHARS and _wiki_title_relevant(page.title, topic):
+                    return {"title": page.title, "content": page.content}
             except Exception:
                 pass
         except (wikipedia.PageError, wikipedia.WikipediaException):
@@ -104,54 +176,115 @@ def _wikipedia_lookup(topic: str) -> str | None:
             if score > best_score:
                 best_score, best_title = score, title
 
-        if best_title and best_score >= 0.15:
+        if best_title and best_score >= _WIKI_MIN_SCORE and _wiki_title_relevant(best_title, topic):
             try:
                 page = wikipedia.page(best_title, auto_suggest=False)
                 if len(page.content) >= _MIN_WIKI_CHARS:
                     print(f"[Aster Internal: Wikipedia search hit '{best_title}' (score={best_score:.2f})]")
-                    return page.content
+                    return {"title": page.title, "content": page.content}
             except wikipedia.DisambiguationError as e:
                 try:
                     page = wikipedia.page(e.options[0], auto_suggest=False)
                     if len(page.content) >= _MIN_WIKI_CHARS:
-                        return page.content
+                        return {"title": page.title, "content": page.content}
                 except Exception:
                     pass
             except Exception:
                 pass
         else:
             print(f"[Aster Internal: Wikipedia — no relevant result "
-                  f"(best='{best_title}', score={best_score:.2f}), falling through to Firecrawl]")
+                  f"(best='{best_title}', score={best_score:.2f}), falling through to live web]")
     except Exception as e:
         print(f"[Aster Internal: Wikipedia search error: {e}]")
 
     return None
 
 
+def _firecrawl_result_fields(item) -> tuple[str, str, str]:
+    """(title, url, body) from a Firecrawl v2 search result.
+
+    The installed SDK (firecrawl 4.x) returns `SearchData` with `.web`/`.news`
+    whose entries are `Document` (markdown + metadata.title/url) or
+    `SearchResultWeb` (title/url/description). The old code read `result.data`
+    and `item["markdown"]` (the v1 shape) — that raised AttributeError, was
+    swallowed as "Firecrawl error", and silently disabled live search.
+    """
+    if hasattr(item, "model_dump"):
+        d = item.model_dump()
+    elif isinstance(item, dict):
+        d = item
+    else:
+        d = {}
+    meta = d.get("metadata") or {}
+    title = d.get("title") or meta.get("title") or ""
+    url = d.get("url") or meta.get("url") or meta.get("source_url") or ""
+    body = (d.get("markdown") or d.get("description")
+            or d.get("snippet") or d.get("summary") or "")
+    return str(title), str(url), str(body)
+
+
 def _firecrawl_search(topic: str) -> str | None:
-    """Firecrawl 3-query scrape. Returns dossier string or None on failure."""
-    print(f"[Aster Internal: Falling back to Firecrawl for '{topic}']")
+    """Firecrawl live-web search (3 queries). Returns dossier string or None on failure."""
+    print(f"[Aster Internal: Live web search (Firecrawl) for '{topic}']")
     queries = [
         topic,
-        f"what is {topic} and how does it work",
-        f"{topic} latest news updates {datetime.now().year}",
+        f"{topic} latest news {datetime.now().year}",
+        f"{topic} what happened",
     ]
-    dossier = f"--- DEEP RESEARCH DOSSIER: {topic} ---\n\n"
+    dossier = f"--- LIVE WEB DOSSIER: {topic} ---\n\n"
+    got_any = False
     try:
         app = FirecrawlApp(api_key=config.FIRECRAWL_API_KEY)
         for q in queries:
-            dossier += f"SEARCH QUERY: [{q}]\n"
-            result = app.search(q, limit=3, scrape_options={"formats": ["markdown"]})
-            for item in (result.data or [])[:3]:
-                title = item.get("title", "")
-                url = item.get("url", "")
-                body = item.get("markdown") or item.get("description", "")
-                body = body[:5000]  # 9 results × 5k chars ≈ 11k tokens, well within the 60k context
-                dossier += f"- {title} ({url})\n{body}\n\n"
+            result = app.search(q, limit=3, sources=["web"],
+                                scrape_options={"formats": ["markdown"]})
+            items = list(getattr(result, "web", None) or []) + \
+                    list(getattr(result, "news", None) or [])
+            block = f"SEARCH QUERY: [{q}]\n"
+            for item in items[:3]:
+                title, url, body = _firecrawl_result_fields(item)
+                if not body:
+                    continue
+                body = body[:5000]  # 9 results x 5k chars ~ 11k tokens, inside 60k
+                block += f"- {title} ({url})\n{body}\n\n"
+                got_any = True
+            if got_any:
+                dossier += block
+        if not got_any:
+            print("[Aster Internal: Firecrawl returned no usable results]")
+            return None
         return dossier.strip()
     except Exception as e:
-        print(f"[Aster Internal: Firecrawl error: {e}]")
+        print(f"[Aster Internal: Firecrawl error: {e.__class__.__name__}: {e}]")
         return None
+
+
+def _browse_web_search(topic: str) -> tuple[str | None, str]:
+    """Last-resort live search through Aster's own browser (DOM motor + Chrome).
+
+    Returns (dossier_or_None, error_text). Requires free RAM — the browser guard
+    in tools/dom refuses the launch when there is not enough, and that reason is
+    passed back so the model can tell the owner what to close.
+    """
+    print(f"[Aster Internal: Live web search via browse_web for '{topic}']")
+    try:
+        from tools.dom import browse
+    except Exception as e:
+        return None, f"browser module unavailable ({e.__class__.__name__})"
+    try:
+        res = browse(query=topic, max_chars=6000)
+    except Exception as e:
+        return None, f"{e.__class__.__name__}: {e}"
+    if not isinstance(res, dict) or not res.get("ok"):
+        err = res.get("error") if isinstance(res, dict) else "no result"
+        print(f"[Aster Internal: browse_web fallback failed: {err}]")
+        return None, str(err or "unknown browser error")
+    text = (res.get("text") or "").strip()
+    if len(text) < 200:
+        return None, "browser returned too little text"
+    title = res.get("title", "")
+    url = res.get("url", "")
+    return f"SEARCH QUERY: [{topic}] (via browser)\n- {title} ({url})\n{text[:5000]}", ""
 
 
 # ── public tool ───────────────────────────────────────────────────────────────
@@ -179,8 +312,12 @@ def _sanitize_topic(topic: str) -> list[str]:
 def research(topic: str) -> str:
     """Single knowledge-lookup tool exposed to the model.
 
-    Pipeline: vault cache → Wikipedia → Firecrawl fallback.
-    Auto-saves every successful result so repeat queries are instant.
+    Pipeline:
+      current-events topic  → live web FIRST (Firecrawl → browse_web), Wikipedia never
+      anything else         → vault cache → Wikipedia → live web (Firecrawl → browse_web)
+
+    Auto-saves successful results so repeat queries are instant — except
+    current-events topics, which must never be served from a 90-day cache.
     Splits comparison queries ("X vs Y") into two entity lookups automatically.
     """
     print(f"\n[Aster Internal: research('{topic}')]")
@@ -196,25 +333,45 @@ def research(topic: str) -> str:
         return "\n\n---\n\n".join(results)
 
     entity = entities[0] if entities else topic
+    time_sensitive = _is_current_events(entity)
 
-    # 1. Vault cache
-    cached = _check_vault(entity)
-    if cached:
-        print(f"[Aster Internal: Vault hit for '{entity}']")
-        return f"[Source: Vault cache]\n\n{cached}"
+    # 1. Vault cache (skipped for current events — a cached news answer is stale by design)
+    if not time_sensitive:
+        cached = _check_vault(entity)
+        if cached:
+            print(f"[Aster Internal: Vault hit for '{entity}']")
+            return f"[Source: Vault cache]\n\n{cached}"
 
-    # 2. Wikipedia (fast, free, encyclopedic)
-    wiki_content = _wikipedia_lookup(entity)
-    if wiki_content:
-        header = f"[Source: Wikipedia | {entity}]\n\n"
-        _save_to_vault(entity, header + wiki_content)
-        return header + wiki_content
+    # 2. Wikipedia (fast, free, encyclopedic) — never for current events
+    if not time_sensitive:
+        wiki = _wikipedia_lookup(entity)
+        if wiki:
+            header = f"[Source: Wikipedia | {wiki['title']}]\n\n"
+            _save_to_vault(entity, header + wiki["content"])
+            return header + wiki["content"]
 
-    # 3. Firecrawl fallback (current events, niche web content)
-    firecrawl_content = _firecrawl_search(entity)
-    if firecrawl_content:
-        header = f"[Source: Firecrawl | {entity}]\n\n"
-        _save_to_vault(entity, header + firecrawl_content)
-        return header + firecrawl_content
+    # 3. Live web — Firecrawl, then Aster's own browser (Laya/DOM motor + Chrome)
+    live = _firecrawl_search(entity)
+    source = "Firecrawl"
+    browse_err = ""
+    if not live:
+        live, browse_err = _browse_web_search(entity)
+        source = "browse_web"
+    if live:
+        header = f"[Source: {source} | live web]\n\n"
+        if not time_sensitive:
+            _save_to_vault(entity, header + live)
+        return header + live
 
-    return f"[System: Could not find information on '{entity}' via Wikipedia or web search. Try rephrasing or asking a more specific question.]"
+    # 4. Current events with no live path: encyclopedic background is better than nothing,
+    #    clearly labelled as background (not the live answer).
+    if time_sensitive:
+        wiki = _wikipedia_lookup(entity)
+        if wiki:
+            header = (f"[Source: Wikipedia | {wiki['title']}] — encyclopedic BACKGROUND only; "
+                      "this is NOT the current answer.\n\n")
+            return header + wiki["content"]
+
+    detail = f" Live web failed: {browse_err}." if browse_err else ""
+    return (f"[System: Could not find information on '{entity}' via Wikipedia or live web."
+            f"{detail} Tell {config.OWNER_NAME} plainly that the lookup failed — do not guess.]")

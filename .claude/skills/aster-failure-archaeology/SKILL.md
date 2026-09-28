@@ -6,11 +6,12 @@ description: Load this before re-investigating any Aster problem that smells fam
 # Aster Failure Archaeology
 
 Format per entry: **Symptom → Root cause → Evidence → Status.**
-IMPORTANT: this repo has zero git commits. The evidence trail is docs
-(`summary.md` 2026-05-20 §4, root `CLAUDE.md` gotchas, `emotions-next-steps.md`,
-`aster-opensource-plan.md`, `checklist_test.md`, `engine_testing/results/`) and
-project memory. Dated logs are deliberately never rewritten — expect them to
-describe old states.
+The repo gained git history on 2026-09-28 (pushed to GitHub, branches `main`,
+`gemma-4-e4b-lightweight`, `qwen3.6-35b`); before that it had none, so the primary
+evidence trail is docs (`summary.md` 2026-05-20 §4, root `CLAUDE.md` gotchas,
+`emotions-next-steps.md`, `aster-opensource-plan.md`, `checklist_test.md`,
+`engine_testing/results/`) and project memory. Dated logs are deliberately never
+rewritten — expect them to describe old states.
 
 **When NOT to use this skill:** live triage → `aster-debugging-playbook`; current
 rules → `aster-change-control`.
@@ -34,7 +35,10 @@ rules → `aster-change-control`.
 | IEMOCAP anger→happy | Arousal ≠ valence; text gates prosody | SETTLED (characterized) |
 | Karaoke Mode | Fully removed 2026-07-03 | SETTLED — never restore |
 | Doc drift (AGENTS.md et al.) | Multiple stale claims; refreshed 2026-09-27 for the Qwen swap | ONGOING hazard |
-| Gemma 4 E4B → Qwen 3.6 35B-A3B engine swap | BeeLlama v0.4.7 + froggeric template; XML/audio/LoRA-era paths deleted | SETTLED (code) — live validation pending |
+| Gemma 4 E4B → Qwen 3.6 35B-A3B engine swap | BeeLlama v0.4.7 + froggeric template; XML/audio/LoRA-era paths deleted | 
+| "Agent refuses to use research" (2026-09-28) | Live web was silently dead (v1 SDK read on firecrawl 4.x + empty key); Wikipedia matched **Matteo Renzi** for a Netanyahu question and cached it 90 days; all 3 detectors missed the phrasing | SETTLED — fenced |
+| browse_web/research OOM | System RAM/commit exhaustion, not the app; `BROWSER_MIN_FREE_RAM_GB` guard refuses the launch | SETTLED — fenced |
+ SETTLED (code) — live validation pending |
 
 ## The engine hell saga (2026-05) — the costliest battle. Fenced off.
 
@@ -289,9 +293,66 @@ tool-law wording in `_shared_tool_laws.md`, to be A/B'd on the battery. Tracked 
 tool-calling behavior, Whisper route, harness regression) — checklist in
 `engine_testing/qa/qwen-swap-live-validation.md`.
 
+## 2026-09-28 — "The agent refuses to use the research tool"
+
+**Symptom:** Asked *"did the prime minister of israel attend the United nations
+meeting on september 27th 2026?"*, Aster said its knowledge was not current, offered a
+live web search, then — when told yes — denied it could search at all (*"I'm afraid I
+cannot directly execute a web search"*), then refused with **0 tool calls**. It looked
+exactly like tool-avoidance.
+
+**Root cause — three independent defects, all needed for the failure:**
+
+1. **Live web was silently dead.** `FIRECRAWL_API_KEY` was empty in `secrets.yaml`,
+   **and** `_firecrawl_search` read the v1 result shape (`result.data`,
+   `item["markdown"]`) on the installed **firecrawl 4.x** SDK, whose `SearchData`
+   exposes `.web`/`.news` with `Document.markdown` + `metadata.title/url`. The
+   AttributeError was swallowed by `except Exception` → printed as "Firecrawl error" →
+   `None`. Live search had never run on this install.
+2. **The Wikipedia fallback answered with the wrong article, then cached it.**
+   `wikipedia.page(topic, auto_suggest=True)` had **no relevance check**, so the
+   Netanyahu/UNGA-2026 question resolved to the article on **Matteo Renzi** (84k chars)
+   and was saved as `Israeli_Prime_Minister_Netanyhau_..._09_28_26.md` — served as
+   "fresh" cache for 90 days. A second file cached a Nov-2024 ICC-warrant article under
+   the question's filename. The model read `[Source: Wikipedia | <the question>]`
+   followed by unrelated text (hence "ICC warrants … through mid-2025").
+3. **All three safety nets missed every phrasing.** `_CUTOFF_REFUSAL_RE` didn't match
+   "my knowledge is not current enough" or "cannot provide **that** information" (only
+   "this"); `_claims_tool_execution` had **no research/search pattern at all** (only
+   Spotify/screen/timer/open); and **no capability-denial detector existed**. So
+   `cutoff_retried: false`, `hallucination_retried: false` — no retry ever fired.
+
+**Evidence:** `Aster_Vault/reliability_log.jsonl` — 11:53:58 `rounds_used: 3,
+tool_calls: 2, tools_executed: true` (research DID run), then 12:32:44 and 12:33:32 both
+`tool_calls: 0`. The two poisoned vault files were read directly (Renzi body + ICC body).
+Regex probe: `_claims_knowledge_cutoff(<live text>)` → `False`. A live Firecrawl call with
+the real key returned the correct page (*"Israel - General Debate, 81st Session | UN Web TV"*).
+
+**Fixes (shipped 2026-09-28):** key set in `secrets.yaml`; `_firecrawl_search` rewritten
+for the v4 SDK; `browse_web` (Laya/Chrome) is the second live path; Wikipedia relevance
+gate (`_wiki_title_relevant`, fuzzy prefix/typo token match) + real-title source labels;
+current-events topics (recency words, or year ≥ now) route **straight to live web** and are
+never vault-cached; `_CUTOFF_REFUSAL_RE` extended; a research-narration pattern added to
+`_claims_tool_execution`; new `_denies_capability` detector + `denial_retry` nudge; both
+poisoned vault entries deleted. 37 new tests (`tests/test_rag.py`,
+`tests/test_reliability_detectors.py`).
+
+**Status:** SETTLED in code + unit tests; live re-verification needs a `main.py` restart.
+**Lesson: "the model won't use the tool" is often "the tool returns garbage" — read the
+tool's actual output (and its vault cache) before touching the prompt.**
+
+**Fences:**
+- Never answer current-events questions from Wikipedia or the vault; the pipeline
+  enforces this — keep it.
+- Do not loosen `_wiki_title_relevant` back to bare Jaccard overlap (0.15 matched Renzi).
+- Do not cache live-web / current-events results in `Aster_Vault/database/` (90-day TTL).
+- Do not read `result.data` from firecrawl — the installed SDK is v4 (`SearchData.web`).
+- Keep the capability-denial detector: denials poison later turns, which imitate them.
+
 ## Provenance and maintenance
 
-Authored 2026-07-05 from docs + live-code verification (no git history exists).
+Authored 2026-07-05 from docs + live-code verification (git history exists from
+2026-09-28 onward; this file is still the chronicle for the period before that).
 
 - Re-check any "FIXED/STALE" claim: the one-liners in each entry, e.g.
   `Select-String -Path tools\awareness.py -Pattern "AWARENESS_ACTIVE ="`,
