@@ -172,24 +172,33 @@ if more than 20 people are enrolled, the extras have no candidate and may be for
 
 ---
 
-## 6. Phase 5 — tool loop + remaining gates (TODO)
+## 6. Phase 5 — tool loop + remaining gates
 
-| ID | E2E test | Expected |
-|----|----------|----------|
-| **8** | "read this link" / "search the web for X" | the right tool of the overlapping pair is chosen |
-| **6a** | A turn needing a tool | the shortlisted tool set is **stable across turns** (prefix cache preserved) |
-| **6b** | A turn needing an unusual tool | it is still in the set, or escalation sends the full list (no missing tool) |
-| **6c** | Measure cold vs cached prefill across two turns | no regression vs the current ~13k prompt baseline |
-| **18** | Enroll a voice sample that is a poor match | rejected (centroid not poisoned) |
+> **Phase 5 is PARTIAL. Only ID 8 was built. ID 6 and ID 18 are DEFERRED by owner
+> decision (2026-09-28) — do NOT run their rows.**
+
+| ID | E2E test | Expected | Status |
+|----|----------|----------|--------|
+| **8a** | "read this link https://…" | the round-0 hint names `research` (console `tool tie-break -> research`); the model follows it | TODO (live) |
+| **8b** | "open that page and click the login button" | hint names `browse_web` | TODO (live) |
+| **8c** | "remember that I hate mushrooms" | hint names `memorize_fact` (not `save_note`) | TODO (live) |
+| **8d** | Ordinary chat ("what time is it") | **no** hint, and **no** Laya call (cheap pre-filter) | Layer A (pinned by tests) |
+| **8e** | Ambiguous case / kernel off | no hint; the model chooses exactly as before | Layer A |
+| ~~6a~~ | ~~tool shortlisting~~ | — | **DEFERRED (owner)** |
+| ~~6b~~ | ~~tool shortlisting~~ | — | **DEFERRED (owner)** |
+| ~~6c~~ | ~~shortlist cache measurement~~ | — | **DEFERRED (owner)** |
+| ~~18~~ | ~~speaker enrollment~~ | — | **DEFERRED (owner)** |
 
 ---
 
-## 7. Phase 6 — micro-decisions (TODO, lowest value)
+## 7. Phase 6 — micro-decisions
 
-Mood fusion arbitration · `_infer_mood` · TTS voice per contact · intervention
-distraction classification · Whisper "Esther"→"Aster" · Sentry intruder naming.
-One E2E each: trigger the path and confirm the new label/behaviour matches the old
-heuristic's intent.
+> **Phase 6 is DEFERRED — owner decision (2026-09-28). NOT DOING. Nothing to test.**
+>
+> Kept for the record: mood-fusion arbitration · `_infer_mood` · TTS voice per contact ·
+> intervention distraction classification · Whisper "Esther"→"Aster" · Sentry intruder
+> naming. If it is ever revisited, cherry-pick (see `laya-integration.md` §Phase 6) rather
+> than doing the bundle.
 
 ---
 

@@ -517,6 +517,23 @@ The relay directive tells the model to ask the owner first when the target is a 
 
 ## Phase 5 — Tool-loop economics (risky) + remaining gates
 
+### Phase 5 status — PARTIAL, 2026-09-28 (owner decision)
+
+| ID | Item | Status |
+|----|------|--------|
+| **8** | Tie-break among overlapping tools | **SHIPPED** — new `core/tool_routing.py`: a cheap regex pre-filter picks a cluster (read_web / remember / type / screen), Laya `choose` picks the tool within it at margin 0.5, and the brain appends a one-line **round-0 hint** naming the tool. It is a hint, never an override, and it is appended at the END of the eval messages so the cached prompt prefix is untouched. Ordinary chat costs **no** model call. |
+| **6** | Tool shortlisting over the 69 tools | **DEFERRED — owner decision (2026-09-28).** Not started. |
+| **18** | Speaker-enrollment accept/reject | **DEFERRED — owner decision (2026-09-28).** Not started. |
+
+> **Why ID 6 is deferred (recorded so the reasoning survives):** the tool block is
+> **prefix-cached**; a per-turn *varying* shortlist invalidates the cache and each change
+> costs a cold ~13k re-prefill (~25 s at measured prefill rates), so a naive version makes
+> latency **worse**. It needs a stable per-session set plus before/after measurement —
+> its own project, not a quick win.
+> **Why ID 18 is deferred:** a single absolute cosine threshold with no runner-up check can
+> silently poison a speaker centroid, but the owner chose not to touch voice enrollment in
+> this pass.
+
 ### [ID 8] Tie-break among overlapping tools
 - **Where:** `research` `core/brain.py:991-998` vs `browse_web` `:1001-1045`; `save_note`
   `:1306-1319` vs `memorize_fact` `:652-665`; `smart_type` `:1186-1207` vs `type_text`
@@ -553,6 +570,16 @@ The relay directive tells the model to ask the owner first when the target is a 
 ---
 
 ## Phase 6 — Micro-decisions (low value, do last)
+
+### Phase 6 status — **DEFERRED — owner decision (2026-09-28). NOT DOING.**
+
+Nothing in Phase 6 was implemented and none of it is planned. The bundle below is kept for
+the record only. If it is ever revisited, the owner's own steer was to cherry-pick rather
+than do the bundle — the plan's recommendation was to do **Whisper "Esther"→"Aster"** (it
+corrupts a real person's name), **TTS voice per contact** (visible, zero risk) and
+**Sentry intruder naming** (removes an LLM call), and to **skip mood-fusion arbitration**
+(the fixed-priority policy is deliberate) and **`_infer_mood`** (free today; Laya only adds
+cost).
 
 ### [ID 21] Voice / emotion / awareness micro-decisions (bundle)
 All `choice`-only, all replacing small heuristics, all ~0 latency value (accuracy/UX only):

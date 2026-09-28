@@ -3286,6 +3286,21 @@ def process_user_input(user_text, status_callback=None):
     discord_message_request = _is_discord_message_request(user_text)
     discord_intent = _extract_discord_message_intent(user_text)
 
+    # ID 8: resolve an overlapping-tool tie-break up front (one Laya call, and only when
+    # a cheap cluster trigger matches). Injected as a round-0 hint — the model still
+    # chooses; this just stops it dithering between near-duplicate schemas.
+    _tool_hint = ""
+    try:
+        from core.tool_routing import hint_for_tool, pick_tool_for_request
+        _pick = pick_tool_for_request(user_text)
+        if _pick.get("tool") and not _pick.get("escalate"):
+            _tool_hint = hint_for_tool(_pick["tool"])
+            if _tool_hint:
+                print(f"[Aster Internal: tool tie-break -> {_pick['tool']} "
+                      f"({_pick['cluster']}, margin {_pick.get('margin')})]")
+    except Exception as e:
+        print(f"[Aster Internal: tool tie-break skipped ({e})]")
+
     # Idea 2 — inline ambient-action offer. For plain-text real turns only (skip
     # system nudges, media payloads, and Discord-routing requests): when a mood is
     # sustained during active chat, append a short [System Internal] offer so
@@ -3410,6 +3425,11 @@ def process_user_input(user_text, status_callback=None):
                     eval_msgs.insert(1, {"role": "system", "content": _aware_block})
                 # For Discord relay on the first round, supply a concrete formatting directive
                 # with the live target/payload so the model can't get the format wrong.
+                # ID 8: overlapping-tool hint, round 0 only. Appended at the END of the
+                # eval messages so the cached prefix (system + tools) is untouched.
+                if _tool_hint and tool_round == 0:
+                    eval_msgs.append({"role": "system", "content": _tool_hint})
+
                 if discord_message_request and discord_intent and tool_round == 0:
                     _relay_target = discord_intent["target"]
                     _relay_payload = discord_intent["payload"]
