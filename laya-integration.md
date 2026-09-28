@@ -298,6 +298,11 @@ the high-risk cache-sensitive change (tool shortlisting) plus the low-value micr
 - **Escalation:** low margin → the `UNKNOWN` branch (ask), never a guess.
 
 ### [ID 15] Fuzzy contact resolution for outbound sends
+> **OWNER-CONFIRMED (2026-09-28):** *"if i ask aster to text someone, that should be
+> forwarded to laya so laya can make the decision."* So this is **required, not optional**,
+> and it covers the whole outbound-message path — `send_discord_message` *and* the relay
+> parser — not just typos: **Laya picks the contact.** (Bumped: do it early in Phase 3.)
+
 - **Where:** `tools/discord_api.py:59-74` (`send_discord_message`), regex parser
   `core/brain.py:2151-2188` (`:2181` membership test).
 - **What:** `choice` over the known contact names (nickname/typo/case tolerance).
