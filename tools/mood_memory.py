@@ -132,7 +132,10 @@ def _write_summary(summary: str) -> None:
     try:
         if getattr(config, "MEMORY_AVAILABLE", False) and config.memory_collection is not None:
             config.memory_collection.add(
-                documents=[summary], ids=[f"moodtrend_{int(time.time())}"]
+                documents=[summary],
+                # QA round 7: millisecond + hash, like memorize_fact — a second-granular
+                # id collides if two flushes land in the same second.
+                ids=[f"moodtrend_{int(time.time() * 1000)}_{abs(hash(summary)) % 100000}"]
             )
     except Exception as e:
         print(f"[Aster Mood] mood-trend ChromaDB add failed: {e}")

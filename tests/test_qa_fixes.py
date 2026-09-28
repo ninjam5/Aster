@@ -186,9 +186,18 @@ class TestSentryOwnerVsKnown:
         bot.send_message.assert_not_called()
         # positive control: UNKNOWN in the SAME shape DOES send, so this test would
         # catch the owner branch being deleted (QA round 2).
-        sentry._classify_frame_from_faces = lambda b64: "UNKNOWN"
+        # QA round 7: use a REAL frame so the UNKNOWN branch completes, assert the
+        # photo was sent, and monkeypatch (a direct assignment leaked process-wide).
+        import numpy as _np
+        import cv2 as _cv2
+        import base64 as _b64
+        _ok, _buf = _cv2.imencode(".jpg", _np.zeros((40, 40, 3), dtype=_np.uint8))
+        _frame = _b64.b64encode(_buf.tobytes()).decode()
+        monkeypatch.setattr(sentry, "capture_frame_base64", lambda: _frame, raising=False)
+        monkeypatch.setattr(sentry, "_classify_frame_from_faces",
+                            lambda b64: "UNKNOWN", raising=False)
         sentry.execute_sentry_sweep()
-        assert bot.send_message.called or sentry.WAITING_FOR_ID is True
+        bot.send_photo.assert_called()   # the alert really fired
 
 
 @pytest.fixture(autouse=True)
@@ -198,4 +207,6 @@ def _reset_module_state(monkeypatch):
     import tools.sentry as _sentry
     import tools.awareness as _awareness
     monkeypatch.setattr(_sentry, "WAITING_FOR_ID", False, raising=False)
+    monkeypatch.setattr(_sentry, "notification_cooldowns", {}, raising=False)
     _awareness._MOMENT_CACHE.update(at=0.0, ok=True)
+    _awareness._brain_busy.clear()

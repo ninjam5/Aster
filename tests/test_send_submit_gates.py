@@ -58,20 +58,41 @@ class TestSmartTypeSubmitGate:
         monkeypatch.setattr(brain.pyautogui, "click", lambda *a: None, raising=False)
         monkeypatch.setattr(brain.pyautogui, "hotkey", lambda *a: None, raising=False)
         monkeypatch.setattr(brain.pyperclip, "copy", lambda t: typed.append(t), raising=False)
-        monkeypatch.setattr(brain, "focused_control_type", lambda: "Edit", raising=False)
+        # QA round 7: the real UIA type is "EditControl"; with "Edit" the focus guard
+        # rejected it and the test passed without ever typing.
+        monkeypatch.setattr(brain, "focused_control_type", lambda: "EditControl", raising=False)
         monkeypatch.setattr(brain, "invalidate_screen_cache", lambda: None, raising=False)
         monkeypatch.setattr(brain, "_attach_action_screenshot", lambda t, action: t,
+                            raising=False)
+        pressed = []
+        monkeypatch.setattr(brain.pyautogui, "press", lambda k: pressed.append(k),
                             raising=False)
         out = brain.execute_tool("smart_type", {"goal": "the search bar",
                                                 "text": "weather", "submit": True})
         assert "BLOCKED" not in out
+        assert typed == ["weather"]            # it actually typed
+        assert pressed == ["enter"]            # and submitted
+        assert out.startswith("Typed")
 
     def test_confirm_send_true_bypasses_the_gate(self, monkeypatch):
         monkeypatch.setattr(dom, "_send_policy", lambda: "confirm")
-        monkeypatch.setattr(brain, "locate_ui_element_ex", MagicMock(), raising=False)
+        monkeypatch.setattr(brain, "locate_ui_element_ex",
+                            lambda goal: {"x": 1, "y": 2, "source": "uia",
+                                          "text": "Submit", "score": 0.9}, raising=False)
+        monkeypatch.setattr(brain, "focused_control_type", lambda: "EditControl", raising=False)
+        monkeypatch.setattr(brain, "invalidate_screen_cache", lambda: None, raising=False)
+        monkeypatch.setattr(brain, "_attach_action_screenshot", lambda t, action: t,
+                            raising=False)
+        # QA round 7: patch the input primitives — this used to really click (1,1),
+        # Ctrl+A, Ctrl+V and Enter on the owner's desktop.
+        typed = []
+        monkeypatch.setattr(brain.pyperclip, "copy", lambda t: typed.append(t), raising=False)
+        monkeypatch.setattr(brain.pyautogui, "click", lambda *a: None, raising=False)
+        monkeypatch.setattr(brain.pyautogui, "hotkey", lambda *a: None, raising=False)
+        monkeypatch.setattr(brain.pyautogui, "press", lambda *a: None, raising=False)
         out = brain.execute_tool("smart_type", {"goal": "the login form", "text": "u",
                                                 "submit": True, "confirm_send": True})
-        assert "BLOCKED" not in out
+        assert "BLOCKED" not in out and typed == ["u"]
 
 
 class TestPressKeySubmitGate:
@@ -107,12 +128,15 @@ class TestPressKeySubmitGate:
         assert pressed == ["enter"]
 
     def test_an_ordinary_key_is_not_gated(self, monkeypatch):
-        monkeypatch.setattr(brain.pyautogui, "press", lambda k: None, raising=False)
+        pressed = []
+        monkeypatch.setattr(brain.pyautogui, "press", lambda k: pressed.append(k),
+                            raising=False)
         monkeypatch.setattr(brain, "invalidate_screen_cache", lambda: None, raising=False)
         monkeypatch.setattr(brain, "_attach_action_screenshot", lambda t, action: t,
                             raising=False)
         out = brain.execute_tool("press_key", {"key": "tab"})
         assert "BLOCKED" not in out
+        assert pressed == ["tab"]   # QA round 7: prove it actually pressed
 
 
 class TestNativeClickFailClosed:

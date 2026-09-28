@@ -480,6 +480,10 @@ def _maybe_trigger_compliment(prev_presence: str) -> None:
     if not _good_moment_to_speak():
         print("[Awareness] Trigger deferred — not a good moment to speak.")
         return
+    # QA round 7: check the BUDGET before latching too — _push_nudge can drop on
+    # _budget_remaining() after the cooldown/one-shot state has already advanced.
+    if not _budget_remaining():
+        return
     if not _initiative_settings().get("compliment"):
         return
     if prev_presence != "away":
@@ -511,6 +515,9 @@ def _maybe_trigger_env_nudge(prev_lighting: str | None) -> None:
     # nudge, so a deferred nudge was lost for the whole cooldown (or forever).
     if not _good_moment_to_speak():
         print("[Awareness] Trigger deferred — not a good moment to speak.")
+        return
+    # QA round 7: budget before the latch (see the compliment trigger).
+    if not _budget_remaining():
         return
     global _last_env_nudge
     if not _initiative_settings().get("env_nudges"):

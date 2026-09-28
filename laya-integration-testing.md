@@ -63,7 +63,7 @@ import core.brain as brain, core.memory as memory, core.system1 as system1, tool
 
 | ID | E2E test | Expected | Evidence |
 |----|----------|----------|----------|
-| **7a** | Trigger a consolidation (5 real turns, or `/memorize`) with the llama-server window visible | the consolidation call's prompt is ~1k tokens, **not** ~13k (only `memorize_fact` is sent) | server window prompt size; facts still saved |
+| **7a** | Trigger a consolidation (5 real turns, or `/memorize`) with the llama-server window visible | the consolidation call sends the **full `ADMIN_TOOLS`** (ID 7a was reverted for the prefix cache — see the Phase 1 status), so it shares the main-loop prefix | server window prompt size; facts still saved |
 | **3a** | Chat-only session (e.g. "hello there", "what time is it?", "tell me a joke") ×5 | consolidation **skipped** | console `Memory consolidation SKIPPED by Laya pre-filter`; `memory_prefilter_skip` in the reliability log |
 | **3b** | A session with a real fact ("my sister got married in Cairo last week") ×5 | consolidation **runs** and the fact lands in `memory.md` | no skip event; new line in `Aster_Vault/memory.md` |
 | **1a** | In-persona: any GUI action that only presses a key or types (`press_key`, `type_text`) | screenshot **skipped** | console `Post-action screenshot skipped for <action>`; tool result carries `[Screenshot omitted …]` |
@@ -241,7 +241,7 @@ them, not by the phase authors. **Suite before: 692 · after the fixes: 706.**
 | 2 | `tools/vision.py` appends `SYSTEM EVENT` lines **directly** to `memory.md`, bypassing the gate entirely (and BM25 sees them while dense/ChromaDB does not). | The "single choke point" claim in the code comment is wrong; changing where screen-watcher events go is a product decision. |
 | 0 | Sentry can pass **up to 26 options** to Laya (22 person keys + A/U/E/Z), beyond the ~20 ceiling and the 11+ uncalibrated bucket; >22 enrolled names silently truncate. | Bounded in practice by the enrolled set; cap documented. |
 | 0 | `ask_batch` (the batching seam) has **no production callers** — same-turn gates still run as separate serialized passes (a DOM click can be 3–8). | Batching is an efficiency refactor, not a correctness bug. |
-| 3 | A Discord message can still trigger up to ~4 Laya passes (identity + relationship + fact selection + relay intent), two of them redundant per turn. | Efficiency; also `get_user_facts` is computed twice. |
+| 3 | A Discord message used to trigger up to ~4 Laya passes (identity + relationship + fact selection + relay intent), two of them redundant. **Fixed in the QA rounds:** identity/relationship guesses latch (`gender_tried`/`relationship_tried`), fact selection no longer uses a per-message query, and the relay prefilter requires a contact name — steady-state Discord is now **0** passes, first message ≤2. | Efficiency refactor, not a correctness bug. |
 | 1 | `_foreground_text_state` reports **desktop-wide** UIA nodes, not foreground-window scoped. | Accuracy nit; the model still gets useful text. |
 | 3 | A `they`/unknown pronoun is addressed as the male-coded "Sir". | Needs a product call on the neutral term. |
 

@@ -1,7 +1,10 @@
 """Tests for the memory-consolidation changes of Phase 1 (laya-integration.md).
 
-  ID 7a — the consolidation call sends ONLY the `memorize_fact` schema (it never reads
-          any other tool from the response), instead of all 69 tools.
+  ID 7a (REVERTED for the prefix cache — QA round 2) — the consolidation call briefly
+          sent only the `memorize_fact` schema. Because the chat template renders `tools`
+          at the TOP of the prompt, a trimmed tool block shared no prefix with the main
+          loop and forced the next user turn to re-prefill ~16.4k tokens. It sends the
+          full `ADMIN_TOOLS` again; the saving comes from ID 3's pre-filter.
   ID 3  — a Laya pre-filter skips the expensive 35B consolidation pass when the recent
           window is confidently free of new durable facts. Any doubt runs the pass.
 

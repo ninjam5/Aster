@@ -36,6 +36,13 @@ def relay_env(monkeypatch):
 
 
 class TestRelayConfirmForcing:
+    @pytest.fixture(autouse=True)
+    def _pin_contacts(self, monkeypatch):
+        # QA round 7: these tests read the owner's real discord_contacts.json; pin it so
+        # the outcome cannot depend on the live address book.
+        import tools.discord_api as _d
+        monkeypatch.setattr(_d, "CONTACTS", {"george": "1", "farah": "2"}, raising=False)
+
     def test_a_non_exact_relay_forces_confirm_off(self, monkeypatch, relay_env):
         """The model self-asserting confirm=true must NOT approve a guessed target."""
         sent = {}
@@ -62,7 +69,7 @@ class TestRelayConfirmForcing:
         sent = {}
 
         def fake_send(target, msg, confirm=False, assume_guess=False):
-            sent.update(confirm=confirm, assume_guess=assume_guess)
+            sent.update(target=target, confirm=confirm, assume_guess=assume_guess)
             return "[System Note: Message delivered to george on Discord.]"
 
         monkeypatch.setattr(brain, "send_discord_message", fake_send)
@@ -75,7 +82,10 @@ class TestRelayConfirmForcing:
         brain.messages[:] = [brain.messages[0]]
         brain.process_user_input("tell george I'll be late", None)
 
-        assert sent.get("assume_guess") is False   # exact name -> no guess flag
+        # QA round 7: prove the parser actually classified it as an EXACT relay, or this
+        # passed merely because the intent was None (nothing forced).
+        assert sent.get("assume_guess") is False
+        assert sent.get("target") == "george"
 
 
 class TestRelayToolBlocklist:

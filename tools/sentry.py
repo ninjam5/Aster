@@ -211,7 +211,7 @@ def execute_sentry_sweep():
 
             if True in matches:
                 name = known_face_names[matches.index(True)]
-                if name.lower() == "mohamed":
+                if name.lower() == config.OWNER_NAME.lower():
                     continue
                 last_seen = notification_cooldowns.get(name, 0)
                 if current_time - last_seen > COOLDOWN_SECONDS:

@@ -199,7 +199,15 @@ def forget_fact(text: str) -> str:
 
     Uses text-based matching because the UI's `mem-{i}` ids are reverse-line
     indices and don't correspond to ChromaDB's `mem_{timestamp}` doc ids.
+
+    QA round 7: takes `_WRITE_LOCK`, so its read-modify-write of memory.md cannot race
+    a concurrent `memorize_fact`.
     """
+    with _WRITE_LOCK:
+        return _forget_fact_locked(text)
+
+
+def _forget_fact_locked(text: str) -> str:
     if not MEMORY_AVAILABLE:
         return "Error: Memory system offline."
     text = text.strip()

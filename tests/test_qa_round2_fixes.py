@@ -145,6 +145,8 @@ class TestAwarenessTriggerLatching:
     def test_env_nudge_latches_when_the_moment_is_good(self, monkeypatch):
         # positive control: with the gate open the same setup DOES latch.
         monkeypatch.setattr(awareness, "_good_moment_to_speak", lambda: True)
+        # QA round 7: the budget is now checked before the latch too.
+        monkeypatch.setattr(awareness, "_budget_remaining", lambda: True)
         monkeypatch.setattr(awareness, "_initiative_settings",
                             lambda: {"env_nudges": True}, raising=False)
         monkeypatch.setattr(awareness, "_last_env_nudge", 0.0, raising=False)

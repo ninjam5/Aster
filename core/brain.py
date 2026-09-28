@@ -1827,11 +1827,11 @@ def _execute_tool_impl(tool_name, arguments):
         return f"[Screen state — internal navigation only, do NOT repeat to user]\n{desc}{guide_section}"
     elif tool_name == "send_discord_message":
         target_name = arguments.get("target_name", "")
-        confirm = bool(arguments.get("confirm", False))
+        confirm = _as_bool(arguments.get("confirm", False))
         # QA round 3: CRITICAL — the brain sets `assume_guess` on a non-exact relay, but
         # this branch never forwarded it, so the tool saw a canonical key, resolved it,
         # and sent WITHOUT confirmation. Forward it.
-        assume_guess = bool(arguments.get("assume_guess", False))
+        assume_guess = _as_bool(arguments.get("assume_guess", False))
         raw_message = arguments.get("message", "").strip()
         if not raw_message:
             return (
@@ -2100,7 +2100,7 @@ def _execute_tool_impl(tool_name, arguments):
         text = arguments.get("text", "")
         if not goal or not text:
             return "Error: goal and text parameters are required."
-        submit = bool(arguments.get("submit", False))
+        submit = _as_bool(arguments.get("submit", False))
         # ID 17 (QA round 4): pressing Enter submits the focused form — the most common
         # way to SEND. This path had no send/destructive check. Search-like targets are
         # exempt (the human-search flow submits a site's search bar). Covers both the
@@ -2131,6 +2131,24 @@ def _execute_tool_impl(tool_name, arguments):
         if not loc:
             return tool_fail(f'FAILED — could not locate "{goal}" on screen. Nothing was typed. '
                              f'Try a different description, or use look_at_screen first.')
+        # ID 17 (QA round 7): clicking to FOCUS is itself an activation — a Send/Delete/
+        # Confirm control would fire here with submit=False, bypassing the submit gate.
+        # Gate the click the same way smart_click does (fail closed).
+        if not arguments.get("confirm_send"):
+            try:
+                from tools.dom import _send_policy, is_send_like
+                if _send_policy() == "confirm" and is_send_like(
+                        {"role": loc.get("source", ""), "name": loc.get("text", ""),
+                         "text": loc.get("text", "")}):
+                    return tool_fail(
+                        f'FAILED — BLOCKED — "{goal}" looks like a send/destructive '
+                        f'control, so clicking it to focus would activate it. Nothing was '
+                        f'typed. Confirm with the owner, then re-call with confirm_send=true.')
+            except Exception as e:
+                print(f"[DOM] smart_type focus gate error ({e}); failing closed")
+                return tool_fail(
+                    f'FAILED — BLOCKED — could not verify that "{goal}" is safe to click '
+                    f'(the send/destructive check errored). Re-call with confirm_send=true.')
         coords = (loc["x"], loc["y"])
         pyautogui.click(coords[0], coords[1])
         invalidate_screen_cache()
@@ -2169,6 +2187,13 @@ def _execute_tool_impl(tool_name, arguments):
         text = arguments.get("text", "")
         if not text:
             return "Error: text parameter is required."
+        # QA round 7: pasting multi-line text into a focused terminal EXECUTES it (each
+        # newline is a command). Gate it like the other destructive actions.
+        if ("\n" in text or "\r" in text) and not _as_bool(arguments.get("confirm_send")):
+            return tool_fail(
+                "FAILED — BLOCKED — the text contains a newline, which would EXECUTE the "
+                "lines in a focused terminal. Nothing was typed. Confirm with the owner, "
+                "then re-call with confirm_send=true.")
         pyperclip.copy(text)
         pyautogui.hotkey("ctrl", "v")
         invalidate_screen_cache()
@@ -2181,11 +2206,12 @@ def _execute_tool_impl(tool_name, arguments):
         key = str(arguments.get("key", "")).strip().lower()
         if not key:
             return "Error: key parameter is required."
-        if key in ("enter", "return", "space"):
-            # QA round 5/6: Enter submits the focused form, and Space ACTIVATES a focused
-            # button in browsers and native Windows apps — so both must be gated, or the
-            # model bypasses the submit gate with press_key('space'). Search-like / dialog
-            # windows stay exempt (automation.dom_motor_send_policy: allow disables it).
+        if key in ("enter", "return", "space", "delete", "backspace"):
+            # QA round 5/6/7: Enter submits the focused form, Space ACTIVATES a focused
+            # button, and Delete/Backspace destroy the focused item (file, message, row).
+            # All are destructive/send activations, so all are gated. Search-like /
+            # dialog windows stay exempt (automation.dom_motor_send_policy: allow
+            # disables the gate entirely).
             if not arguments.get("confirm_send"):
                 try:
                     from tools.dom import submit_needs_confirm
@@ -2290,6 +2316,17 @@ def execute_tool_ex(tool_name, arguments) -> tuple[bool, object]:
     return _normalize_tool_result(_execute_tool_impl(tool_name, arguments))
 
 
+def _as_bool(value) -> bool:
+    """Strict boolean coercion (QA round 7).
+
+    `bool(arguments.get("confirm"))` treated the STRING "false" as True, so a model that
+    emitted `"confirm": "false"` self-approved a send.
+    """
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "y", "on")
+    return bool(value)
+
+
 def execute_tool(tool_name, arguments):
     """Back-compat dispatch: returns the plain payload (str or UI dict) with
     any ToolResult envelope stripped — every legacy caller sees exactly the
@@ -2311,7 +2348,12 @@ def _extract_discord_message_intent(user_text: str) -> dict | None:
     if not isinstance(user_text, str):
         return None
 
-    text = re.sub(r"\s+", " ", user_text.strip())
+    # QA round 7: strip leading runtime tags (`[Mood: …]`, `[Speaker: …]`, `[Ambient…]`).
+    # The mood tag is PREPENDED to the user text, which broke this parser's `^` anchor —
+    # on emotion-enabled installs every typed relay was downgraded to a "guess" (or
+    # missed entirely with the kernel off).
+    text = re.sub(r"^\s*(?:\[(?:Mood|Speaker|Ambient|Image|System)[^\]]*\]\s*)+", "", user_text)
+    text = re.sub(r"\s+", " ", text.strip())
     if not text:
         return None
 

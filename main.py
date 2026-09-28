@@ -722,7 +722,10 @@ except Exception as e:
 
 # Prewarm the Laya System-1 kernel in the background (QA round 3): it loads lazily on
 # first use, so without this the FIRST kernel-touching action after every restart pays
-# the ~35 s cold load (a GUI click, a Discord message, or a spoken utterance).
+# the ~35 s cold load (a GUI click, a Discord message, or a spoken utterance). Note the
+# prewarm only keeps the kernel hot when `automation.laya_keep_resident: true`; with the
+# code default (false) it warms the OS page cache but the model still unloads at
+# refcount 0 (QA round 7).
 try:
     if getattr(config, "USE_LAYA_KERNEL", False):
         def _prewarm_laya():
