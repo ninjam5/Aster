@@ -989,10 +989,10 @@ ADMIN_TOOLS = [
         "type": "function",
         "function": {
             "name": "research",
-            "description": "Looks up factual knowledge on any topic. Uses Wikipedia for encyclopedic topics (science, history, concepts, people, events) and falls back to live web search for current events or niche topics. Always use this when the user asks about something you don't already know with certainty — do NOT guess from training data.",
+            "description": "Looks up factual knowledge, OR reads one specific web page. Uses live web search (Firecrawl) for current events and Wikipedia for encyclopedic topics — never guess from training data. To read a page the user linked, pass the full URL as the topic: this reads it through the web API with NO browser and NO RAM cost, so it works even when the browser is unavailable.",
             "parameters": {
                 "type": "object",
-                "properties": { "topic": { "type": "string", "description": "The specific entity or concept to look up. Use a clean noun phrase ('RTX 5060', 'Newton's laws of motion') — NOT a comparison or question. For comparisons, call this tool once per item." } },
+                "properties": { "topic": { "type": "string", "description": "The specific entity or concept to look up ('RTX 5060', 'Newton's laws of motion') — NOT a comparison or question — OR a full URL (https://...) to read that exact page. For comparisons, call this tool once per item." } },
                 "required": ["topic"]
             }
         }
@@ -1880,6 +1880,19 @@ def _execute_tool_impl(tool_name, arguments):
         )
         if not isinstance(result, dict) or not result.get("ok"):
             err = result.get("error") if isinstance(result, dict) else "no result"
+            # Browser unavailable (e.g. the low-RAM guard refused the launch) and we
+            # have a URL: read it through the Firecrawl API instead — no browser, no RAM.
+            _want_url = str(arguments.get("url", "") or "").strip()
+            if _want_url:
+                try:
+                    from tools.rag import scrape_url
+                    _scraped = scrape_url(_want_url)
+                except Exception as _e:
+                    _scraped = None
+                    print(f"[Aster Internal: scrape_url fallback error: {_e}]")
+                if _scraped:
+                    return (f"[Source: Firecrawl | live web] (browser unavailable: {err})\n\n"
+                            f"{_scraped}")
             return tool_fail(f"FAILED — could not read the web page: {err}. "
                              f"Nothing was returned; do not guess.")
         status = result.get("status")

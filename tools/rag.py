@@ -59,6 +59,33 @@ def _wiki_title_relevant(title: str, topic: str) -> bool:
     return any(_tokens_match(t, q) for t in title_words for q in topic_words)
 
 
+_URL_RE = re.compile(r"(?:https?://|www\.)[^\s<>\"')]+", re.IGNORECASE)
+
+# Scraped markdown opens with menus/logo links; the article body starts at the H1.
+_LINK_LINE_RE = re.compile(r"^(?:[-*]\s*)?(?:\[[^\]]*\]\([^)]*\)\s*[-*]?\s*)+$")
+_H1_RE = re.compile(r"(?m)^#\s+\S")
+
+
+def _trim_boilerplate(md: str) -> str:
+    """Drop the leading nav/link/logo block from scraped markdown.
+
+    Without this the article's real content (e.g. a list of countries) sits past
+    the character cap and the compression summary spends its budget on menu links.
+    """
+    lines = md.splitlines()
+    i = 0
+    while i < len(lines):
+        l = lines[i].strip()
+        if not l or _LINK_LINE_RE.match(l):
+            i += 1
+            continue
+        break
+    body = "\n".join(lines[i:]).strip() or md
+    m = _H1_RE.search(body[:4000])
+    if m:
+        body = body[m.start():]
+    return body
+
 _CURRENT_EVENT_RE = re.compile(
     r"\b(?:latest|breaking|news|today|yesterday|tonight|this\s+(?:week|month|year)|"
     r"current(?:ly)?|right\s+now|just\s+(?:now|announced|happened)|upcoming)\b",
@@ -259,32 +286,83 @@ def _firecrawl_search(topic: str) -> str | None:
         return None
 
 
-def _browse_web_search(topic: str) -> tuple[str | None, str]:
-    """Last-resort live search through Aster's own browser (DOM motor + Chrome).
+def _browse_web(query: str = "", url: str = "") -> tuple[str | None, str]:
+    """Live read through Aster's own browser (DOM motor + Chrome).
 
     Returns (dossier_or_None, error_text). Requires free RAM — the browser guard
     in tools/dom refuses the launch when there is not enough, and that reason is
     passed back so the model can tell the owner what to close.
     """
-    print(f"[Aster Internal: Live web search via browse_web for '{topic}']")
+    what = url or query
+    print(f"[Aster Internal: Live read via browse_web for '{what}']")
     try:
         from tools.dom import browse
     except Exception as e:
         return None, f"browser module unavailable ({e.__class__.__name__})"
     try:
-        res = browse(query=topic, max_chars=6000)
+        res = browse(url=url, query=query, max_chars=6000)
     except Exception as e:
         return None, f"{e.__class__.__name__}: {e}"
     if not isinstance(res, dict) or not res.get("ok"):
         err = res.get("error") if isinstance(res, dict) else "no result"
-        print(f"[Aster Internal: browse_web fallback failed: {err}]")
+        print(f"[Aster Internal: browse_web failed: {err}]")
         return None, str(err or "unknown browser error")
     text = (res.get("text") or "").strip()
     if len(text) < 200:
         return None, "browser returned too little text"
     title = res.get("title", "")
-    url = res.get("url", "")
-    return f"SEARCH QUERY: [{topic}] (via browser)\n- {title} ({url})\n{text[:5000]}", ""
+    got_url = res.get("url", "")
+    label = "SEARCH QUERY" if query and not url else "PAGE"
+    return f"{label}: [{what}]\n- {title} ({got_url})\n{text[:5000]}", ""
+
+
+def _extract_url(text: str) -> str | None:
+    """First http(s)/www URL in the text, or None. Trailing punctuation stripped."""
+    m = _URL_RE.search(text or "")
+    if not m:
+        return None
+    u = m.group(0).rstrip(".,;:!?)\"'")
+    if u.lower().startswith("www."):
+        u = "https://" + u
+    return u
+
+
+def scrape_url(url: str) -> str | None:
+    """Read ONE page through the Firecrawl API only — no browser, no RAM cost.
+
+    The path for "open this link": Firecrawl renders the page server-side, so it
+    works when the browser guard is refusing a launch for low RAM.
+    """
+    print(f"[Aster Internal: Live page read (Firecrawl) for '{url}']")
+    if not config.FIRECRAWL_API_KEY:
+        return None
+    try:
+        app = FirecrawlApp(api_key=config.FIRECRAWL_API_KEY)
+        doc = app.scrape(url, formats=["markdown"])
+    except Exception as e:
+        print(f"[Aster Internal: Firecrawl scrape error: {e.__class__.__name__}: {e}]")
+        return None
+    title, got_url, body = _firecrawl_result_fields(doc)
+    body = _trim_boilerplate(body)
+    if not body or len(body.strip()) < 200:
+        print("[Aster Internal: Firecrawl scrape returned too little content]")
+        return None
+    # 16k chars ~ 4k tokens: enough for a full article (the country-list page's
+    # content runs to ~12k after the nav block is trimmed).
+    return f"- {title} ({got_url or url})\n{body[:16000]}"
+
+
+def read_url(url: str) -> str:
+    """Read one specific URL: Firecrawl API first (no RAM), browser second."""
+    scraped = scrape_url(url)
+    if scraped:
+        return f"[Source: Firecrawl | live web]\n\n{scraped}"
+    dossier, err = _browse_web(url=url)
+    if dossier:
+        return f"[Source: browse_web | live web]\n\n{dossier}"
+    detail = f" ({err})" if err else ""
+    return (f"[System: Could not read {url}{detail}. Tell {config.OWNER_NAME} plainly that "
+            "the page could not be read — do not guess its contents.]")
 
 
 # ── public tool ───────────────────────────────────────────────────────────────
@@ -322,6 +400,11 @@ def research(topic: str) -> str:
     """
     print(f"\n[Aster Internal: research('{topic}')]")
 
+    # A URL is a direct read, not a topic lookup: Firecrawl API (no RAM), then browser.
+    url = _extract_url(topic)
+    if url:
+        return read_url(url)
+
     entities = _sanitize_topic(topic)
 
     # For comparison queries resolved to 2 entities, look up each and combine.
@@ -355,7 +438,7 @@ def research(topic: str) -> str:
     source = "Firecrawl"
     browse_err = ""
     if not live:
-        live, browse_err = _browse_web_search(entity)
+        live, browse_err = _browse_web(query=entity)
         source = "browse_web"
     if live:
         header = f"[Source: {source} | live web]\n\n"

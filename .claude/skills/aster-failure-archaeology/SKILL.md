@@ -341,7 +341,25 @@ poisoned vault entries deleted. 37 new tests (`tests/test_rag.py`,
 **Lesson: "the model won't use the tool" is often "the tool returns garbage" — read the
 tool's actual output (and its vault cache) before touching the prompt.**
 
+**Follow-up the same day — "use firecrawl to open that link" still failed.** After the
+fix above, live search worked (the model correctly answered *"Netanyahu addressed the
+UNGA on September 24, 2026, not September 27"*), but the owner's next request — read
+`thelondoneconomic.com/.../full-list-of-countries-to-walk-out...` — hit `browse_web`,
+whose **RAM guard refused the launch (0.4 GB free < 1.5 GB)**. `research` took a *topic*,
+not a URL, so there was no API path to read a link. Fix: `research` now extracts a URL
+and reads it via **`scrape_url` (Firecrawl `app.scrape(url, formats=["markdown"])`)** —
+no browser, no RAM — with `browse_web` as the fallback, and `browse_web` itself falls back
+to `scrape_url` when the browser cannot launch. Scraped markdown is boilerplate-trimmed
+(`_trim_boilerplate`: drop the leading nav/logo link block, start at the article H1) and
+capped at 16k chars, because the country list sat at ~10.5–13.5k chars — past an 8k cap
+and beyond the compression summary's useful budget. Verified live: the country list
+(Turkey, Spain, Colombia...) is now inside the returned content.
+
 **Fences:**
+- A URL is a *read*, not a topic: never route a link through Wikipedia.
+- Never make reading a link depend on the browser (RAM) — Firecrawl scrape first.
+- Do not re-add `only_main_content=True` (it changes nothing here) or lower the 16k cap
+  without re-checking that a full article body still fits.
 - Never answer current-events questions from Wikipedia or the vault; the pipeline
   enforces this — keep it.
 - Do not loosen `_wiki_title_relevant` back to bare Jaccard overlap (0.15 matched Renzi).

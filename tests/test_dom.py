@@ -832,20 +832,25 @@ class TestBrowserMemoryGuard:
     readable message instead of dying mid-turn.
     """
 
-    def test_headroom_ok_when_ram_is_ample(self):
+    def test_headroom_ok_when_ram_is_ample(self, monkeypatch):
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)  # exercise the real path
         fake = MagicMock()
         fake.virtual_memory.return_value = MagicMock(available=8 * 1024 ** 3)
         with patch.dict(sys.modules, {"psutil": fake}):
             ok, why = dom._memory_headroom_ok()
         assert ok is True and why == ""
 
-    def test_headroom_blocks_when_ram_is_low(self):
+    def test_headroom_blocks_when_ram_is_low(self, monkeypatch):
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)  # exercise the real path
         fake = MagicMock()
         fake.virtual_memory.return_value = MagicMock(available=int(0.4 * 1024 ** 3))
         with patch.dict(sys.modules, {"psutil": fake}):
             ok, why = dom._memory_headroom_ok()
         assert ok is False
         assert "RAM free" in why and "close some applications" in why
+
+    def test_headroom_is_skipped_under_pytest(self):
+        assert dom._memory_headroom_ok() == (True, "")
 
     def test_launch_own_browser_refuses_when_ram_is_low(self):
         with patch.object(dom, "_memory_headroom_ok", return_value=(False, "low RAM")):

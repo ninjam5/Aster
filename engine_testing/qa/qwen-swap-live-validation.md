@@ -379,3 +379,17 @@ narration T1/T3 true; benign replies stay false. 2 poisoned vault files deleted.
 37 new tests -> suite **458 passed**.
 
 **Status:** fixed in code + tests. **Needs a `main.py` restart** to be live.
+
+**Addendum (same day) — "use firecrawl to open that link".** Live search was confirmed
+working (the model answered *"Netanyahu addressed the UNGA on September 24, 2026, not
+September 27"* from live sources). But reading the owner's link went to `browse_web`,
+which the RAM guard correctly refused (0.4 GB free < 1.5 GB), and `research` had no
+URL path. Added: `research(<URL>)` -> `scrape_url` (Firecrawl `app.scrape(url,
+formats=["markdown"])`, no browser, no RAM) with a `browse_web` fallback, plus a
+`scrape_url` fallback inside `browse_web` itself; scraped markdown is boilerplate-trimmed
+(nav/logo block dropped, start at the article H1) and capped at 16k chars.
+
+Verified live on the owner's exact URL: `[Source: Firecrawl | live web]`, 16,013 chars,
+and the country list (Turkey, Spain, Colombia) is inside the returned content — the
+earlier 8k cap cut it off at ~10.5–13.5k. Suite **471 passed** (guard now skipped under
+pytest, so a low-RAM dev machine can't fail unrelated launch tests).

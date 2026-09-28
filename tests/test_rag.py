@@ -125,7 +125,7 @@ class TestResearchPipeline:
 
     def test_firecrawl_failure_falls_back_to_browse_web(self, monkeypatch):
         monkeypatch.setattr(rag, "_firecrawl_search", MagicMock(return_value=None))
-        monkeypatch.setattr(rag, "_browse_web_search",
+        monkeypatch.setattr(rag, "_browse_web",
                             MagicMock(return_value=("BROWSER: bing results", "")))
         monkeypatch.setattr(rag, "_save_to_vault", MagicMock())
 
@@ -135,7 +135,7 @@ class TestResearchPipeline:
 
     def test_both_live_paths_fail_reports_the_reason(self, monkeypatch):
         monkeypatch.setattr(rag, "_firecrawl_search", MagicMock(return_value=None))
-        monkeypatch.setattr(rag, "_browse_web_search",
+        monkeypatch.setattr(rag, "_browse_web",
                             MagicMock(return_value=(None, "only 0.3 GB RAM free")))
         monkeypatch.setattr(rag, "_wikipedia_lookup", MagicMock(return_value=None))
         monkeypatch.setattr(rag, "_save_to_vault", MagicMock())
@@ -174,7 +174,7 @@ class TestResearchPipeline:
 
     def test_current_events_wikipedia_only_as_labelled_background(self, monkeypatch):
         monkeypatch.setattr(rag, "_firecrawl_search", MagicMock(return_value=None))
-        monkeypatch.setattr(rag, "_browse_web_search", MagicMock(return_value=(None, "no browser")))
+        monkeypatch.setattr(rag, "_browse_web", MagicMock(return_value=(None, "no browser")))
         monkeypatch.setattr(rag, "_wikipedia_lookup",
                             MagicMock(return_value={"title": "Benjamin Netanyahu", "content": "bio"}))
         monkeypatch.setattr(rag, "_save_to_vault", MagicMock())
@@ -191,26 +191,106 @@ class TestBrowseWebFallback:
         fake = MagicMock(return_value={"ok": True, "title": "Bing", "url": "https://bing.com/x",
                                        "text": "x" * 500})
         with patch("tools.dom.browse", fake):
-            dossier, err = rag._browse_web_search("some topic")
+            dossier, err = rag._browse_web(query="some topic")
         assert err == ""
         assert "Bing" in dossier and len(dossier) > 200
 
     def test_memory_guard_error_is_passed_through(self):
         fake = MagicMock(return_value={"ok": False, "error": "only 0.3 GB RAM free"})
         with patch("tools.dom.browse", fake):
-            dossier, err = rag._browse_web_search("some topic")
+            dossier, err = rag._browse_web(query="some topic")
         assert dossier is None
         assert "0.3 GB RAM free" in err
 
     def test_thin_text_is_rejected(self):
         fake = MagicMock(return_value={"ok": True, "title": "t", "url": "u", "text": "short"})
         with patch("tools.dom.browse", fake):
-            dossier, err = rag._browse_web_search("some topic")
+            dossier, err = rag._browse_web(query="some topic")
         assert dossier is None
         assert "too little text" in err
 
     def test_exception_never_propagates(self):
         with patch("tools.dom.browse", MagicMock(side_effect=RuntimeError("boom"))):
-            dossier, err = rag._browse_web_search("some topic")
+            dossier, err = rag._browse_web(query="some topic")
         assert dossier is None
         assert "RuntimeError" in err
+
+
+# ── URL reading (the "use firecrawl to open that link" path) ──────────────────
+
+LINK = ("https://www.thelondoneconomic.com/news/full-list-of-countries-to-walk-out-"
+        "of-netanyahu-speech-at-united-nations-409984/")
+
+
+class TestUrlExtraction:
+    def test_extracts_https_url(self):
+        assert rag._extract_url(f"check this list: {LINK}") == LINK
+
+    def test_extracts_bare_www(self):
+        assert rag._extract_url("see www.example.com/x") == "https://www.example.com/x"
+
+    def test_strips_trailing_punctuation(self):
+        assert rag._extract_url("look at https://example.com/a.") == "https://example.com/a"
+
+    def test_no_url_returns_none(self):
+        assert rag._extract_url("what is quantum computing") is None
+
+
+class TestUrlReading:
+    def test_research_with_a_url_scrapes_via_firecrawl(self, monkeypatch):
+        scrape = MagicMock(return_value="- Full list of countries\nTurkey walked out...")
+        monkeypatch.setattr(rag, "scrape_url", scrape)
+        monkeypatch.setattr(rag, "_check_vault", MagicMock())
+        monkeypatch.setattr(rag, "_firecrawl_search", MagicMock())
+
+        out = rag.research(LINK)
+        scrape.assert_called_once_with(LINK)
+        assert out.startswith("[Source: Firecrawl | live web]")
+        assert "Turkey walked out" in out
+
+    def test_read_url_falls_back_to_the_browser(self, monkeypatch):
+        monkeypatch.setattr(rag, "scrape_url", MagicMock(return_value=None))
+        monkeypatch.setattr(rag, "_browse_web",
+                            MagicMock(return_value=("PAGE: [url]\n- t (u)\n" + "x" * 300, "")))
+        out = rag.read_url(LINK)
+        assert out.startswith("[Source: browse_web | live web]")
+
+    def test_read_url_reports_both_failures(self, monkeypatch):
+        monkeypatch.setattr(rag, "scrape_url", MagicMock(return_value=None))
+        monkeypatch.setattr(rag, "_browse_web",
+                            MagicMock(return_value=(None, "only 0.4 GB RAM free")))
+        out = rag.read_url(LINK)
+        assert "Could not read" in out
+        assert "only 0.4 GB RAM free" in out
+        assert "do not guess" in out
+
+    def test_scrape_url_without_a_key_returns_none(self, monkeypatch):
+        monkeypatch.setattr(rag.config, "FIRECRAWL_API_KEY", "")
+        assert rag.scrape_url(LINK) is None
+
+
+class TestBoilerplateTrim:
+    MD = (
+        "- [Privacy policy](https://x/pp) - [T&Cs](https://x/tc) - [About Us](https://x/a)\n"
+        "![logo](https://x/logo.png)\n"
+        "\n"
+        "# Full list of countries to walk out of Netanyahu speech\n"
+        "## He said what was happening in Gaza is the 'opposite of genocide.'\n"
+        "Turkey and Spain were among the delegations that left the hall.\n"
+    )
+
+    def test_starts_at_the_article_h1(self):
+        out = rag._trim_boilerplate(self.MD)
+        assert out.startswith("# Full list of countries")
+        assert "Privacy policy" not in out
+
+    def test_content_survives(self):
+        out = rag._trim_boilerplate(self.MD)
+        assert "Turkey and Spain" in out
+
+    def test_no_heading_falls_back_to_full_text(self):
+        md = "Just prose with no heading at all, long enough to matter.\nSecond line."
+        assert rag._trim_boilerplate(md) == md
+
+    def test_empty_input_is_safe(self):
+        assert rag._trim_boilerplate("") == ""
