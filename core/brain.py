@@ -1785,7 +1785,7 @@ def _execute_tool_impl(tool_name, arguments):
         return recall_memory(arguments.get("query", ""))
     elif tool_name == "aster_shutdown_protocol":
         return aster_shutdown_protocol(
-            arguments.get("shutdown_os", False),
+            _as_bool(arguments.get("shutdown_os", False)),
             arguments.get("delay_minutes", 0)
         )
     elif tool_name == "check_context_health":
@@ -1856,6 +1856,8 @@ def _execute_tool_impl(tool_name, arguments):
         # Mirror into the session ONLY when it was actually delivered — a CONFIRM
         # REQUIRED note (fuzzy target) means nothing was sent.
         if isinstance(result, str) and result.startswith("[System Note: Message delivered"):
+            # QA round 10: the pending confirmation is consumed by a real delivery.
+            _clear_pending_relay_confirm()
             _resolved = resolve_contact(target_name)
             _inject_outbound_discord_message_into_session(
                 _resolved[0] if _resolved else target_name, outbound_message)
@@ -1932,19 +1934,19 @@ def _execute_tool_impl(tool_name, arguments):
         print(f"\n[Aster Internal: Awareness Mode toggled {status}]")
         return f"[System Note: Awareness Mode is now {status}.]"
     elif tool_name == "toggle_mood_actions":
-        state = _as__as_bool(arguments.get("state", True))
+        state = _as_bool(arguments.get("state", True))
         config.MOOD_ACTIONS_ENABLED = state
         status = "ON" if state else "OFF"
         print(f"\n[Aster Internal: Mood-action offers toggled {status}]")
         return f"[System Note: Mood-action offers are now {status}.]"
     elif tool_name == "toggle_mood_checkins":
-        state = _as__as_bool(arguments.get("state", True))
+        state = _as_bool(arguments.get("state", True))
         config.MOOD_CHECKIN_ENABLED = state
         status = "ON" if state else "OFF"
         print(f"\n[Aster Internal: Proactive mood check-ins toggled {status}]")
         return f"[System Note: Proactive mood check-ins are now {status}.]"
     elif tool_name == "toggle_face_emotion":
-        state = _as__as_bool(arguments.get("state", True))
+        state = _as_bool(arguments.get("state", True))
         config.FACE_EMOTION_ENABLED = state
         if state:
             try:
@@ -1956,7 +1958,7 @@ def _execute_tool_impl(tool_name, arguments):
         print(f"\n[Aster Internal: Facial-emotion reading toggled {status}]")
         return f"[System Note: Facial-emotion reading is now {status}.]"
     elif tool_name == "toggle_ambient_audio":
-        state = _as__as_bool(arguments.get("state", True))
+        state = _as_bool(arguments.get("state", True))
         config.AMBIENT_AUDIO_ENABLED = state
         if not state:
             try:
@@ -2344,17 +2346,50 @@ _AFFIRMATIVE_RE = re.compile(
     r"send it|please do|affirmative)\b",
     re.IGNORECASE,
 )
+_LEADING_TAG_RE = re.compile(
+    r"^\s*(?:\[(?:Mood|Speaker|Ambient|Image|System)[^\]]*\]\s*)+")
+# A guess only becomes sendable after the OWNER confirms, so the confirmation is tracked
+# rather than inferred from a prefix (QA round 10: a stateless prefix match let
+# "ok tell geroge I'm late" skip the gate entirely).
+_pending_relay_confirm = {"target": None, "at": 0.0}
+_PENDING_RELAY_TTL = 300.0
 
 
 def _looks_affirmative(text: str) -> bool:
-    """True when the owner is confirming something (QA round 9).
+    """True when the owner is confirming something (QA round 9/10).
 
-    The relay guess flow asks "send to X?" and the owner answers "yes, send it to X".
-    That reply names the contact, so the parser produced a non-exact intent and the
-    brain re-forced `confirm=False` — the confirmation could never complete except with
-    a bare "yes". An affirmative reply is treated as the confirmation it is.
+    Strips leading runtime tags first: `_maybe_tag_text_mood` PREPENDS `[Mood: …]`, so
+    on emotion-enabled installs a tagged confirmation was not recognised and the relay
+    loop stayed unwinnable.
     """
-    return bool(_AFFIRMATIVE_RE.match(str(text or "")))
+    return bool(_AFFIRMATIVE_RE.match(_LEADING_TAG_RE.sub("", str(text or ""))))
+
+
+def _mark_pending_relay_confirm(target: str) -> None:
+    import time as _t
+    _pending_relay_confirm.update(target=str(target or ""), at=_t.time())
+
+
+def _pending_relay_is_fresh() -> bool:
+    import time as _t
+    return (bool(_pending_relay_confirm.get("target"))
+            and (_t.time() - float(_pending_relay_confirm.get("at") or 0)) < _PENDING_RELAY_TTL)
+
+
+def _clear_pending_relay_confirm() -> None:
+    _pending_relay_confirm.update(target=None, at=0.0)
+
+
+def _should_force_relay_confirm(intent, user_text: str) -> bool:
+    """Should this relay turn force `confirm=False`/`assume_guess=True`? (QA round 10)
+
+    True for a non-exact relay UNLESS the owner is answering the confirmation question we
+    actually asked (a pending confirmation + an affirmative reply). Extracted so the
+    decision is unit-testable without driving a whole turn.
+    """
+    if not isinstance(intent, dict) or intent.get("exact"):
+        return False
+    return not (_looks_affirmative(user_text) and _pending_relay_is_fresh())
 
 
 def _as_bool(value) -> bool:
@@ -3661,6 +3696,10 @@ def process_user_input(user_text, status_callback=None):
                         )})
                     else:
                         # ID 15: a GUESSED target is never sent silently — confirm first.
+                        # QA round 10: record that a confirmation is PENDING, so only a
+                        # genuine reply to this question can authorise the send (a
+                        # stateless prefix match let "ok tell geroge I'm late" through).
+                        _mark_pending_relay_confirm(_relay_target)
                         eval_msgs.append({"role": "system", "content": (
                             f'This looks like a Discord relay, but the recipient was not named exactly. '
                             f'It resolved to "{_relay_target}" — which is a GUESS. '
@@ -3719,7 +3758,7 @@ def process_user_input(user_text, status_callback=None):
                             # succeeded and the confirmation was skipped. `assume_guess`
                             # tells the tool the target was inferred, so it refuses
                             # without an explicit confirm.
-                            if not discord_intent.get("exact") and not _looks_affirmative(user_text):
+                            if _should_force_relay_confirm(discord_intent, user_text):
                                 # QA round 5: force it OFF on the automated relay turn.
                                 # Preserving a model-supplied confirm=true let the model
                                 # self-approve a guessed target with no owner input. The

@@ -268,9 +268,14 @@ class TestRound9Gates:
 
     def test_smart_type_multiline_is_blocked(self, monkeypatch):
         monkeypatch.setattr(dom, "_send_policy", lambda: "confirm")
-        monkeypatch.setattr(brain, "locate_ui_element_ex", MagicMock(), raising=False)
+        # QA round 10: the focus gate's fail-closed error also yields BLOCKED; assert the
+        # NEWLINE-specific message with a benign loc so the newline gate is what fires.
+        monkeypatch.setattr(brain, "locate_ui_element_ex",
+                            lambda goal: {"x": 1, "y": 2, "source": "uia",
+                                          "text": "Message", "score": 0.9}, raising=False)
+        monkeypatch.setattr(dom, "is_send_like", lambda node: False, raising=False)
         out = brain.execute_tool("smart_type", {"goal": "the terminal", "text": "a\nb"})
-        assert out.startswith("FAILED") and "BLOCKED" in out
+        assert "contains a newline" in out
 
     def test_state_string_false_turns_a_mode_off(self, monkeypatch):
         import config as _c
@@ -289,31 +294,43 @@ class TestAffirmativeConfirmation:
         for t in ["tell geroge I'll be late", "no", "what time is it"]:
             assert brain._looks_affirmative(t) is False, t
 
-    def test_an_affirmative_turn_does_not_re_force_the_guess(self, monkeypatch):
-        """QA round 9: 'yes, send it to george' named the contact, so the parser made it
-        non-exact and the brain re-forced confirm=False — the flow could never complete."""
-        sent = {}
-        monkeypatch.setattr(config, "AUTO_COMPACT_ENABLED", False, raising=False)
-        monkeypatch.setattr(brain, "_log_turn_mood", lambda t: None, raising=False)
-        monkeypatch.setattr(brain, "_maybe_tag_text_mood", lambda t: t, raising=False)
-        monkeypatch.setattr(brain.awareness, "render_context_block", lambda: None, raising=False)
-        monkeypatch.setattr(brain, "trim_memory", lambda m: m, raising=False)
-        monkeypatch.setattr(brain, "publish_terminal", lambda *a, **k: None, raising=False)
-        monkeypatch.setattr(brain, "send_discord_message",
-                            lambda target, msg, confirm=False, assume_guess=False:
-                            sent.update(target=target, confirm=confirm,
-                                        assume_guess=assume_guess) or
-                            "[System Note: Message delivered to george on Discord.]")
-        monkeypatch.setattr(brain, "_execute_llm_completion",
-                            lambda **k: {"role": "assistant", "content": "",
-                                         "tool_calls": [{"id": "1", "function": {
-                                             "name": "send_discord_message",
-                                             "arguments": '{"target_name": "george", "message": "Hi", "confirm": true}'}}]},
-                            raising=False)
-        saved = list(brain.messages)
-        try:
-            brain.messages[:] = [brain.messages[0]]
-            brain.process_user_input("yes, send it to george", None)
-        finally:
-            brain.messages[:] = saved
-        assert sent.get("confirm") is True, "the confirmation was force-reset"
+    def test_the_decision_helper_covers_every_case(self, monkeypatch):
+        """QA round 10: driving a whole turn was config-dependent and order-sensitive, so
+        the decision lives in `_should_force_relay_confirm` and is tested directly."""
+        guess = {"target": "george", "payload": "x", "exact": False}
+        exact = {"target": "george", "payload": "x", "exact": True}
+
+        brain._clear_pending_relay_confirm()
+        # a fresh guess is always forced
+        assert brain._should_force_relay_confirm(guess, "tell geroge I'm late") is True
+        # an affirmative prefix with NO pending confirmation is still a new guess
+        assert brain._should_force_relay_confirm(guess, "ok tell geroge I'm late") is True
+        # an exact relay is never forced
+        assert brain._should_force_relay_confirm(exact, "tell george I'm late") is False
+        # after we actually asked, an affirmative reply is the confirmation
+        brain._mark_pending_relay_confirm("george")
+        assert brain._should_force_relay_confirm(guess, "yes, send it to george") is False
+        assert brain._should_force_relay_confirm(guess, "[Mood: happy] yes, do it") is False
+        # ... but a NEW command in the same window is still forced
+        assert brain._should_force_relay_confirm(guess, "tell geroge I'm late") is True
+        brain._clear_pending_relay_confirm()
+        assert brain._should_force_relay_confirm(guess, "yes, send it to george") is True
+
+    def test_the_tagged_affirmative_is_recognised(self):
+        assert brain._looks_affirmative("[Mood: happy] yes, send it to george") is True
+
+    def test_the_four_toggle_tools_accept_a_string_state(self, monkeypatch):
+        """QA round 10: an undefined _as__as_bool left these raising NameError."""
+        for tool in ("toggle_mood_actions", "toggle_mood_checkins",
+                     "toggle_face_emotion", "toggle_ambient_audio"):
+            out = brain.execute_tool(tool, {"state": "false"})
+            assert not str(out).startswith("Error executing"), (tool, out)
+    def test_the_tagged_affirmative_is_recognised(self):
+        assert brain._looks_affirmative("[Mood: happy] yes, send it to george") is True
+
+    def test_the_four_toggle_tools_accept_a_string_state(self, monkeypatch):
+        """QA round 10: an undefined _as__as_bool left these raising NameError."""
+        for tool in ("toggle_mood_actions", "toggle_mood_checkins",
+                     "toggle_face_emotion", "toggle_ambient_audio"):
+            out = brain.execute_tool(tool, {"state": "false"})
+            assert not str(out).startswith("Error executing"), (tool, out)

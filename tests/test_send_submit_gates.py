@@ -44,10 +44,16 @@ class TestSubmitNeedsConfirm:
 class TestSmartTypeSubmitGate:
     def test_a_non_search_submit_is_blocked(self, monkeypatch):
         monkeypatch.setattr(dom, "_send_policy", lambda: "confirm")
-        monkeypatch.setattr(brain, "locate_ui_element_ex", MagicMock(), raising=False)
+        # QA round 10: with a bare MagicMock loc the FOCUS gate's fail-closed error also
+        # produced BLOCKED, so this passed even with the submit gate removed. Use a real
+        # benign loc and assert the submit-specific wording.
+        monkeypatch.setattr(brain, "locate_ui_element_ex",
+                            lambda goal: {"x": 1, "y": 2, "source": "uia",
+                                          "text": "Message", "score": 0.9}, raising=False)
+        monkeypatch.setattr(dom, "is_send_like", lambda node: False, raising=False)
         out = brain.execute_tool("smart_type", {"goal": "the login form",
                                                 "text": "user", "submit": True})
-        assert out.startswith("FAILED") and "BLOCKED" in out
+        assert "would submit a form" in out
 
     def test_a_search_submit_is_allowed(self, monkeypatch):
         monkeypatch.setattr(dom, "_send_policy", lambda: "confirm")
