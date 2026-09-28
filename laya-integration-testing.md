@@ -107,9 +107,17 @@ import core.brain as brain, core.memory as memory, core.system1 as system1, tool
 | **15e** | "let George know I'll be late" (no verb+name pattern) | recognised as a relay via the Part C gate |
 | **13a** | Discord: a friend whose gender Laya cannot tell | Aster **asks** them; the answer is saved |
 | **13b** | Second time that friend messages | no repeat question (the saved record is used) |
-| **14** | A new contact's relationship | classified once, cached, and not re-asked |
-| **16** | A friend with many stored facts | only the relevant ones are injected (prompt shrinks) |
-| **12** | `recall_memory` on a query with near-duplicate stored lines | the correct fact is ranked first (rerank) |
+| **13c** | Friend answers "she/her" | `remember_pronoun` stores it; the next reply says "Ma'am" and never re-asks |
+| **13d** | Layer A: `laya_guess_gender` over the real contact names | female/male names classified; ambiguous ones → `unknown` (then ask) — **TODO (probe was interrupted)** |
+| **14a** | Layer A: `laya_guess_relationship` over real names | sensible class or `unknown` → falls back to "friend" — **TODO** |
+| **14b** | Discord prompt | renders "Mohamed's {relationship}, {name}" with no `KeyError` |
+| **16** | A friend with many stored facts | only the relevant ones are injected (prompt shrinks); an empty selection injects all |
+| **12** | `recall_memory` on a query with near-duplicate stored lines | the correct fact is ranked first (rerank); kernel off → original order |
+
+> **Phase 3 status: SHIPPED, Layer A partly verified.** ID 15 verified live (see its note
+> above). IDs 13/14/16/12 are covered by mocked tests (647 passing) but the Laya **gender**
+> and **relationship** guesses have **not** been run against the real model yet — the live
+> probe was interrupted. Run 13d/14a first when the E2E pass happens.
 
 > **ID 15 status: Layer A DONE, Layer B TODO.** Verified live (2026-09-28): `Adham` /
 > `adham` / `ADHAM` all resolve to the `'Adham'` key; `geroge`→george and `farrah`→farah via

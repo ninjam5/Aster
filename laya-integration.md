@@ -156,6 +156,31 @@ fresh measurement.**
 **Tests:** `tests/test_memory_write_gate.py` (19), `test_system1.py` `min_margin` (+5) —
 suite **565 passed**.
 
+### Phase 3 status — DONE 2026-09-28 (people & contacts + recall quality)
+
+| ID | Item | Result |
+|----|------|--------|
+| **15** | Contact routing | **SHIPPED** (see its section above) — exact → send, typo → difflib, semantic → Laya, guess → confirm. |
+| **13** | Pronouns + people-record | **SHIPPED** — new `tools/people.py` owns `Aster_Vault/people.json` (`{pronoun, gender, honorific, relationship, asked, source}`). Flow: stored → one Laya guess `{male, female, unknown}` → if unknown, **ask the person once** (recorded so it never nags) → `remember_pronoun` tool persists the answer. `_discord_honorific` now consults the record (config `DISCORD_FEMALE_NAMES` stays as the fallback). |
+| **14** | Relationship | **SHIPPED** — `resolve_relationship` (stored → Laya guess → `"friend"` default) and the Discord prompt's hardcoded *"his friend"* is now a `{relationship}` placeholder. **All three** `.format()` call sites were updated — a missing key would have `KeyError`-ed every Discord message. |
+| **16** | Friend-fact selection | **SHIPPED** — `get_user_facts(name, query=…)` scores each staged fact against the incoming message (one batched pass) and injects only the relevant ones. Without a query it is byte-identical to before. |
+| **12** | Recall rerank | **SHIPPED** — `recall_memory` now retrieves 10 candidates and reranks to the best 3 via `_laya_rerank` (dense-only and hybrid paths). The vault is full of near-identical lines, which is exactly where RRF order ≠ relevance. |
+
+**Why the people-record was the blocker:** contacts were only a name→Discord-ID map plus a
+flat `config.DISCORD_FEMALE_NAMES` set, so there was nowhere machine-readable to *store* a
+pronoun — the owner's example could not be persisted. `people.json` is that store.
+
+**Conservative by construction (every item):** kernel off, escalate, failure, or "nothing
+clears the bar" returns the previous behaviour exactly. For ID 16/12 that means the full
+fact list / the original RRF order — never a silent drop.
+
+**Not yet live-verified:** the Laya *gender* and *relationship* guesses over the real contact
+names (the live probe was interrupted; it needs a ~35 s model load). Everything else is
+covered by mocked tests. Listed as TODO in `laya-integration-testing.md`.
+
+**Tests:** `tests/test_people.py` (39), `tests/test_phase3_selection.py` (14) — suite
+**647 passed**.
+
 ---
 
 ## 3. Build order at a glance (first → last)

@@ -93,7 +93,59 @@ def save_fact(user_name: str, fact: str) -> str:
     return f"[System Note: Staged personal fact for {user_key}.]"
 
 
-def get_user_facts(user_name: str) -> str:
+_FACT_RELEVANCE_LEVELS = [
+    "irrelevant to this message",
+    "vaguely related",
+    "possibly relevant",
+    "clearly relevant",
+]
+_FACT_KEEP_AT = 0.34          # keep "vaguely related" and above
+_FACT_MIN_ANSWER_CONF = 0.4   # ignore noisy scores
+
+
+def _laya_select_facts(facts: list, query: str) -> list:
+    """The subset of `facts` relevant to `query`, via one batched Laya pass (ID 16).
+
+    CONSERVATIVE: returns ALL facts on any doubt — kernel off, no query, a failure, or
+    when nothing clears the bar. Dropping a fact the friend's reply needed is worse
+    than carrying a few extra ones.
+    """
+    if not facts or not str(query or "").strip():
+        return facts
+    try:
+        import core.system1 as system1
+        if not system1.kernel_enabled():
+            return facts
+        verdict = system1.score_candidates(
+            _FACT_RELEVANCE_LEVELS,
+            "How relevant is this stored fact to the incoming message?",
+            {f"f{i}": f for i, f in enumerate(facts)},
+            state={"message": str(query)[:400]},
+        )
+    except Exception:
+        return facts
+    normalized = verdict.get("normalized") or {}
+    confidence = verdict.get("answer_confidence") or {}
+    kept = []
+    for i, fact in enumerate(facts):
+        key = f"f{i}"
+        score = normalized.get(key)
+        if score is None or score < _FACT_KEEP_AT:
+            continue
+        conf = confidence.get(key)
+        if conf is not None and conf < _FACT_MIN_ANSWER_CONF:
+            continue
+        kept.append(fact)
+    return kept or facts
+
+
+def get_user_facts(user_name: str, query: str = "") -> str:
+    """Staged facts for a friend, optionally narrowed to the current message (ID 16).
+
+    Without `query` this is exactly the old behaviour (every fact, joined). With it,
+    Laya keeps only the relevant ones — `farah` alone carried 9 facts including a
+    ~1,500-char self-description, injected on every turn.
+    """
     user_key = str(user_name or "Unknown").strip() or "Unknown"
 
     with _memory_lock:
@@ -106,6 +158,9 @@ def get_user_facts(user_name: str) -> str:
     facts = [entry.get("fact", "").strip() for entry in records if entry.get("fact", "").strip()]
     if not facts:
         return "No known staged facts for this friend yet."
+
+    if query:
+        facts = _laya_select_facts(facts, query)
 
     return "; ".join(facts)
 

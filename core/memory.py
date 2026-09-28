@@ -328,6 +328,38 @@ def _rrf_fuse(*ranked_lists: list, k: int = 60) -> list:
     return order
 
 
+def _laya_rerank(query: str, candidates: list, top_n: int = 3) -> list:
+    """Reorder `candidates` by Laya relevance and return the best `top_n` (ID 12).
+
+    RRF/dense rank was taken as final, but the vault is full of lexically near-identical
+    lines ("Aster sent an email reply…" ×78, duplicate pet facts) — exactly where
+    similarity and relevance diverge. One batched score pass over the candidates.
+
+    Returns `candidates[:top_n]` UNCHANGED on any doubt (kernel off, failure, or a
+    degenerate distribution), so behaviour is exactly as before when Laya can't help.
+    """
+    if len(candidates) <= top_n:
+        return candidates
+    try:
+        import core.system1 as system1
+        if not system1.kernel_enabled():
+            return candidates[:top_n]
+        verdict = system1.score_candidates(
+            ["irrelevant", "vaguely related", "possibly relevant", "directly answers the query"],
+            "How relevant is this stored fact to the query?",
+            {f"c{i}": c for i, c in enumerate(candidates)},
+            state={"query": str(query or "")[:400]},
+        )
+    except Exception:
+        return candidates[:top_n]
+    normalized = verdict.get("normalized") or {}
+    if not normalized:
+        return candidates[:top_n]
+    order = sorted(range(len(candidates)),
+                   key=lambda i: normalized.get(f"c{i}", -1.0), reverse=True)
+    return [candidates[i] for i in order[:top_n]]
+
+
 def recall_memory(query):
     """Searches memory for fuzzy matches.
 
@@ -341,9 +373,10 @@ def recall_memory(query):
     if not MEMORY_AVAILABLE: return "Error: Memory system offline."
     try:
         if not _config.HYBRID_RECALL:
-            results = memory_collection.query(query_texts=[query], n_results=3)
+            results = memory_collection.query(query_texts=[query], n_results=10)
             if results['documents'] and results['documents'][0]:
-                retrieved = " | ".join(results['documents'][0])
+                best = _laya_rerank(query, list(results['documents'][0]), 3)
+                retrieved = " | ".join(best)
                 return f"Recalled context: {retrieved}"
             return "No relevant memories found."
 
@@ -354,7 +387,7 @@ def recall_memory(query):
         bm25_ranked = _bm25_rank(query, md_facts)[:10]
         sparse_docs = [md_facts[i] for i, _score in bm25_ranked]
 
-        fused = _rrf_fuse(dense_docs, sparse_docs)[:3]
+        fused = _laya_rerank(query, _rrf_fuse(dense_docs, sparse_docs), 3)
         if fused:
             retrieved = " | ".join(fused)
             return f"Recalled context: {retrieved}"

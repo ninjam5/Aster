@@ -747,6 +747,27 @@ ADMIN_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "remember_pronoun",
+            "description": "Store a person's pronouns (and therefore how to address them). Use it when someone tells you their pronouns, or when the owner does.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The person's name.",
+                    },
+                    "pronoun": {
+                        "type": "string",
+                        "description": "he, she, or they (he/him, she/her, they/them all work).",
+                    },
+                },
+                "required": ["name", "pronoun"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "toggle_gesture_mode",
             "description": "Turns hand gesture control on or off. Use when the user asks to enable/disable gesture mode, gesture control, or hand control. Mutually exclusive with Sentry — enabling gesture mode disables Sentry automatically.",
             "parameters": {
@@ -1553,11 +1574,35 @@ def sync_discord_memories() -> str:
 
 
 def _discord_honorific(sender_name: str) -> str:
-    """Return a respectful address term for Discord friends. Ensures female friends are not called 'Sir'."""
+    """Respectful address term for a Discord friend (ID 13).
+
+    Resolution lives in `tools.people` — a stored pronoun/honorific first, then the
+    `config.DISCORD_FEMALE_NAMES` fallback, then 'Sir'. Falls back to the old inline
+    logic if the people store is unavailable, so this can never raise into a reply.
+    """
+    try:
+        from tools.people import honorific_for
+        return honorific_for(sender_name)
+    except Exception as e:
+        print(f"[Aster Internal: people store unavailable for honorific ({e}); using config]")
     lowered = str(sender_name or "").strip().lower()
     if lowered in config.DISCORD_FEMALE_NAMES:
         return "Ma'am"
     return "Sir"
+
+
+def _discord_relationship(sender_name: str) -> str:
+    """How to describe a Discord friend to the model (ID 14).
+
+    Stored relationship, else one Laya guess (saved), else 'friend' — the value that
+    used to be hardcoded in the prompt. Never raises into a reply.
+    """
+    try:
+        from tools.people import resolve_relationship
+        return resolve_relationship(sender_name) or "friend"
+    except Exception as e:
+        print(f"[Aster Internal: relationship lookup skipped ({e})]")
+        return "friend"
 
 
 def _inject_outbound_discord_message_into_session(target_name: str, outbound_message: str) -> None:
@@ -1576,6 +1621,7 @@ def _inject_outbound_discord_message_into_session(target_name: str, outbound_mes
             honorific=_discord_honorific(target),
             owner_name=config.OWNER_NAME,
             tool_docs="",
+            relationship=_discord_relationship(target),
         )
 
     history.append({"role": "assistant", "content": payload})
@@ -1712,6 +1758,21 @@ def _execute_tool_impl(tool_name, arguments):
         # If it's a completely new fact, proceed with the actual database write
         # (the Laya write gate runs inside memorize_fact, covering every writer)
         return memorize_fact(fact_to_save, source="tool")
+    elif tool_name == "remember_pronoun":
+        # ID 13: persist a person's pronouns so we address them correctly from now on.
+        from tools.people import normalize_pronoun, set_person
+        _p_name = str(arguments.get("name", "")).strip()
+        _raw = str(arguments.get("pronoun", "")).strip()
+        if not _p_name or not _raw:
+            return tool_fail("FAILED — remember_pronoun needs both a name and a pronoun.")
+        _p = normalize_pronoun(_raw)
+        if not _p:
+            return tool_fail(f"FAILED — '{_raw}' is not a pronoun I can store. "
+                             f"Use he, she, or they.")
+        set_person(_p_name, pronoun=_p,
+                   gender={"he": "male", "she": "female"}.get(_p, "unknown"),
+                   source="owner", asked=True)
+        return f"[System Note: {_p_name}'s pronouns are saved as '{_p}'. Use them from now on.]"
     elif tool_name == "recall_memory":
         return recall_memory(arguments.get("query", ""))
     elif tool_name == "aster_shutdown_protocol":
@@ -2712,7 +2773,7 @@ def purge_media_cache():
 # DISCORD SYSTEM PROMPT / DISCORD PROMPT: Silent text-only route (no TTS/WebRTC callbacks)
 # ============================================================================
 DISCORD_CHAT_SYSTEM_PROMPT = (
-    "You are Aster, {owner_name}'s personal AI assistant. You are currently chatting on Discord with {owner_name}'s friend, {sender_name} . "
+    "You are Aster, {owner_name}'s personal AI assistant. You are currently chatting on Discord with {owner_name}'s {relationship}, {sender_name} . "
     "Known facts about them: {known_facts}. "
     "Preferred name/nickname: {honorific}. "
 
@@ -2799,6 +2860,27 @@ DISCORD_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "remember_pronoun",
+            "description": "Store a person's pronouns (and therefore how to address them) after they tell you. Use this when someone answers the pronouns question, or when the owner tells you.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The person's name (for a Discord friend, the sender's name).",
+                    },
+                    "pronoun": {
+                        "type": "string",
+                        "description": "he, she, or they (he/him, she/her, they/them all work).",
+                    },
+                },
+                "required": ["name", "pronoun"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_current_track",
             "description": f"Returns {config.OWNER_NAME}'s currently playing Spotify track and artist.",
             "parameters": {
@@ -2838,6 +2920,7 @@ def _get_discord_chat_history(sender_name: str) -> list[dict]:
                     honorific=_discord_honorific(sender_name),
                     owner_name=config.OWNER_NAME,
                     tool_docs="",
+                    relationship=_discord_relationship(sender_name),
                 ),
             }
         ]
@@ -2892,15 +2975,34 @@ def process_discord_chat(sender_name: str, user_message: str) -> str:
     if not incoming:
         return f"I beg your pardon, {honorific}, but I could not read your message."
 
+    # ID 13: make sure we know how to address this person. Stored -> one Laya guess ->
+    # if still unknown, ask them ONCE (recorded so we never nag).
+    _pronoun_note = ""
+    try:
+        from tools.people import resolve_identity
+        _identity = resolve_identity(sender, get_user_facts(sender, query=incoming))
+        honorific = _identity.get("honorific") or honorific
+        if _identity.get("needs_ask"):
+            _pronoun_note = (
+                "\n\n[System note: you do not know this person's pronouns yet. Ask them "
+                "politely, once, in your reply — and when they answer, call remember_pronoun "
+                f"with name='{sender}' and their pronoun. Do not make it awkward.]"
+            )
+    except Exception as e:
+        print(f"[Aster Internal: pronoun resolution skipped ({e})]")
+    if _pronoun_note:
+        incoming = incoming + _pronoun_note
+
     with config.brain_lock:
         history = _get_discord_chat_history(sender)
         if history and history[0].get("role") == "system":
             history[0]["content"] = DISCORD_CHAT_SYSTEM_PROMPT.format(
                 sender_name=sender,
-                known_facts=get_user_facts(sender),
+                known_facts=get_user_facts(sender, query=incoming),
                 honorific=honorific,
                 owner_name=config.OWNER_NAME,
                 tool_docs="",
+                relationship=_discord_relationship(sender),
             )
         history.append({"role": "user", "content": incoming})
         history[:] = trim_memory(history)
