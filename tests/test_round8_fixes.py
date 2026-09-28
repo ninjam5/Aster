@@ -307,20 +307,20 @@ class TestAffirmativeConfirmation:
         exact = {"target": "george", "payload": "x", "exact": True}
 
         brain._clear_pending_relay_confirm()
-        # a fresh guess is always forced (had_pending is captured BEFORE this turn)
-        assert brain._should_force_relay_confirm(guess, "tell geroge I'm late", False) is True
+        # a fresh guess is always forced (the pending target is captured BEFORE the turn)
+        assert brain._should_force_relay_confirm(guess, "tell geroge I'm late", "") is True
         # an affirmative prefix with NO pre-turn pending is still a new guess
-        assert brain._should_force_relay_confirm(guess, "ok tell geroge I'm late", False) is True
+        assert brain._should_force_relay_confirm(guess, "ok tell geroge I'm late", "") is True
         # an exact relay is never forced
-        assert brain._should_force_relay_confirm(exact, "tell george I'm late", True) is False
-        # after we actually asked (pending from an EARLIER turn), an affirmative confirms
-        assert brain._should_force_relay_confirm(guess, "yes, send it to george", True) is False
-        assert brain._should_force_relay_confirm(guess, "[Mood: happy] yes, do it", True) is False
+        assert brain._should_force_relay_confirm(exact, "tell george I'm late", "george") is False
+        # a pending for THIS target + an affirmative reply is the confirmation
+        assert brain._should_force_relay_confirm(guess, "yes, send it to george", "george") is False
+        assert brain._should_force_relay_confirm(guess, "[Mood: happy] yes, do it", "george") is False
         # ... but a NEW command in the same window is still forced
-        assert brain._should_force_relay_confirm(guess, "tell geroge I'm late", True) is True
-        # and the live flag alone must NOT authorise (the same-turn trap)
-        brain._mark_pending_relay_confirm("george")
-        assert brain._should_force_relay_confirm(guess, "ok tell geroge I'm late", False) is True
+        assert brain._should_force_relay_confirm(guess, "tell geroge I'm late", "george") is True
+        # a pending for a DIFFERENT target must not authorise this one (round 12)
+        other = {"target": "bob", "payload": "x", "exact": False}
+        assert brain._should_force_relay_confirm(other, "yes, send it to bob", "george") is True
         brain._clear_pending_relay_confirm()
 
     def test_the_tagged_affirmative_is_recognised(self):

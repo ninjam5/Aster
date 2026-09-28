@@ -2380,18 +2380,27 @@ def _clear_pending_relay_confirm() -> None:
     _pending_relay_confirm.update(target=None, at=0.0)
 
 
-def _should_force_relay_confirm(intent, user_text: str, had_pending: bool = None) -> bool:
-    """Should this relay turn force `confirm=False`/`assume_guess=True`? (QA round 10/11)
+def _should_force_relay_confirm(intent, user_text: str, pending_target: str = None) -> bool:
+    """Should this relay turn force `confirm=False`/`assume_guess=True`? (QA round 10/11/12)
 
     True for a non-exact relay UNLESS the owner is answering a confirmation question we
-    asked on an EARLIER turn. `had_pending` must be captured at the START of the turn —
-    the brain marks a new pending while building this turn's directive, so reading the
-    live flag here would let a same-turn "ok tell geroge …" skip its own gate (round 11).
+    asked on an EARLIER turn FOR THIS SAME TARGET.
+
+    `pending_target` must be captured at the START of the turn (the brain marks a new
+    pending while building this turn's directive, so reading the live value would let a
+    same-turn "ok tell geroge …" skip its own gate — round 11), and it must MATCH the
+    intent's target (round 12: a stale pending for george authorised a fresh guess to
+    bob, which then resolved to a canonical key and sent silently).
     """
     if not isinstance(intent, dict) or intent.get("exact"):
         return False
-    pending = _pending_relay_is_fresh() if had_pending is None else bool(had_pending)
-    return not (_looks_affirmative(user_text) and pending)
+    if pending_target is None:
+        pending_target = str(_pending_relay_confirm.get("target") or "")
+    pending_target = str(pending_target or "").strip().lower()
+    this_target = str(intent.get("target") or "").strip().lower()
+    if not pending_target or not this_target or pending_target != this_target:
+        return True
+    return not _looks_affirmative(user_text)
 
 
 def _as_bool(value) -> bool:
@@ -3514,9 +3523,10 @@ def process_user_input(user_text, status_callback=None):
         _log_turn_mood(user_text)
 
     discord_intent = _extract_discord_message_intent(user_text)
-    # QA round 11: capture the pending-confirmation state BEFORE this turn can mark a new
-    # one, so a same-turn "ok tell geroge …" cannot authorise itself.
-    _relay_confirm_was_pending = _pending_relay_is_fresh()
+    # QA round 11/12: capture the pending-confirmation TARGET before this turn can mark a
+    # new one (same-turn trap) and require it to match the target we are about to use.
+    _relay_confirm_target = (_pending_relay_confirm.get("target")
+                             if _pending_relay_is_fresh() else "")
     # CACHE/COST (QA round 2): derive the boolean WITHOUT re-parsing. This used to call
     # `_is_discord_message_request` (which parses again) and then parse a third time —
     # up to 6 Laya passes for a plain "tell me a joke".
@@ -3764,7 +3774,7 @@ def process_user_input(user_text, status_callback=None):
                             # tells the tool the target was inferred, so it refuses
                             # without an explicit confirm.
                             if _should_force_relay_confirm(discord_intent, user_text,
-                                                           _relay_confirm_was_pending):
+                                                           _relay_confirm_target):
                                 # QA round 5: force it OFF on the automated relay turn.
                                 # Preserving a model-supplied confirm=true let the model
                                 # self-approve a guessed target with no owner input. The
