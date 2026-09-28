@@ -130,7 +130,14 @@ def _execute_llm_completion(messages: list[dict], temperature: float = None, n_p
 
     try:
         response = requests.post("http://localhost:8080/v1/chat/completions", json=payload, timeout=120)
-        print(f'[HTTP DEBUG] status={response.status_code} body[:500]={response.text[:500]}')
+        try:
+            # ASCII-sanitized: the body can carry arbitrary Unicode (emoji, "♡", CJK)
+            # that the Windows console codepage cannot encode — an unguarded print
+            # raises UnicodeEncodeError and kills the turn.
+            _dbg_body = response.text[:500].encode("ascii", "replace").decode("ascii")
+            print(f'[HTTP DEBUG] status={response.status_code} body[:500]={_dbg_body}')
+        except Exception:
+            pass
         response.raise_for_status()
         result = response.json()
         msg = result["choices"][0]["message"]

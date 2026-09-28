@@ -29,7 +29,19 @@ class DiagnosticsStream:
         self._lock = threading.Lock()
 
     def write(self, text):
-        self._original.write(text)
+        try:
+            self._original.write(text)
+        except UnicodeEncodeError:
+            # The console codepage (cp1252) cannot encode arbitrary content — e.g. a
+            # model response containing "♡" from an image. Without this fallback the
+            # print raises inside the tool loop and the whole turn dies with
+            # "[Aster Error — brain loop]".
+            try:
+                self._original.write(text.encode("ascii", "replace").decode("ascii"))
+            except Exception:
+                pass
+        except Exception:
+            pass
         if getattr(_reentrancy, "active", False):
             return
         import config  # lazy — avoids circular import at module load time

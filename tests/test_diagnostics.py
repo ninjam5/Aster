@@ -72,3 +72,42 @@ class TestErrorChannel:
         monkeypatch.setenv("PYTEST_CURRENT_TEST", "test_x (call)")
         diag.send_alert("watchdog", "server down")
         bot.send_message.assert_not_called()
+
+
+class TestEncodingSafety:
+    """Regression: a non-cp1252 print (e.g. a model reply containing "♡" from an
+    image) must not raise inside the tool loop and kill the turn."""
+
+    def test_write_falls_back_to_ascii_when_console_cannot_encode(self):
+        from tools.diagnostics import DiagnosticsStream
+
+        class Cp1252Stream:
+            def __init__(self):
+                self.written = []
+
+            def write(self, text):
+                text.encode("cp1252")          # raises UnicodeEncodeError on "♡"
+                self.written.append(text)
+
+            def flush(self):
+                pass
+
+        original = Cp1252Stream()
+        stream = DiagnosticsStream(original)
+        stream.write("names: \u2661 Emmizzz \u2661\n")   # must not raise
+
+        assert original.written, "fallback never wrote anything"
+        assert "Emmizzz" in "".join(original.written)
+        assert "?" in "".join(original.written)            # ♡ replaced
+
+    def test_write_survives_any_original_failure(self):
+        from tools.diagnostics import DiagnosticsStream
+
+        class Broken:
+            def write(self, text):
+                raise RuntimeError("boom")
+
+            def flush(self):
+                pass
+
+        DiagnosticsStream(Broken()).write("anything\n")    # must not raise
