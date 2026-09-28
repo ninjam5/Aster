@@ -131,4 +131,11 @@ Authored 2026-07-05; all counts measured that day on the live machine.
 - Re-measure harnesses: `python emotion-test.py; python ambient-audio-test.py; python face-emotion-test.py`
 - Vitest count: `cd Aster-UI; npm test`
 - Native-only harness still true: `Select-String -Path engine_testing\harness.py -Pattern "tools=|_extract_native_tool_call"`
+- Harness flags (2026-09-28): `python engine_testing/run_engine_test.py --repeat 3 --seed 42 --n-predict 1000 [--category single_tool]`
+  - `--repeat N` -> per-scenario pass rates + a **FLAKY** list. Single samples swing
+    3-6 scenarios on this battery; always repeat before believing a delta.
+  - `--seed S` -> repeat r uses seed+r (reproducible AND independent); omit for random.
+  - The report's **LATENCY BREAKDOWN** is cache-aware: `usage.prompt_tokens` is the FULL
+    prompt (~13k with system+tools) while `timings.prompt_n` is what the server actually
+    prefilled (~50-200 on a cache hit). Quote `prefilled_tokens`, not `prompt_tokens`.
 - Latest golden report: `Get-ChildItem engine_testing\results | Sort-Object LastWriteTime | Select-Object -Last 1`
