@@ -16,7 +16,10 @@ from config import MEMORY_AVAILABLE, MD_FILE, memory_collection
 # The dedup gate used to live only in the brain's `memorize_fact` tool dispatch, so
 # gmail_tool, face_server, vision and the Discord sync all bypassed it — that is how
 # the duplicate pairs (memory.md:9/11, :10/12) and ~78 "Aster sent an email reply"
-# lines got in. It now runs HERE, at the single choke point every writer goes through.
+# lines got in. It now runs HERE, at the single choke point every FACT writer goes
+# through. (QA round 9: `tools/mood_memory.py` still writes its mood-trend summaries
+# directly to the shared Chroma collection under a separate `moodtrend_` namespace —
+# a deliberate exception, since those are not personal facts. It is the only one.)
 _GATE_MARGIN = 0.5  # stricter than the DOM motor's 0.25: a wrong "skip" loses a fact
 _WRITE_LOCK = threading.RLock()   # QA round 6: serialize read-gate-append across threads
 _NONE_KEY = "Z"

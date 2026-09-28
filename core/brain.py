@@ -1900,7 +1900,7 @@ def _execute_tool_impl(tool_name, arguments):
     elif tool_name == "toggle_gesture_mode":
         import tools.gesture as gesture_mod
         import tools.sentry as sentry
-        state = arguments.get("state", True)
+        state = _as_bool(arguments.get("state", True))
         if state:
             sentry.SENTRY_ACTIVE = False  # mutual exclusion
         gesture_mod.GESTURE_ACTIVE = state
@@ -1910,7 +1910,7 @@ def _execute_tool_impl(tool_name, arguments):
     elif tool_name == "toggle_sentry_mode":
         import tools.sentry as sentry
         import tools.gesture as gesture_mod
-        state = arguments.get("state", True)
+        state = _as_bool(arguments.get("state", True))
         if state:
             gesture_mod.GESTURE_ACTIVE = False  # mutual exclusion
         sentry.SENTRY_ACTIVE = state
@@ -1924,7 +1924,7 @@ def _execute_tool_impl(tool_name, arguments):
     elif tool_name == "snooze_intervention":
         return intervention.snooze(arguments.get("minutes", 10))
     elif tool_name == "toggle_awareness_mode":
-        state = arguments.get("state", True)
+        state = _as_bool(arguments.get("state", True))
         import tools.awareness as _aw
         _aw.AWARENESS_ACTIVE = state
         config.AWARENESS_ACTIVE = state
@@ -1932,19 +1932,19 @@ def _execute_tool_impl(tool_name, arguments):
         print(f"\n[Aster Internal: Awareness Mode toggled {status}]")
         return f"[System Note: Awareness Mode is now {status}.]"
     elif tool_name == "toggle_mood_actions":
-        state = _as_bool(arguments.get("state", True))
+        state = _as__as_bool(arguments.get("state", True))
         config.MOOD_ACTIONS_ENABLED = state
         status = "ON" if state else "OFF"
         print(f"\n[Aster Internal: Mood-action offers toggled {status}]")
         return f"[System Note: Mood-action offers are now {status}.]"
     elif tool_name == "toggle_mood_checkins":
-        state = _as_bool(arguments.get("state", True))
+        state = _as__as_bool(arguments.get("state", True))
         config.MOOD_CHECKIN_ENABLED = state
         status = "ON" if state else "OFF"
         print(f"\n[Aster Internal: Proactive mood check-ins toggled {status}]")
         return f"[System Note: Proactive mood check-ins are now {status}.]"
     elif tool_name == "toggle_face_emotion":
-        state = _as_bool(arguments.get("state", True))
+        state = _as__as_bool(arguments.get("state", True))
         config.FACE_EMOTION_ENABLED = state
         if state:
             try:
@@ -1956,7 +1956,7 @@ def _execute_tool_impl(tool_name, arguments):
         print(f"\n[Aster Internal: Facial-emotion reading toggled {status}]")
         return f"[System Note: Facial-emotion reading is now {status}.]"
     elif tool_name == "toggle_ambient_audio":
-        state = _as_bool(arguments.get("state", True))
+        state = _as__as_bool(arguments.get("state", True))
         config.AMBIENT_AUDIO_ENABLED = state
         if not state:
             try:
@@ -2112,6 +2112,14 @@ def _execute_tool_impl(tool_name, arguments):
         if not goal or not text:
             return "Error: goal and text parameters are required."
         submit = _as_bool(arguments.get("submit", False))
+        # QA round 9: smart_type pastes via the clipboard exactly like type_text, so it
+        # needs the same multi-line guard (a newline EXECUTES in a focused terminal).
+        # (The round-8 commit claimed this; it had not actually been added.)
+        if ("\n" in text or "\r" in text) and not _as_bool(arguments.get("confirm_send")):
+            return tool_fail(
+                "FAILED — BLOCKED — the text contains a newline, which would EXECUTE the "
+                "lines in a focused terminal. Nothing was typed. Confirm with the owner, "
+                "then re-call with confirm_send=true.")
         # ID 17 (QA round 4): pressing Enter submits the focused form — the most common
         # way to SEND. This path had no send/destructive check. Search-like targets are
         # exempt (the human-search flow submits a site's search bar). Covers both the
@@ -2218,24 +2226,27 @@ def _execute_tool_impl(tool_name, arguments):
         key = str(arguments.get("key", "")).strip().lower()
         if not key:
             return "Error: key parameter is required."
-        if key in ("enter", "return", "space", "delete", "backspace"):
-            # QA round 5/6/7: Enter submits the focused form, Space ACTIVATES a focused
-            # button, and Delete/Backspace destroy the focused item (file, message, row).
-            # All are destructive/send activations, so all are gated. Search-like /
-            # dialog windows stay exempt (automation.dom_motor_send_policy: allow
-            # disables the gate entirely).
+        # QA round 9: "del" is a valid pyautogui alias for Delete and was slipping past.
+        # Delete/Backspace are destructive regardless of the window, so they do NOT get
+        # the search-like exemption (which exists for submit-ish keys).
+        _DESTRUCTIVE_KEYS = ("delete", "del", "backspace")
+        _SUBMIT_KEYS = ("enter", "return", "space")
+        if key in _DESTRUCTIVE_KEYS or key in _SUBMIT_KEYS:
             if not _as_bool(arguments.get("confirm_send")):
                 try:
                     from tools.dom import submit_needs_confirm
-                    if submit_needs_confirm("", get_foreground_window_title()):
+                    _exempt = (key in _SUBMIT_KEYS
+                               and not submit_needs_confirm("", get_foreground_window_title()))
+                    if not _exempt:
                         return tool_fail(
-                            "FAILED — BLOCKED — pressing Enter submits the focused form "
-                            "(a send/destructive action). Confirm with the owner, then "
-                            "re-call press_key with confirm_send=true.")
+                            f"FAILED — BLOCKED — '{key}' is a submit/destructive key "
+                            f"(it submits the focused form or destroys the focused item). "
+                            f"Confirm with the owner, then re-call press_key with "
+                            f"confirm_send=true.")
                 except Exception as e:
-                    print(f"[DOM] press_key submit gate error ({e}); failing closed")
+                    print(f"[DOM] press_key gate error ({e}); failing closed")
                     return tool_fail(
-                        "FAILED — BLOCKED — could not verify that pressing Enter is safe "
+                        "FAILED — BLOCKED — could not verify that this key press is safe "
                         "(the check errored). Re-call with confirm_send=true.")
         pyautogui.press(key)
         invalidate_screen_cache()
@@ -2326,6 +2337,24 @@ def execute_tool_ex(tool_name, arguments) -> tuple[bool, object]:
     """Dispatch a tool and return (ok, payload). Preferred for callers that
     need the success signal (the admin/Discord ReAct loops)."""
     return _normalize_tool_result(_execute_tool_impl(tool_name, arguments))
+
+
+_AFFIRMATIVE_RE = re.compile(
+    r"^\s*(?:yes|yeah|yep|yup|ok|okay|sure|correct|confirm|confirmed|go ahead|do it|"
+    r"send it|please do|affirmative)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_affirmative(text: str) -> bool:
+    """True when the owner is confirming something (QA round 9).
+
+    The relay guess flow asks "send to X?" and the owner answers "yes, send it to X".
+    That reply names the contact, so the parser produced a non-exact intent and the
+    brain re-forced `confirm=False` — the confirmation could never complete except with
+    a bare "yes". An affirmative reply is treated as the confirmation it is.
+    """
+    return bool(_AFFIRMATIVE_RE.match(str(text or "")))
 
 
 def _as_bool(value) -> bool:
@@ -3690,7 +3719,7 @@ def process_user_input(user_text, status_callback=None):
                             # succeeded and the confirmation was skipped. `assume_guess`
                             # tells the tool the target was inferred, so it refuses
                             # without an explicit confirm.
-                            if not discord_intent.get("exact"):
+                            if not discord_intent.get("exact") and not _looks_affirmative(user_text):
                                 # QA round 5: force it OFF on the automated relay turn.
                                 # Preserving a model-supplied confirm=true let the model
                                 # self-approve a guessed target with no owner input. The

@@ -161,6 +161,9 @@ class TestTypeTextNewlineGate:
 
 class TestForgetFactLock:
     def test_forget_fact_serializes_with_memorize_fact(self, monkeypatch, tmp_path):
+        """QA round 9: the first version only counted entries into `_gate_fact`, which
+        `forget_fact` never calls — an unlocked forget_fact kept it green. This measures
+        BOTH critical sections."""
         monkeypatch.setattr(memory, "MEMORY_AVAILABLE", True, raising=False)
         monkeypatch.setattr(memory, "MD_FILE", str(tmp_path / "m.md"), raising=False)
         monkeypatch.setattr(memory, "memory_collection", MagicMock(), raising=False)
@@ -168,22 +171,30 @@ class TestForgetFactLock:
             f.write("- **[2026-01-01 00:00:00]** hello world\n")
         inside = {"n": 0, "max": 0}
 
-        def slow_gate(fact, source="agent"):
+        def _enter():
             inside["n"] += 1
             inside["max"] = max(inside["max"], inside["n"])
             time.sleep(0.05)
             inside["n"] -= 1
+
+        def slow_gate(fact, source="agent"):
+            _enter()
             return {"skip": False, "reason": "", "category": "fact",
                     "conflict": "", "supersedes": None}
 
+        def slow_forget(text):
+            _enter()
+            return "[System Note: forgotten]"
+
         monkeypatch.setattr(memory, "_gate_fact", slow_gate)
-        threads = [threading.Thread(target=lambda: memory.memorize_fact("new fact"))] + \
-                  [threading.Thread(target=lambda: memory.forget_fact("hello world"))]
+        monkeypatch.setattr(memory, "_forget_fact_locked", slow_forget)
+        threads = [threading.Thread(target=lambda: memory.memorize_fact("new fact")),
+                   threading.Thread(target=lambda: memory.forget_fact("hello world"))]
         for t in threads:
             t.start()
         for t in threads:
             t.join()
-        assert inside["max"] == 1
+        assert inside["max"] == 1, "forget_fact and memorize_fact overlapped"
 
 
 class TestSentryRoute2OwnerName:
@@ -215,3 +226,94 @@ class TestSentryRoute2OwnerName:
         sentry.execute_sentry_sweep()   # Route 2 must skip the owner
         bot.send_message.assert_not_called()
         assert sentry.WAITING_FOR_ID is False
+
+
+# ── QA round 9 ────────────────────────────────────────────────────────────────
+
+class TestRound9Gates:
+    def test_del_alias_is_gated(self, monkeypatch):
+        monkeypatch.setattr(dom, "_send_policy", lambda: "confirm")
+        monkeypatch.setattr(brain, "get_foreground_window_title", lambda: "Explorer",
+                            raising=False)
+        pressed = []
+        monkeypatch.setattr(brain.pyautogui, "press", lambda k: pressed.append(k),
+                            raising=False)
+        out = brain.execute_tool("press_key", {"key": "del"})
+        assert "BLOCKED" in out
+        assert pressed == []
+
+    def test_destructive_keys_ignore_the_search_exemption(self, monkeypatch):
+        monkeypatch.setattr(dom, "_send_policy", lambda: "confirm")
+        monkeypatch.setattr(brain, "get_foreground_window_title",
+                            lambda: "Google Search - Chrome", raising=False)
+        pressed = []
+        monkeypatch.setattr(brain.pyautogui, "press", lambda k: pressed.append(k),
+                            raising=False)
+        for key in ("delete", "backspace"):
+            assert "BLOCKED" in brain.execute_tool("press_key", {"key": key}), key
+        assert pressed == []
+
+    def test_submit_keys_keep_the_search_exemption(self, monkeypatch):
+        monkeypatch.setattr(dom, "_send_policy", lambda: "confirm")
+        monkeypatch.setattr(brain, "get_foreground_window_title",
+                            lambda: "Google Search - Chrome", raising=False)
+        pressed = []
+        monkeypatch.setattr(brain.pyautogui, "press", lambda k: pressed.append(k),
+                            raising=False)
+        monkeypatch.setattr(brain, "invalidate_screen_cache", lambda: None, raising=False)
+        monkeypatch.setattr(brain, "_attach_action_screenshot", lambda t, action: t,
+                            raising=False)
+        brain.execute_tool("press_key", {"key": "enter"})
+        assert pressed == ["enter"]
+
+    def test_smart_type_multiline_is_blocked(self, monkeypatch):
+        monkeypatch.setattr(dom, "_send_policy", lambda: "confirm")
+        monkeypatch.setattr(brain, "locate_ui_element_ex", MagicMock(), raising=False)
+        out = brain.execute_tool("smart_type", {"goal": "the terminal", "text": "a\nb"})
+        assert out.startswith("FAILED") and "BLOCKED" in out
+
+    def test_state_string_false_turns_a_mode_off(self, monkeypatch):
+        import config as _c
+        monkeypatch.setattr(_c, "AWARENESS_ACTIVE", True, raising=False)
+        out = brain.execute_tool("toggle_awareness_mode", {"state": "false"})
+        assert "OFF" in out or "off" in out.lower()
+        assert isinstance(_c.AWARENESS_ACTIVE, bool) and _c.AWARENESS_ACTIVE is False
+
+
+class TestAffirmativeConfirmation:
+    def test_affirmatives_are_recognised(self):
+        for t in ["yes", "yes, send it to george", "ok go ahead", "confirm", "Sure!"]:
+            assert brain._looks_affirmative(t) is True, t
+
+    def test_non_affirmatives(self):
+        for t in ["tell geroge I'll be late", "no", "what time is it"]:
+            assert brain._looks_affirmative(t) is False, t
+
+    def test_an_affirmative_turn_does_not_re_force_the_guess(self, monkeypatch):
+        """QA round 9: 'yes, send it to george' named the contact, so the parser made it
+        non-exact and the brain re-forced confirm=False — the flow could never complete."""
+        sent = {}
+        monkeypatch.setattr(config, "AUTO_COMPACT_ENABLED", False, raising=False)
+        monkeypatch.setattr(brain, "_log_turn_mood", lambda t: None, raising=False)
+        monkeypatch.setattr(brain, "_maybe_tag_text_mood", lambda t: t, raising=False)
+        monkeypatch.setattr(brain.awareness, "render_context_block", lambda: None, raising=False)
+        monkeypatch.setattr(brain, "trim_memory", lambda m: m, raising=False)
+        monkeypatch.setattr(brain, "publish_terminal", lambda *a, **k: None, raising=False)
+        monkeypatch.setattr(brain, "send_discord_message",
+                            lambda target, msg, confirm=False, assume_guess=False:
+                            sent.update(target=target, confirm=confirm,
+                                        assume_guess=assume_guess) or
+                            "[System Note: Message delivered to george on Discord.]")
+        monkeypatch.setattr(brain, "_execute_llm_completion",
+                            lambda **k: {"role": "assistant", "content": "",
+                                         "tool_calls": [{"id": "1", "function": {
+                                             "name": "send_discord_message",
+                                             "arguments": '{"target_name": "george", "message": "Hi", "confirm": true}'}}]},
+                            raising=False)
+        saved = list(brain.messages)
+        try:
+            brain.messages[:] = [brain.messages[0]]
+            brain.process_user_input("yes, send it to george", None)
+        finally:
+            brain.messages[:] = saved
+        assert sent.get("confirm") is True, "the confirmation was force-reset"

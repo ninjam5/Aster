@@ -64,7 +64,6 @@ class TestMoodTagStripping:
     def test_a_mood_tagged_relay_is_still_exact(self, monkeypatch):
         import tools.discord_api as d
         monkeypatch.setattr(d, "CONTACTS", {"george": "1"}, raising=False)
-        d._CONTACT_LOOKUP = None
         out = brain._extract_discord_message_intent("[Mood: neutral] tell george I'll be late")
         assert out is not None, "the mood tag defeated the relay parser"
         assert out["target"] == "george" and out["exact"] is True
@@ -91,7 +90,7 @@ class TestConsolidationBounds:
             {"role": "user", "content": "x" * 5000} for _ in range(12)]
         brain.evaluate_and_memorize("TEST")
         assert len(seen["turns"]) == 8
-        assert all(len(t) <= 1200 for t in seen["turns"])
+        assert all(len(t) == 1200 for t in seen["turns"])
         brain.messages[:] = [brain.messages[0]]
 
     def test_the_attempt_cap_bounds_the_gate(self, monkeypatch):
