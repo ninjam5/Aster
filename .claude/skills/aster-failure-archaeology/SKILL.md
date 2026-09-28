@@ -270,9 +270,15 @@ tool-law wording in `_shared_tool_laws.md`, to be A/B'd on the battery. Tracked 
    Whisper (~1.2 GB) starves llama-server's compute buffers: the same image prompt
    prefilled at **248 tok/s without it vs 17 tok/s with it** (2026-09-27). Voice
    notes use the CPU instance (~5.6 s/note); only a LiveKit call loads CUDA Whisper.
-7. **The mmproj must be served on the GPU.** Offloading the projector to RAM
-   (`--no-mmproj-offload`) costs **15x on image prefill** (248 → 17 tok/s); it also
-   slowed text prefill. It is not a VRAM-saving freebie.
+7. **VRAM headroom is the dominant cost, not any single flag.** Below ~500 MB free,
+   llama-server's compute buffers starve and prefill collapses (measured: text
+   227 → 63 tok/s at 360 MB free; image 248 → 17 tok/s with a resident Whisper).
+   Everything else is a placement trade: **mmproj on the GPU** = image prefill
+   ~248 tok/s but costs ~1.4 GB VRAM, forcing ~6 more expert layers to the CPU
+   (slower text); **mmproj in RAM** = best text prefill/decode, image encode
+   ~30 s/screenshot. **Shipped text-first 2026-09-27** (`--n-cpu-moe 21`, mmproj in
+   RAM, `--ubatch-size 512`). `--ubatch-size 1024` was measured and rejected (it grew
+   the compute buffers into the starvation zone: text 227 → 63 tok/s).
 
 **Status:** SETTLED in code; **live validation OPEN** (boot, vision round-trip,
 tool-calling behavior, Whisper route, harness regression) — checklist in

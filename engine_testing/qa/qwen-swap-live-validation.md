@@ -289,3 +289,30 @@ LiveKit call. Net: a 1280-wide vision turn is now **~6.7 s** (was 50-100 s).
 `/screenshot` keeps full res via `max_width=0`). Quality identical at 1920/1600/1280/1024
 on the sample (app ID + tab names); image tokens 2,086 → 1,105. Do not go below 1280
 (no further speed gain — the `--image-min-tokens 1024` floor — only quality loss).
+
+### 2026-09-27 (final) — shipped text-first; ubatch A/B rejected 1024
+
+**Shipped config:** `--n-cpu-moe 21`, mmproj **in RAM** (`--no-mmproj-offload`),
+`--ubatch-size 512`, threads 8, 60k ctx, Whisper off the GPU.
+Measured live (app running, 1,119-token text / 1,096-token 1280 image): text
+**5.9 s (189 tok/s)**, image **31.0 s (35 tok/s)**, free VRAM **723 MiB**, decode ~38-40 tok/s.
+
+**`--ubatch-size` A/B** (identical otherwise: ncmoe 20, mmproj in RAM):
+
+| ub | free VRAM | text 1,119 tok | image 1,096 tok |
+|---|---|---|---|
+| **512 (shipped)** | 495 MiB | **4.9 s (227 tok/s)** | 39.2 s (28 tok/s) |
+| 1024 | 360 MiB | **17.7 s (63 tok/s)** | 29.5 s (37 tok/s) |
+
+→ 1024 rejected: it grows the compute buffers into the starvation zone; text prefill
+collapsed 3.6x for a small image gain.
+
+**The two placements, both measured (same prompts, no Whisper, clean server):**
+
+| | text 1.1k | decode | image 1.1k |
+|---|---|---|---|
+| text-first: ncmoe 21, mmproj RAM | 189-227 tok/s | ~38-40 tok/s | 28-35 tok/s (~30-39 s) |
+| vision-first: ncmoe 26-28, mmproj GPU | 182-302 tok/s | ~29.5 tok/s | **248 tok/s (4.4 s)** |
+
+Note: the earlier "~1,600 pp" figure was a **4,022-token** probe — small prompts prefill
+less efficiently per token, so it is not comparable to the ~1,100-token tests above.
