@@ -2180,11 +2180,11 @@ def _execute_tool_impl(tool_name, arguments):
         key = str(arguments.get("key", "")).strip().lower()
         if not key:
             return "Error: key parameter is required."
-        if key in ("enter", "return"):
-            # QA round 5: Enter submits the focused form — the submit gate must cover it,
-            # or the model bypasses it with smart_type(submit=false) + press_key('enter').
-            # Search-like / dialog windows stay exempt so ordinary navigation still works
-            # (set automation.dom_motor_send_policy: allow to disable the gate entirely).
+        if key in ("enter", "return", "space"):
+            # QA round 5/6: Enter submits the focused form, and Space ACTIVATES a focused
+            # button in browsers and native Windows apps — so both must be gated, or the
+            # model bypasses the submit gate with press_key('space'). Search-like / dialog
+            # windows stay exempt (automation.dom_motor_send_policy: allow disables it).
             if not arguments.get("confirm_send"):
                 try:
                     from tools.dom import submit_needs_confirm
@@ -2383,8 +2383,10 @@ def _laya_relay_intent(text: str) -> bool:
     lowered = text.lower()
     # QA round 5: require a CONTACT NAME or an explicit "discord" mention. The send-verb
     # hint alone matched ordinary narration ("what did she tell you", "I'll text you
-    # later") and cost a Laya pass every such turn. A relay to an unnamed person cannot
-    # be sent anyway (there is no contact to resolve), so nothing is lost.
+    # later") and cost a Laya pass every such turn.
+    # QA round 6: this DOES narrow ID 15 — "tell my brother I'll be late" is no longer
+    # detected as a relay even though Laya could resolve a nickname. The direction is
+    # safe (a missed relay, never a wrong send); use a real contact name or "discord".
     if not ("discord" in lowered
             or any(str(n).lower() in lowered for n in contact_names())):
         return False

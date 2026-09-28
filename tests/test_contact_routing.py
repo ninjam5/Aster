@@ -203,10 +203,21 @@ class TestRelayIntentGate:
         assert brain._laya_relay_intent("let george know I'll be late") is True
 
     def test_doubt_returns_false(self, monkeypatch):
+        # QA round 6: needs a contact name, or the round-5 prefilter returns before
+        # check_state and the escalate branch is never exercised.
         monkeypatch.setattr(system1, "kernel_enabled", lambda: True)
+        called = []
         monkeypatch.setattr(system1, "check_state",
-                            lambda *a, **k: {"answer": True, "escalate": True})
-        assert brain._laya_relay_intent("message someone about the thing") is False
+                            lambda *a, **k: called.append(1) or {"answer": True,
+                                                                 "escalate": True})
+        assert brain._laya_relay_intent("message george about the thing") is False
+        assert called == [1]   # the escalate branch really was consulted
+
+    def test_a_verb_without_a_contact_costs_no_model_call(self, monkeypatch):
+        called = []
+        monkeypatch.setattr(system1, "check_state", lambda *a, **k: called.append(1) or {})
+        assert brain._laya_relay_intent("I'll text you later") is False
+        assert called == []
 
     def test_kernel_off_returns_false(self, monkeypatch):
         monkeypatch.setattr(system1, "kernel_enabled", lambda: False)

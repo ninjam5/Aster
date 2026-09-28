@@ -83,6 +83,11 @@ class TestAddressedToAster:
 
 class TestGoodMomentToSpeak:
     def test_never_interrupts_a_mid_turn_brain(self, monkeypatch):
+        # QA round 6: use a WARM cache. With a cold one this passed via the uncached
+        # function's own _brain_busy check, so it could not detect the round-4 fix
+        # (hard stop evaluated BEFORE the memo).
+        import time as _t
+        awareness._MOMENT_CACHE.update(at=_t.time(), ok=True)
         awareness._brain_busy.set()
         try:
             called = []

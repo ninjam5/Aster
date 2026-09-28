@@ -822,3 +822,12 @@ class TestGoogleReplyGuardrail:
         with patch.object(config, "GOOGLE_ACCESS_TIER", "limited"):
             result = gmail_tool.reply_to_email("msg5", "Sure, let's talk.")
             assert "Blocked" in result
+
+
+@pytest.fixture(autouse=True)
+def _no_real_vault_writes(monkeypatch):
+    """QA round 6: gmail_tool's reply path calls memorize_fact, so these tests wrote
+    FAKE facts into the real Aster_Vault/memory.md and Aster_Vault/chroma_db."""
+    import core.memory as _mem
+    monkeypatch.setattr(_mem, "memorize_fact", lambda *a, **k: "[test: not written]",
+                        raising=False)

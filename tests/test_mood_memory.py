@@ -187,3 +187,13 @@ def test_flush_neutral_period_advances_clock_without_writing(store):
     assert mm.maybe_flush_mood_summary() is None     # boring period → no summary
     assert os.path.exists(config.MOOD_FLUSH_STATE_FILE)        # but clock advanced
     assert not os.path.exists(config.MOOD_TRENDS_FILE)         # nothing written
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _restore_emotion_flags():
+    """QA round 6: this module sets config.EMOTION_ENABLED/MOOD_TREND_ENABLED at IMPORT
+    scope and never restored them, so every later test that ran process_user_input
+    appended real rows to Aster_Vault/emotion_log.jsonl."""
+    yield
+    config.EMOTION_ENABLED = False
+    config.MOOD_TREND_ENABLED = False
