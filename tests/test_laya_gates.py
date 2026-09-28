@@ -32,6 +32,8 @@ def _no_real_logging(monkeypatch):
 class TestNeedsActionScreenshot:
     def test_warning_text_always_needs_it_without_a_model_call(self, monkeypatch):
         called = []
+        # QA round 4: enable the kernel, or this passed via the kernel-off branch.
+        monkeypatch.setattr(system1, "kernel_enabled", lambda: True)
         monkeypatch.setattr(system1, "choose", lambda *a, **k: called.append(1) or {})
         assert brain._needs_action_screenshot(WARN, "smart_click") is True
         assert called == []  # hard signal short-circuits the kernel

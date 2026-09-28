@@ -294,10 +294,11 @@ class TestQAFollowUps:
                             lambda t: delivered.append(t), raising=False)
         # QA round 3: _trigger_intervention does `from core.brain import process_user_input`
         # locally, so patching intervention.* was a silent no-op (the round-2 bug class).
-        monkeypatch.setattr(brain, "process_user_input",
-                            MagicMock(side_effect=AssertionError("must not speak")))
+        brain_call = MagicMock(side_effect=AssertionError("must not speak"))
+        monkeypatch.setattr(brain, "process_user_input", brain_call)
         intervention._trigger_intervention("youtube", "some window")
         assert delivered == []
+        brain_call.assert_not_called()   # QA round 4: the raise was swallowed
 
     def test_truncate_on_boundary_cuts_between_nodes(self):
         text = "Foreground window: 'X'; " + "; ".join(f"node {i}" for i in range(60))

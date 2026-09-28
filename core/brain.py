@@ -1225,7 +1225,11 @@ ADMIN_TOOLS = [
                     },
                     "submit": {
                         "type": "boolean",
-                        "description": "Web pages only: press Enter after typing to run the search/submit the form (default false)."
+                        "description": "Press Enter after typing (submits the form / runs the search).",
+                    },
+                    "confirm_send": {
+                        "type": "boolean",
+                        "description": "Set true ONLY after the owner confirms a form submit/send. Search boxes do not need it.",
                     }
                 },
                 "required": ["goal", "text"]
@@ -2062,7 +2066,18 @@ def _execute_tool_impl(tool_name, arguments):
                         f'Nothing was clicked. Confirm with the owner, then re-call '
                         f'smart_click with confirm_send=true.')
         except Exception as e:
-            print(f"[DOM] native send-gate skipped ({e})")
+            # QA round 4: FAIL CLOSED. The broad except used to print and fall through
+            # to the click, so an import failure clicked a send-like control.
+            print(f"[DOM] native send-gate error ({e}); failing closed")
+            try:
+                from tools.dom import _send_policy
+                if _send_policy() == "confirm" and not arguments.get("confirm_send"):
+                    return tool_fail(
+                        f'BLOCKED — could not verify that "{goal}" is safe to click '
+                        f'(the send/destructive check errored). Confirm with the owner, '
+                        f'then re-call with confirm_send=true.')
+            except Exception:
+                pass
         coords = (loc["x"], loc["y"])
         pre_frame = capture_screen_small_gray()
         pyautogui.click(coords[0], coords[1])
@@ -2088,6 +2103,24 @@ def _execute_tool_impl(tool_name, arguments):
         if not goal or not text:
             return "Error: goal and text parameters are required."
         submit = bool(arguments.get("submit", False))
+        # ID 17 (QA round 4): pressing Enter submits the focused form — the most common
+        # way to SEND. This path had no send/destructive check. Search-like targets are
+        # exempt (the human-search flow submits a site's search bar). Covers both the
+        # DOM fast path and the UIA path, since both are reached from here.
+        if submit:
+            try:
+                from tools.dom import submit_needs_confirm
+                if submit_needs_confirm(goal) and not arguments.get("confirm_send"):
+                    return tool_fail(
+                        f'BLOCKED — pressing Enter for "{goal}" would submit a form '
+                        f'(a send/destructive action). Nothing was typed or submitted. '
+                        f'Confirm with the owner, then re-call with confirm_send=true.')
+            except Exception as e:
+                print(f"[DOM] submit gate error ({e}); failing closed")
+                if not arguments.get("confirm_send"):
+                    return tool_fail(
+                        f'BLOCKED — could not verify that submitting "{goal}" is safe '
+                        f'(the check errored). Re-call with confirm_send=true.')
         if config.USE_DOM_MOTOR:
             try:
                 from tools.dom import web_type
@@ -2275,6 +2308,11 @@ def _extract_discord_message_intent(user_text: str) -> dict | None:
     # ── target + payload ─────────────────────────────────────────────────────
     if match:
         raw_name = match.group(2).strip().strip("\"'“”")   # NOT lowercased (Part A)
+        # QA round 4: "tell me a joke" / "ask me anything" / "tell us …" are ordinary
+        # chat, not relays. Without this they fell through to Part C and cost a Laya
+        # pass on every send-verb turn.
+        if raw_name.lower() in {"me", "us", "yourself", "myself", "me."}:
+            return None
         payload = match.group(3).strip()
         payload_lower = payload.lower()
         if payload_lower.startswith("on discord "):
@@ -3444,6 +3482,14 @@ def process_user_input(user_text, status_callback=None):
             discord_blocked_tools = {
                 "open_application",
                 "look_at_screen",
+                # QA round 4: the input tools were still callable on a relay turn, so a
+                # relay could be "sent" by driving the Discord desktop and pressing
+                # Enter — bypassing the confirm gate entirely.
+                "smart_click",
+                "smart_type",
+                "type_text",
+                "press_key",
+                "smart_scroll",
             }
             tools_executed = False
             hallucination_retried = False
@@ -3572,8 +3618,13 @@ def process_user_input(user_text, status_callback=None):
                             # tells the tool the target was inferred, so it refuses
                             # without an explicit confirm.
                             if not discord_intent.get("exact"):
-                                tool_arguments["confirm"] = False
+                                # QA round 4: don't reset an EXPLICIT confirm the model
+                                # passed — that arrives on the turn AFTER the owner said
+                                # yes, and resetting it made the confirmation loop
+                                # forever. Only the automatic relay turn is forced off.
                                 tool_arguments["assume_guess"] = True
+                                if "confirm" not in tool_arguments:
+                                    tool_arguments["confirm"] = False
                             # Do NOT fall back to the raw discord_intent payload for the message —
                             # the model must craft a butler-formatted message itself.
                             # If message is missing, execute_tool will return an error that

@@ -127,7 +127,7 @@ class TestSendConfirmGate:
         monkeypatch.setattr(discord_api.requests, "post",
                             MagicMock(side_effect=lambda *a, **k: posted.append(1)))
         out = discord_api.send_discord_message("my brother", "hello")
-        assert out.startswith("[CONFIRM REQUIRED")
+        assert "CONFIRM REQUIRED" in out and out.startswith("FAILED")
         assert "george" in out          # the guess is named
         assert "confirm=true" in out
         assert posted == []             # nothing was sent

@@ -348,7 +348,11 @@ def _good_moment_to_speak() -> bool:
 
     QA round 3: the verdict is MEMOIZED for a few seconds. Five triggers plus
     `_push_nudge` all ask within one poll, and each used to cost a full Laya pass.
+    QA round 4: the deterministic hard stop is NOT memoized — a brain turn starting
+    inside the window must still be respected.
     """
+    if _brain_busy.is_set():
+        return False
     now = time.time()
     if now - _MOMENT_CACHE["at"] < _MOMENT_CACHE_SECONDS:
         return _MOMENT_CACHE["ok"]

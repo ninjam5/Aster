@@ -189,3 +189,13 @@ class TestSentryOwnerVsKnown:
         sentry._classify_frame_from_faces = lambda b64: "UNKNOWN"
         sentry.execute_sentry_sweep()
         assert bot.send_message.called or sentry.WAITING_FOR_ID is True
+
+
+@pytest.fixture(autouse=True)
+def _reset_module_state(monkeypatch):
+    """QA round 4: these tests set module-level state that leaked into later tests
+    (sentry.WAITING_FOR_ID stayed True for the rest of the session)."""
+    import tools.sentry as _sentry
+    import tools.awareness as _awareness
+    monkeypatch.setattr(_sentry, "WAITING_FOR_ID", False, raising=False)
+    _awareness._MOMENT_CACHE.update(at=0.0, ok=True)

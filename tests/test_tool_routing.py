@@ -27,6 +27,8 @@ def _no_logging(monkeypatch):
 class TestTriggerPrefilter:
     def test_ordinary_chat_costs_no_model_call(self, monkeypatch):
         called = []
+        # QA round 4: enable the kernel so the prefilter itself is what prevents the call.
+        monkeypatch.setattr(system1, "kernel_enabled", lambda: True)
         monkeypatch.setattr(system1, "choose", lambda *a, **k: called.append(1) or {})
         out = tr.pick_tool_for_request("what time is it")
         assert out["cluster"] is None and out["tool"] is None

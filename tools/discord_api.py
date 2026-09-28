@@ -189,10 +189,10 @@ def send_discord_message(target_name, message, confirm=False, assume_guess=False
 
     if assume_guess and not confirm:
         return (
-            f"[CONFIRM REQUIRED: '{original_name}' was inferred from a nickname or fuzzy "
-            f"match, not stated exactly. Ask {config.OWNER_NAME} to confirm, then re-call "
-            f"send_discord_message with target_name='{original_name}' and confirm=true. "
-            f"Nothing was sent.]"
+            f"FAILED — [CONFIRM REQUIRED: '{original_name}' was inferred from a nickname "
+            f"or fuzzy match, not stated exactly. Ask {config.OWNER_NAME} to confirm, then "
+            f"re-call send_discord_message with target_name='{original_name}' and "
+            f"confirm=true. Nothing was sent.]"
         )
 
     resolved = resolve_contact(original_name)
@@ -205,10 +205,10 @@ def send_discord_message(target_name, message, confirm=False, assume_guess=False
             return f"Error: Unknown Discord contact '{original_name}'.{extra}"
         if not confirm:
             return (
-                f"[CONFIRM REQUIRED: '{original_name}' is not an exact contact name — it "
-                f"resolves to '{pick['name']}'. Ask {config.OWNER_NAME} to confirm, then "
-                f"re-call send_discord_message with target_name='{pick['name']}' and "
-                f"confirm=true. Nothing was sent.]"
+                f"FAILED — [CONFIRM REQUIRED: '{original_name}' is not an exact contact "
+                f"name — it resolves to '{pick['name']}'. Ask {config.OWNER_NAME} to "
+                f"confirm, then re-call send_discord_message with "
+                f"target_name='{pick['name']}' and confirm=true. Nothing was sent.]"
             )
         canonical_name, recipient_id = pick["name"], CONTACTS.get(pick["name"])
 

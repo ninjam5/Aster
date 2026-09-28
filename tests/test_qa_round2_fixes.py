@@ -74,7 +74,7 @@ class TestRelayGuessEnforcedByTool:
         monkeypatch.setattr(discord_api.requests, "post",
                             MagicMock(side_effect=lambda *a, **k: posted.append(1)))
         out = discord_api.send_discord_message("george", "hello", confirm=False, assume_guess=True)
-        assert out.startswith("[CONFIRM REQUIRED")
+        assert "CONFIRM REQUIRED" in out and out.startswith("FAILED")
         assert posted == []          # nothing was sent
 
     def test_assume_guess_with_confirm_sends(self, monkeypatch):
@@ -198,3 +198,13 @@ class TestNoReGuess:
         people.resolve_relationship("masky")
         assert len(calls) == 1
         assert people.resolve_relationship("masky") == "friend"
+
+
+@pytest.fixture(autouse=True)
+def _reset_module_state(monkeypatch):
+    """QA round 4: these tests set module-level state that leaked into later tests
+    (sentry.WAITING_FOR_ID stayed True for the rest of the session)."""
+    import tools.sentry as _sentry
+    import tools.awareness as _awareness
+    monkeypatch.setattr(_sentry, "WAITING_FOR_ID", False, raising=False)
+    _awareness._MOMENT_CACHE.update(at=0.0, ok=True)

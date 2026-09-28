@@ -326,6 +326,24 @@ def _laya_send_like(node: dict) -> bool:
     return bool(verdict.get("answer"))
 
 
+_SEARCH_LIKE_RE = re.compile(r"\b(?:search|find|query|look ?up|filter)\b", re.IGNORECASE)
+
+
+def submit_needs_confirm(goal: str, label: str = "") -> bool:
+    """True when a submit/Enter action must be confirmed (ID 17, QA round 4).
+
+    Pressing Enter submits whatever form has focus — the most common way to SEND
+    something — and the submit paths had no send/destructive check at all, so a
+    compose or checkout form could be submitted silently.
+
+    Search-like targets are exempt on purpose: the human-search flow deliberately uses
+    `submit=true` for a site's own search bar.
+    """
+    if _SEARCH_LIKE_RE.search(f"{goal or ''} {label or ''}"):
+        return False
+    return _send_policy() == "confirm"
+
+
 def _send_policy() -> str:
     """Validated policy; anything unexpected fails closed to 'confirm'."""
     try:
