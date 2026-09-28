@@ -18,7 +18,10 @@ import os
 import threading
 from datetime import datetime
 
-_PATH = os.path.join("Aster_Vault", "people.json")
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Absolute, so launching from another directory cannot silently use a different store
+# (QA 2026-09-28 — the memory vault file is absolute for the same reason).
+_PATH = os.path.join(_REPO_ROOT, "Aster_Vault", "people.json")
 _LOCK = threading.RLock()
 
 # Pronoun -> honorific. "they" has no honorific in this register, so it falls through
@@ -42,6 +45,14 @@ def _load() -> dict:
                 return {str(k): v for k, v in data.items() if isinstance(v, dict)}
     except Exception as e:
         print(f"[People] WARNING: could not read {_PATH} ({e}). Treating as empty.")
+        # QA 2026-09-28: a corrupt file used to be silently treated as empty, and the
+        # next write would then rewrite the file and wipe every record. Keep a copy.
+        try:
+            if os.path.exists(_PATH):
+                os.replace(_PATH, _PATH + ".corrupt")
+                print(f"[People] kept a copy at {_PATH}.corrupt")
+        except Exception:
+            pass
     return {}
 
 

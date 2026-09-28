@@ -50,12 +50,28 @@ class TestResolveContact:
 # ── Part B: the Laya pick ─────────────────────────────────────────────────────
 
 class TestLayaPickContact:
-    def test_verbatim_name_is_exact_and_needs_no_model(self, monkeypatch):
+    def test_a_bare_name_is_exact_and_needs_no_model(self, monkeypatch):
         called = []
         monkeypatch.setattr(system1, "choose", lambda *a, **k: called.append(1) or {})
-        pick = discord_api.laya_pick_contact("text Adham saying hello")
+        pick = discord_api.laya_pick_contact("Adham")
         assert pick["name"] == "Adham" and pick["exact"] is True
         assert called == []
+
+    def test_a_name_inside_a_sentence_is_NOT_exact(self, monkeypatch):
+        """QA 2026-09-28: a whole-text substring check made any name anywhere in the
+        request 'exact' — so 'tell my brother to say hi to Farah' skipped the confirm
+        gate and DMed farah. A name inside a sentence is now a guess."""
+        called = []
+        monkeypatch.setattr(system1, "choose", lambda *a, **k: called.append(1) or {})
+        pick = discord_api.laya_pick_contact("tell my brother to say hi to farah")
+        assert pick["name"] == "farah" and pick["exact"] is False
+        assert called == []   # no model call either way
+
+    def test_a_name_that_is_a_substring_of_another_does_not_match(self, monkeypatch):
+        monkeypatch.setattr(discord_api, "CONTACTS",
+                            {"ann": "1", "anna": "2"}, raising=False)
+        pick = discord_api.laya_pick_contact("text anna saying hi")
+        assert pick["name"] == "anna"
 
     def test_nickname_is_a_laya_pick_and_not_exact(self, monkeypatch):
         monkeypatch.setattr(system1, "kernel_enabled", lambda: True)

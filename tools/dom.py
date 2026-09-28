@@ -316,6 +316,8 @@ def _laya_send_like(node: dict) -> bool:
             no_description=("benign — navigation, opening, viewing, toggling, filtering, "
                             "or a harmless control"),
             state_text=f"element role={node.get('role')!r} label={label!r}",
+            min_margin=0.5,   # QA 2026-09-28: this is the safety gate — it was inheriting
+                              # the loosest global threshold (0.25) in the codebase
         )
     except Exception:
         return True  # kernel failure -> fail closed

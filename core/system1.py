@@ -205,9 +205,18 @@ def _extract_choice(answer: dict, valid_keys: set):
     margin = None
     if distribution and len(distribution) >= 2:
         try:
-            vals = sorted((float(v) for v in distribution.values()), reverse=True)
-            candidate = vals[0] - vals[1]
-            if math.isfinite(candidate):
+            # QA 2026-09-28: the margin must be measured against the CHOSEN key, not the
+            # distribution's top two. A response whose `choice` disagreed with its own
+            # probabilities could otherwise pass the gate with a large "margin" on a key
+            # that was not actually the argmax.
+            if choice is not None and choice in distribution:
+                chosen = float(distribution[choice])
+                others = [float(v) for k, v in distribution.items() if k != choice]
+                candidate = (chosen - max(others)) if others else None
+            else:
+                vals = sorted((float(v) for v in distribution.values()), reverse=True)
+                candidate = vals[0] - vals[1]
+            if candidate is not None and math.isfinite(candidate):
                 margin = candidate
         except Exception:
             margin = None

@@ -2604,6 +2604,7 @@ def _needs_action_screenshot(result_text: str, action: str) -> bool:
             },
             key="need_screenshot",
             state={"action": action, "result": (result_text or "")[:600]},
+            min_margin=0.5,   # QA: a wrong skip loses verification, so be stricter
         )
     except Exception:
         return True
@@ -2635,11 +2636,11 @@ def evaluate_and_memorize(reason, force: bool = False):
         #    window is confidently free of new durable facts. Any doubt -> run it.
         if not force:
             recent_turns = [
-                str(m.get("content") or "")[:300]
+                str(m.get("content") or "")[:1200]   # QA: 300 chars could hide a fact
                 for m in messages
                 if isinstance(m, dict) and m.get("role") == "user"
                 and not str(m.get("content") or "").lstrip().startswith("[System")
-            ][-6:]
+            ][-8:]
             run, why = _session_may_hold_new_facts(recent_turns)
             if not run:
                 print(f"[Aster Internal: Memory consolidation SKIPPED by Laya pre-filter ({why}).]")
@@ -2695,15 +2696,23 @@ def evaluate_and_memorize(reason, force: bool = False):
             tools=_MEMORIZE_ONLY_TOOLS or ADMIN_TOOLS,
         )
         all_tool_calls = _extract_all_native_tool_calls(response_msg)
+        _saved = 0
         for tool_payload in all_tool_calls:
             if tool_payload.get("name") != "memorize_fact":
                 continue
+            # QA 2026-09-28: the gate costs 1-2 serialized Laya passes per fact, so an
+            # unbounded list could stall every other kernel caller. Cap per pass.
+            if _saved >= 8:
+                print("[Aster Internal: consolidation fact cap reached (8); "
+                      "remaining facts will be picked up next pass.]")
+                break
             tool_args = tool_payload.get("arguments") or {}
             if not isinstance(tool_args, dict):
                 continue
             fact = tool_args.get("fact", "").strip()
             if fact:
                 execute_tool("memorize_fact", {"fact": fact})
+                _saved += 1
     except Exception as e:
         print(f"[Aster Internal: Memory consolidation failed: {e}]")
 
@@ -3046,7 +3055,8 @@ def process_discord_chat(sender_name: str, user_message: str) -> str:
                             history[:] = trim_memory(history)
                             continue
                         tool_result = f"Error: {tool_payload['error']}"
-                    elif tool_name not in {"forward_to_owner", "save_personal_fact", "get_current_track"}:
+                    elif tool_name not in {"forward_to_owner", "save_personal_fact",
+                                           "remember_pronoun", "get_current_track"}:
                         tool_result = f"Error: Unknown tool '{tool_name}'."
                     else:
                         if tool_name == "forward_to_owner":
@@ -3054,6 +3064,12 @@ def process_discord_chat(sender_name: str, user_message: str) -> str:
                             tool_args.setdefault("message", incoming)
                         if tool_name == "save_personal_fact":
                             tool_args.setdefault("sender_name", sender)
+                        if tool_name == "remember_pronoun":
+                            # QA 2026-09-28: remember_pronoun was registered in
+                            # DISCORD_TOOLS and the prompt told the model to call it when
+                            # a friend answered — but this whitelist rejected it, so the
+                            # answer was never stored. Default the name to the sender.
+                            tool_args.setdefault("name", sender)
 
                         _lg_verdict = loop_guard.check(tool_name, tool_args)
                         if _lg_verdict.action == "block":
@@ -3289,17 +3305,22 @@ def process_user_input(user_text, status_callback=None):
     # ID 8: resolve an overlapping-tool tie-break up front (one Laya call, and only when
     # a cheap cluster trigger matches). Injected as a round-0 hint — the model still
     # chooses; this just stops it dithering between near-duplicate schemas.
+    # QA 2026-09-28: never compute it for a Discord relay turn (the relay directive
+    # forces send_discord_message, and a "prefer research/browse_web" hint could send
+    # the model to a real browser instead) or for a system nudge (not a user request).
     _tool_hint = ""
-    try:
-        from core.tool_routing import hint_for_tool, pick_tool_for_request
-        _pick = pick_tool_for_request(user_text)
-        if _pick.get("tool") and not _pick.get("escalate"):
-            _tool_hint = hint_for_tool(_pick["tool"])
-            if _tool_hint:
-                print(f"[Aster Internal: tool tie-break -> {_pick['tool']} "
-                      f"({_pick['cluster']}, margin {_pick.get('margin')})]")
-    except Exception as e:
-        print(f"[Aster Internal: tool tie-break skipped ({e})]")
+    _is_system_nudge = str(user_text).startswith(("[System Internal", "[NATIVE_"))
+    if not discord_message_request and not _is_system_nudge:
+        try:
+            from core.tool_routing import hint_for_tool, pick_tool_for_request
+            _pick = pick_tool_for_request(user_text)
+            if _pick.get("tool") and not _pick.get("escalate"):
+                _tool_hint = hint_for_tool(_pick["tool"])
+                if _tool_hint:
+                    print(f"[Aster Internal: tool tie-break -> {_pick['tool']} "
+                          f"({_pick['cluster']}, margin {_pick.get('margin')})]")
+        except Exception as e:
+            print(f"[Aster Internal: tool tie-break skipped ({e})]")
 
     # Idea 2 — inline ambient-action offer. For plain-text real turns only (skip
     # system nudges, media payloads, and Discord-routing requests): when a mood is
@@ -3497,6 +3518,13 @@ def process_user_input(user_text, status_callback=None):
                                 # forced the lowercased token, which is what made a
                                 # capitalised contact ('Adham') unreachable.
                                 tool_arguments["target_name"] = discord_intent["target"]
+                            # QA 2026-09-28: a GUESSED target must not be sendable on the
+                            # turn it was guessed. The directive was only advisory and
+                            # `confirm` is model-produced, so force it off here — a send
+                            # can then only happen on a later turn after the owner
+                            # actually confirms.
+                            if not discord_intent.get("exact"):
+                                tool_arguments["confirm"] = False
                             # Do NOT fall back to the raw discord_intent payload for the message —
                             # the model must craft a butler-formatted message itself.
                             # If message is missing, execute_tool will return an error that
@@ -3612,6 +3640,16 @@ def process_user_input(user_text, status_callback=None):
                         f"Examine the screenshot: if ALL steps are complete, confirm to the user in one sentence and STOP. "
                         f"If steps remain, call the next required tool — do not speak to the user yet.]"
                     ) if tool_name in _UI_TOOL_NAMES else ""
+                    # QA 2026-09-28: three paths return UI-tool text WITHOUT an image (the
+                    # screenshot skip, the look_at_screen text path, the DOM fast path), so
+                    # the reminder must not tell the model to examine a screenshot that was
+                    # never attached.
+                    _ui_task_reminder_text = (
+                        f'\n[TASK REMINDER: Your original goal is "{user_text}". '
+                        f"No screenshot is attached this round — judge from the report above. "
+                        f"If ALL steps are complete, confirm to the user in one sentence and STOP; "
+                        f"otherwise call the next required tool.]"
+                    ) if tool_name in _UI_TOOL_NAMES else ""
 
                     # UI tools return {"text": ..., "ui_screenshot_b64": ...} for visual feedback.
                     # Inject as a multimodal message so the outer LLM sees the actual screen.
@@ -3637,7 +3675,7 @@ def process_user_input(user_text, status_callback=None):
                         messages.append({
                             "role": "tool",
                             "tool_call_id": tool_payload.get("tool_call_id", ""),
-                            "content": f"{clean_memory_string}{_ui_task_reminder}",
+                            "content": f"{clean_memory_string}{_ui_task_reminder_text}",
                         })
                     messages = trim_memory(messages)
 

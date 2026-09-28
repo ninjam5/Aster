@@ -1,6 +1,7 @@
 import base64
 import cv2
 import face_recognition
+import re
 import time
 import threading
 import os
@@ -153,16 +154,19 @@ def execute_sentry_sweep():
             analysis_upper = analysis.upper()
             current_time = time.time()
 
-            if config.OWNER_NAME.upper() in analysis_upper:
-                # Owner is home. No alert.
-                return
-
+            # QA 2026-09-28: check KNOWN: FIRST. The owner test used to run first as a
+            # bare substring, so a known person whose name embeds the owner's ("Dana"
+            # when the owner is "Dan") was swallowed as "owner home" and never alerted.
             if analysis_upper.startswith("KNOWN:"):
                 name = analysis.split(":", 1)[1].strip().title()
                 last_seen = notification_cooldowns.get(name, 0)
                 if current_time - last_seen > COOLDOWN_SECONDS:
                     telegram_bot.send_message(chat_id, f"[Sentry Alert] {name} is currently in the room.")
                     notification_cooldowns[name] = current_time
+                return
+
+            if re.search(rf"\b{re.escape(config.OWNER_NAME.upper())}\b", analysis_upper):
+                # Owner is home. No alert.
                 return
 
             if "UNKNOWN" in analysis_upper:

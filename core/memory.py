@@ -62,7 +62,7 @@ def _pick_saved_fact(system1, question: str, fact: str, candidates: list, key: s
     return criteria.get(choice), verdict
 
 
-def _gate_fact(fact: str) -> dict:
+def _gate_fact(fact: str, source: str = "agent") -> dict:
     """Laya write gate: is this junk, a duplicate, or in conflict with a saved fact?
 
     CONSERVATIVE — any escalation, missing answer, or kernel failure means WRITE: a
@@ -78,11 +78,17 @@ def _gate_fact(fact: str) -> dict:
 
         # ID 10 — junk filter (neutral-key binary). Verified live: the email action log
         # answers False with margin 0.55; real facts escalate, so they are written.
+        # QA 2026-09-28: the question was owner-scoped, but the Discord sync routes
+        # FRIEND facts ("User farah stated: …") through here too — a friend's fact could
+        # be confidently dropped as "not about the owner". Scope it by source.
+        if str(source) == "discord_sync":
+            subject = "a durable fact worth remembering about a person (or the owner)"
+        else:
+            subject = "a durable personal fact about the owner"
         junk = system1.check_state(
-            "Is this a durable personal fact about the owner, or an action log / system "
-            "event / status report?",
-            yes_description="a durable personal fact about the owner",
-            no_description="an action log, system event, or status report — not a personal fact",
+            f"Is this {subject}, or an action log / system event / status report?",
+            yes_description=subject,
+            no_description="an action log, system event, or status report — not a durable fact",
             state_text=f"item: {fact[:400]}",
             min_margin=_GATE_MARGIN,
         )
@@ -138,7 +144,7 @@ def memorize_fact(fact, source: str = "agent", skip_gate: bool = False):
 
     decision = {"skip": False, "reason": "", "category": "", "conflict": "", "supersedes": None}
     if not skip_gate:
-        decision = _gate_fact(fact)
+        decision = _gate_fact(fact, source=source)
         if decision.get("skip"):
             print(f"[Aster Internal: Memory write skipped by Laya gate "
                   f"({decision['reason']}): '{fact[:80]}']")
@@ -351,6 +357,10 @@ def _laya_rerank(query: str, candidates: list, top_n: int = 3) -> list:
             state={"query": str(query or "")[:400]},
         )
     except Exception:
+        return candidates[:top_n]
+    if verdict.get("escalate"):
+        # QA 2026-09-28: escalate means "doubt" — the docstring promises the original
+        # order, but this used to reorder and could push an old top-3 result out.
         return candidates[:top_n]
     normalized = verdict.get("normalized") or {}
     if not normalized:

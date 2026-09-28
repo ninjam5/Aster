@@ -519,9 +519,8 @@ class ManualWebRTCBridge:
     async def _flush_pending_transcript(self) -> None:
         await asyncio.sleep(_config.UTTERANCE_DEBOUNCE)
         transcript = self._pending_transcript.strip()
-        self._pending_transcript = ""
-        self._debounce_task = None
         if not transcript:
+            self._debounce_task = None
             return
         print(f"[Aster LiveKit] Coalesced turn: '{transcript}'")
         # ID 19: once awake, EVERY final transcript used to become a full 15-round admin
@@ -530,7 +529,17 @@ class ManualWebRTCBridge:
         # Run the gate OFF the event loop: Laya is a synchronous CPU pass (~0.31 s
         # resident, up to ~35 s on a cold load) and this is the interactive RTC loop —
         # blocking it stalls audio, STT, wake detection and barge-in.
-        if not await asyncio.to_thread(_addressed_to_aster, transcript):
+        # QA 2026-09-28: clear the pending transcript only AFTER the gate. A barge-in
+        # cancels this coroutine (START_OF_SPEECH cancels the debounce task), and the
+        # old order cleared it first, so a cancelled gate silently dropped the turn.
+        try:
+            addressed = await asyncio.to_thread(_addressed_to_aster, transcript)
+        except asyncio.CancelledError:
+            self._pending_transcript = transcript   # barge-in: keep it for the retry
+            raise
+        self._pending_transcript = ""
+        self._debounce_task = None
+        if not addressed:
             print(f"[Aster LiveKit] Ignored — not addressed to Aster: '{transcript[:60]}'")
             return
         await self._start_response_pipeline(transcript)

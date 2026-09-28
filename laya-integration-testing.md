@@ -202,7 +202,52 @@ if more than 20 people are enrolled, the extras have no candidate and may be for
 
 ---
 
-## 8. How to run the whole thing later
+## 8. Cross-phase QA review (5 agents, 2026-09-28)
+
+Five independent review agents audited one phase each (0, 1, 2, 3, and 4+ID 8) for
+correctness, fail-direction, efficiency and test coverage. Everything below was found by
+them, not by the phase authors. **Suite before: 692 · after the fixes: 706.**
+
+### Fixed (pinned by `tests/test_qa_fixes.py` + the phase test files)
+
+| Phase | Severity | Finding | Fix |
+|---|---|---|---|
+| 3 | **HIGH** | **Confirm-gate bypass.** `laya_pick_contact` treated any whole-text substring as an *exact* name, so "tell my brother to say hi to Farah" resolved to `farah` with `exact=True` and **DMed the wrong person without confirmation** ('ann' also matched 'anna'). | Whole-token matching, longest-first, and a name inside a sentence is now a **guess** (`exact=False`) → confirm required. |
+| 3 | **HIGH** | **The friend half of the pronoun flow was dead.** `remember_pronoun` was in `DISCORD_TOOLS` and the prompt told the model to call it, but `process_discord_chat`'s whitelist rejected it → "Unknown tool", pronoun never stored, Aster re-asked forever. | Added to the whitelist and defaults `name` to the sender. |
+| 2 | **HIGH** | **Permanent silent fact loss.** `sync_unsynced_facts` treated the gate's `"[System Note: NOT saved …]"` as success, marked the staged fact `synced`, and it was never retried. | A skip now stays unsynced with a `sync_error`. |
+| 2 | **HIGH** | **Junk filter was owner-scoped**, but Discord routes *friend* facts ("User farah stated: …") through it — a friend's fact could be confidently dropped as "not about the owner". | The junk question is now scoped by `source`. |
+| 1 | **HIGH** | **The Laya Wikipedia pick bypassed the lexical relevance gate** (length-only), re-opening the Matteo-Renzi class; `_answerability` returns `""` on doubt, so the wrong article was then served. | The pick must also pass `_wiki_title_relevant`. |
+| 4 | **HIGH** | **Sentry checked the owner by bare substring before `KNOWN:`** — with owner "Dan" an enrolled "Dana" (`KNOWN:DANA`) was swallowed as "owner home" and never alerted. | `KNOWN:` is checked first; the owner match is word-bounded. |
+| 4 | **HIGH** | **The ID 8 tool hint could contradict a forced Discord relay** ("send George this link…" → a `research`/`browse_web` hint while the relay directive forces `send_discord_message`; both tools are executable on that turn). | The hint is not computed for a relay turn (or a system nudge). |
+| 0 | **HIGH** | **The safety-critical send gate used the loosest threshold in the codebase** — no `min_margin`, so it inherited 0.25 while every other write/safety gate uses 0.5–0.6. | `min_margin=0.5`. |
+| 0/2 | **HIGH** | **Two score consumers ignored `escalate`** (`_laya_rerank`, `_laya_select_facts`) and could reorder/drop on a near-tie, contradicting their own docstrings. | Both return the original on escalate. |
+| 3 | MEDIUM | The relay's "don't send a guessed target" directive was **advisory** — `confirm` is model-produced. | A non-exact relay turn forces `confirm=False` on the tool call. |
+| 4 | MEDIUM | `asyncio.to_thread` cancellation (barge-in) **dropped the coalesced turn** because `_pending_transcript` was cleared before the gate. | Cleared after the gate; restored on `CancelledError`. |
+| 1 | MEDIUM | The UI-task reminder said *"Examine the screenshot"* on three paths that attach **no image**, and failures return before the screenshot gate. | A separate no-image reminder is used on the text path. |
+| 1 | LOW | ID 1's skip gate used the 0.25 default. | `min_margin=0.5`. |
+| 1 | MEDIUM | The ID 3 pre-filter digest truncated each turn to 300 chars × 6, so a fact stated later could be invisible → consolidation skipped. | 1200 chars × 8. |
+| 2 | MEDIUM | Unbounded facts per consolidation (1–2 serialized Laya passes each). | Capped at 8 per pass. |
+| 0 | MEDIUM | `_extract_choice` measured the margin from the distribution's top two, **not the chosen key** — a `choice` disagreeing with its own probabilities could pass. | Margin is measured against the chosen key (negative ⇒ escalate). |
+| 4 | MEDIUM | ID 8 passed tool **names** as Laya choice keys (label bias). | Neutral single-letter keys, mapped back. |
+| 3 | MEDIUM | `people.json` path was CWD-relative, and a corrupt file + one write wiped the store. | Absolute path; a corrupt file is copied to `.corrupt` first. |
+| 0 | MEDIUM | `people.py` — no, `tools/people.py` re-guessed gender/relationship every turn when unknown. | (Partial: `asked`/stored short-circuits already existed; the relationship fallback is still re-guessed — see below.) |
+
+### Found but NOT fixed (deliberate — recorded so they are not re-discovered)
+
+| Phase | Finding | Why not now |
+|---|---|---|
+| 1 | **ID 17 is enforced only on the web DOM path.** The UIA/OCR `smart_click` path has **no** send/destructive check, so native-app "Delete/Send" clicks are ungated. | Enforcing it there is a **behaviour change** on the desktop path (the broad word set would block many benign clicks) — needs the owner's sign-off. |
+| 1 | `SEND_LIKE_WORDS` is broad (`post, share, accept, archive, remove, block`) and short-circuits **before** Laya, so "Accept cookies"/"Share" always need confirmation. | Tuning the word set is a product decision. |
+| 2 | `tools/vision.py` appends `SYSTEM EVENT` lines **directly** to `memory.md`, bypassing the gate entirely (and BM25 sees them while dense/ChromaDB does not). | The "single choke point" claim in the code comment is wrong; changing where screen-watcher events go is a product decision. |
+| 0 | Sentry can pass **up to 26 options** to Laya (22 person keys + A/U/E/Z), beyond the ~20 ceiling and the 11+ uncalibrated bucket; >22 enrolled names silently truncate. | Bounded in practice by the enrolled set; cap documented. |
+| 0 | `ask_batch` (the batching seam) has **no production callers** — same-turn gates still run as separate serialized passes (a DOM click can be 3–8). | Batching is an efficiency refactor, not a correctness bug. |
+| 3 | A Discord message can still trigger up to ~4 Laya passes (identity + relationship + fact selection + relay intent), two of them redundant per turn. | Efficiency; also `get_user_facts` is computed twice. |
+| 1 | `_foreground_text_state` reports **desktop-wide** UIA nodes, not foreground-window scoped. | Accuracy nit; the model still gets useful text. |
+| 3 | A `they`/unknown pronoun is addressed as the male-coded "Sir". | Needs a product call on the neutral term. |
+
+---
+
+## 9. How to run the whole thing later
 
 1. **Restart** llama-server + `main.py` (current code) — the gates only exist in a
    fresh process.

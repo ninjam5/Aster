@@ -100,11 +100,24 @@ def laya_pick_contact(request_text: str) -> dict:
     if not names:
         return {"name": None, "exact": False, "escalate": True, "reason": "no contacts configured"}
     text = str(request_text or "")
-    lowered = text.lower()
-    for canonical in names:
-        if canonical.strip().lower() in lowered:
-            return {"name": canonical, "exact": True, "escalate": False,
-                    "reason": "name appears verbatim in the request"}
+    tokens = re.findall(r"[a-z0-9_.@-]+", text.lower())
+    # Longest first, so "georgette" can never match "george".
+    by_length = sorted(names, key=lambda n: len(str(n)), reverse=True)
+    if len(tokens) <= 2:
+        # A bare name (or name + punctuation) — an exact match.
+        for canonical in by_length:
+            if str(canonical).strip().lower() in tokens:
+                return {"name": canonical, "exact": True, "escalate": False,
+                        "reason": "name appears verbatim in the request"}
+    else:
+        # A full REQUEST: a name in it may belong to the payload rather than the
+        # addressee ("tell my brother to say hi to Farah"), so it is only a guess and
+        # must be confirmed. QA 2026-09-28: this used to be a whole-text substring
+        # check that returned exact=True and skipped the confirm gate entirely.
+        for canonical in by_length:
+            if str(canonical).strip().lower() in tokens:
+                return {"name": canonical, "exact": False, "escalate": False,
+                        "reason": "name appears in the request — confirm before sending"}
 
     # Typo/misspelling -> deterministic fuzzy match (still a guess: confirm first).
     typo = _fuzzy_token_match(text)

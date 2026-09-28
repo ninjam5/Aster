@@ -124,6 +124,10 @@ def _laya_select_facts(facts: list, query: str) -> list:
         )
     except Exception:
         return facts
+    if verdict.get("escalate"):
+        # QA 2026-09-28: escalate means "doubt" — return everything (the docstring
+        # promised this, but it used to filter anyway and could drop a needed fact).
+        return facts
     normalized = verdict.get("normalized") or {}
     confidence = verdict.get("answer_confidence") or {}
     kept = []
@@ -201,6 +205,16 @@ def sync_unsynced_facts(vector_save_func: Callable[[str], str]) -> str:
                 if result.lower().startswith("error") or result.lower().startswith("failed"):
                     failed += 1
                     entry["sync_error"] = result
+                    continue
+
+                # QA 2026-09-28: a Laya write-gate SKIP returns "[System Note: NOT
+                # saved — …]". That is not an error, but it is also not a write — the
+                # old code marked it synced, so a skipped fact was dropped FOREVER
+                # (this staging record is the only unsynced trigger) behind a reassuring
+                # "sync complete". Leave it unsynced so it can be reconsidered.
+                if "NOT saved" in result:
+                    failed += 1
+                    entry["sync_error"] = "skipped by the memory write gate (not saved)"
                     continue
 
                 entry["synced"] = True

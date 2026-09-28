@@ -267,9 +267,15 @@ def _wikipedia_lookup(topic: str) -> dict | None:
         if picked:
             try:
                 page = wikipedia.page(picked, auto_suggest=False)
-                if len(page.content) >= _MIN_WIKI_CHARS:
+                # QA 2026-09-28: the Laya pick must ALSO pass the lexical relevance gate.
+                # Accepting it on length alone re-opened the Matteo-Renzi class of bug
+                # (the only other net, _answerability, returns "" on doubt and the
+                # article is then served unchanged).
+                if len(page.content) >= _MIN_WIKI_CHARS and _wiki_title_relevant(page.title, topic):
                     print(f"[Aster Internal: Wikipedia Laya pick -> '{page.title}']")
                     return {"title": page.title, "content": page.content}
+                print(f"[Aster Internal: Wikipedia rejected Laya pick '{page.title}' "
+                      f"(fails the relevance gate) — using the lexical path]")
             except Exception:
                 pass
 

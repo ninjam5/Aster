@@ -78,7 +78,12 @@ def pick_tool_for_request(user_text: str) -> dict:
         import core.system1 as system1
         if not system1.kernel_enabled():
             return {**none, "cluster": cluster_name, "reason": "kernel disabled"}
-        criteria = dict(cluster["criteria"])
+        # Neutral single-letter keys: Laya shows label/token bias for multi-token keys
+        # (QA 2026-09-28), and every other pick in the codebase uses neutral keys.
+        # Map back to the tool name after the verdict.
+        tools = list(cluster["criteria"])[:18]
+        key_of = {chr(ord("A") + i): t for i, t in enumerate(tools)}
+        criteria = {k: cluster["criteria"][t] for k, t in key_of.items()}
         criteria["Z"] = "none of these — the request does not need one of them"
         verdict = system1.choose(
             "Which tool should handle this request?",
@@ -89,10 +94,10 @@ def pick_tool_for_request(user_text: str) -> dict:
     if verdict.get("escalate"):
         return {**none, "cluster": cluster_name,
                 "reason": verdict.get("reason") or "low or unavailable margin"}
-    choice = verdict.get("choice")
-    if not choice or choice == "Z":
+    tool = key_of.get(verdict.get("choice"))
+    if not tool:
         return {**none, "cluster": cluster_name, "reason": "no tool picked"}
-    return {"cluster": cluster_name, "tool": choice, "escalate": False,
+    return {"cluster": cluster_name, "tool": tool, "escalate": False,
             "margin": verdict.get("margin"), "reason": "Laya pick"}
 
 

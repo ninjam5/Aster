@@ -58,13 +58,13 @@ class TestPick:
                                              "margin": 0.8})
 
     def test_picks_a_tool(self, monkeypatch):
-        self._kernel(monkeypatch, "research")
+        self._kernel(monkeypatch, "A")   # A = research in the read_web cluster
         out = tr.pick_tool_for_request("read this link https://example.com")
         assert out["cluster"] == "read_web" and out["tool"] == "research"
         assert out["escalate"] is False
 
     def test_picks_the_other_tool(self, monkeypatch):
-        self._kernel(monkeypatch, "browse_web")
+        self._kernel(monkeypatch, "B")   # B = browse_web
         out = tr.pick_tool_for_request("read this link https://example.com")
         assert out["tool"] == "browse_web"
 
@@ -73,7 +73,7 @@ class TestPick:
         assert tr.pick_tool_for_request("read this link")["tool"] is None
 
     def test_escalation_means_no_hint(self, monkeypatch):
-        self._kernel(monkeypatch, "research", escalate=True)
+        self._kernel(monkeypatch, "A", escalate=True)
         out = tr.pick_tool_for_request("read this link")
         assert out["tool"] is None and out["cluster"] == "read_web"
 

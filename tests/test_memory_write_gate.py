@@ -149,7 +149,7 @@ class TestSimilarExistingFacts:
 class TestMemorizeFactGate:
     def test_skip_does_not_write(self, monkeypatch):
         monkeypatch.setattr(memory, "_gate_fact",
-                            lambda fact: {"skip": True, "reason": "exact duplicate — already saved",
+                            lambda fact, **k: {"skip": True, "reason": "exact duplicate — already saved",
                                           "category": "", "conflict": "", "supersedes": None})
         out = memory.memorize_fact("Mohamed has two cats")
         assert "NOT saved" in out
@@ -158,7 +158,7 @@ class TestMemorizeFactGate:
 
     def test_write_appends_and_indexes(self, monkeypatch):
         monkeypatch.setattr(memory, "_gate_fact",
-                            lambda fact: {"skip": False, "reason": "", "category": "fact",
+                            lambda fact, **k: {"skip": False, "reason": "", "category": "fact",
                                           "conflict": "", "supersedes": None})
         out = memory.memorize_fact("Mohamed has two cats")
         assert "Successfully committed" in out
@@ -167,7 +167,7 @@ class TestMemorizeFactGate:
 
     def test_doc_ids_are_unique_within_the_same_second(self, monkeypatch):
         monkeypatch.setattr(memory, "_gate_fact",
-                            lambda fact: {"skip": False, "reason": "", "category": "fact",
+                            lambda fact, **k: {"skip": False, "reason": "", "category": "fact",
                                           "conflict": "", "supersedes": None})
         ids = []
         memory.memory_collection.add.side_effect = lambda documents, ids_=None, **k: ids.extend(
@@ -178,7 +178,7 @@ class TestMemorizeFactGate:
 
     def test_supersede_note_is_returned(self, monkeypatch):
         monkeypatch.setattr(memory, "_gate_fact",
-                            lambda fact: {"skip": False, "reason": "", "category": "fact",
+                            lambda fact, **k: {"skip": False, "reason": "", "category": "fact",
                                           "conflict": "supersedes",
                                           "supersedes": "Mohamed lives in Alexandria"})
         out = memory.memorize_fact("Mohamed moved to Cairo")
@@ -186,7 +186,7 @@ class TestMemorizeFactGate:
 
     def test_contradiction_note_is_returned(self, monkeypatch):
         monkeypatch.setattr(memory, "_gate_fact",
-                            lambda fact: {"skip": False, "reason": "", "category": "fact",
+                            lambda fact, **k: {"skip": False, "reason": "", "category": "fact",
                                           "conflict": "contradicts",
                                           "supersedes": "Mohamed does not have any pets"})
         out = memory.memorize_fact("Mohamed's favorite pet is a parrot")
