@@ -283,9 +283,45 @@ def best_match(nodes, goal: str, op: str = None, min_score: float = None,
 
 
 def is_send_like(node: dict) -> bool:
+    """True when acting on this element transmits, destroys, or forwards something.
+
+    Two independent nets (Phase 1 / ID 17 of laya-integration.md):
+      1. the word set — fast, and catches anything explicitly named
+      2. a Laya yes/no gate over role + accessible name, which catches the
+         paraphrases the word set misses ("Place order", "Complete purchase",
+         "Confirm booking") and does not false-fire on "share location"
+
+    FAILS CLOSED on kernel doubt: a low-margin verdict or a kernel failure gates the
+    element behind `confirm_send` rather than clicking it. With the kernel OFF this
+    returns the word-set answer only (exactly today's behavior).
+    """
     label = (node.get("name") or node.get("text") or "").lower()
     words = set(re.findall(r"[a-z]+", label))
-    return bool(words & SEND_LIKE_WORDS)
+    if words & SEND_LIKE_WORDS:
+        return True
+    return _laya_send_like(node)
+
+
+def _laya_send_like(node: dict) -> bool:
+    """Laya paraphrase check for the send/destructive gate. Fails closed."""
+    label = (node.get("name") or node.get("text") or "").lower()
+    try:
+        import core.system1 as system1
+        if not system1.kernel_enabled():
+            return False  # kernel off -> the word set is the only net
+        verdict = system1.check_state(
+            "Is acting on this element an outward-facing or destructive action?",
+            yes_description=("outward/destructive — it sends, submits, publishes, forwards, "
+                             "deletes, buys, pays, or confirms a booking"),
+            no_description=("benign — navigation, opening, viewing, toggling, filtering, "
+                            "or a harmless control"),
+            state_text=f"element role={node.get('role')!r} label={label!r}",
+        )
+    except Exception:
+        return True  # kernel failure -> fail closed
+    if verdict.get("escalate") or verdict.get("answer") is None:
+        return True  # doubtful -> gate it
+    return bool(verdict.get("answer"))
 
 
 def _send_policy() -> str:

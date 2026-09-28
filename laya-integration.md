@@ -67,11 +67,51 @@ an ordered `criteria` list, **not** a per-candidate probability — so `levels` 
 **worst → best**, and ranking N candidates means N batched score questions (which
 `score_candidates` does in one pass).
 
-**New calibration caveat:** the shipped checkpoint logs
-*"invalid temperatures … using choice:11+=0.1006 -> 0.5. Treat confidence from the affected
-entries as uncalibrated"* — i.e. Laya's confidence is **uncalibrated for choice questions
-with 11+ options**. That directly affects the ≥11-candidate uses (tool shortlisting,
-recall rerank, contact lists); their gates should not be trusted until calibrated.
+**Calibration caveat (corrected 2026-09-28):** Laya handles **up to ~20 options**
+(`MAX_SHORTLIST = 18`) — the warning's `choice:11+` is a *temperature-bucket* label meaning
+"11–20 options", not a capability limit. The checkpoint ships an out-of-range fitted
+temperature for that bucket (0.1006 would sharpen the logits ~10x and publish a 0.24
+coin-flip as 0.99), so Laya refuses it and falls back to the 0.5 floor. Effect: for
+**11–20-option choices the published probabilities/confidence are uncalibrated** — the
+distribution is *less* sharp than the checkpoint intended, so gates there over-escalate
+(conservative), but they must not be treated as calibrated until the bucket is refitted.
+
+### Phase 1 status — DONE 2026-09-28 (all six items)
+
+| ID | Item | Where |
+|----|------|-------|
+| 7a | consolidation sends only `memorize_fact` | `_MEMORIZE_ONLY_TOOLS` in `core/brain.py` |
+| 3 | Laya pre-filter skips the consolidation pass | `_session_may_hold_new_facts` + `evaluate_and_memorize(..., force=)` |
+| 1 | post-action screenshot gate | `_needs_action_screenshot` / `_attach_action_screenshot` (5 GUI action sites) |
+| 2 | vision-necessity gate for `look_at_screen` | `_screen_answerable_from_text` / `_foreground_text_state` |
+| 17 | send/destructive gate | `tools/dom.py` `is_send_like` = word set + Laya paraphrase net |
+| 22 | Wikipedia pick + answerability | `tools/rag.py` `_laya_pick_article` / `_answerability` |
+
+**Live findings that changed the design (recorded so they are not re-litigated):**
+
+- **ID 1 needed reframing.** *"Should the assistant look at a screenshot to verify this
+  action?"* escalated on **every** case at threshold 0.25 (margins 0.04–0.22) → zero saving.
+  Reframed to *"is the report complete and trustworthy enough to proceed WITHOUT looking?"*
+  it is decisive: `press_key` and `type_text` **skip** (margins 0.63 / 0.75) while
+  click/scroll/submit attach (escalate or "look"). Polarity: `B` = proceed without looking;
+  skip only on a confident, non-escalated `B`.
+- **ID 2 needed a hard blocklist.** The model called *"is the chart green or red?"*
+  text-answerable. Any appearance word (colour / layout / look / chart / icon / font / …)
+  now forces vision **before** the kernel. Verified: visual requests → vision; "what app is
+  open" / "read the error" / "what does the window title say" → text.
+- **ID 22 needed scoring, not a 3-way choice.** The choice form labelled an unrelated
+  Matteo-Renzi paragraph "answers"; the ordinal score gives it **0.30** (no judgement) vs
+  **0.84** for the real 2026 UNGA result. `_answerability` now uses `score_candidates` with
+  thresholds (<0.4 irrelevant / <0.7 background / else answers) and returns "" (behave as
+  before) when the single-candidate confidence gate escalates — the false positive is gone.
+- **ID 17 is precise as shipped:** "Place order" / "Complete purchase" / "Confirm booking"
+  gated; "Next page" / "Open settings" not.
+- **ID 3's pre-filter cannot dedupe** against `memory.md` (the file is far too long for Laya),
+  so it only screens out windows that are pure chit-chat/meta/questions; dedup stays the LLM's
+  job. Any doubt runs the pass.
+
+**Tests:** `tests/test_memory_consolidation.py` (12), `tests/test_laya_gates.py` (17),
+`tests/test_rag.py` (+16), `tests/test_dom.py` (+7) — suite **541 passed**.
 
 ---
 

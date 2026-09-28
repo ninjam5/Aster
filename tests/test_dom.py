@@ -868,3 +868,66 @@ class TestBrowserMemoryGuard:
                 out = dom._browse_on_worker("https://example.com", "", "", 500)
         assert out["ok"] is False
         assert "low RAM" in out["error"]
+
+
+class TestSendLikeLayaGate:
+    """ID 17 — the send/destructive gate: word set + a Laya paraphrase net.
+
+    Safety-critical, so it must FAIL CLOSED: kernel doubt gates the element behind
+    `confirm_send` instead of clicking it.
+    """
+
+    def _node(self, label, role="button"):
+        return {"role": role, "name": label, "text": ""}
+
+    def test_word_set_hit_never_calls_the_kernel(self, monkeypatch):
+        import core.system1 as system1
+        called = []
+        monkeypatch.setattr(system1, "kernel_enabled", lambda: True)
+        monkeypatch.setattr(system1, "check_state", lambda *a, **k: called.append(1) or {})
+        assert dom.is_send_like(self._node("Send message")) is True
+        assert called == []
+
+    def test_kernel_off_preserves_word_set_only_behavior(self, monkeypatch):
+        import core.system1 as system1
+        monkeypatch.setattr(system1, "kernel_enabled", lambda: False)
+        assert dom.is_send_like(self._node("Place order")) is False
+        assert dom.is_send_like(self._node("Delete")) is True
+
+    def test_laya_catches_a_paraphrase(self, monkeypatch):
+        import core.system1 as system1
+        monkeypatch.setattr(system1, "kernel_enabled", lambda: True)
+        monkeypatch.setattr(system1, "check_state",
+                            lambda *a, **k: {"answer": True, "escalate": False})
+        assert dom.is_send_like(self._node("Place order")) is True
+
+    def test_laya_clears_a_benign_label(self, monkeypatch):
+        import core.system1 as system1
+        monkeypatch.setattr(system1, "kernel_enabled", lambda: True)
+        monkeypatch.setattr(system1, "check_state",
+                            lambda *a, **k: {"answer": False, "escalate": False})
+        assert dom.is_send_like(self._node("Next page")) is False
+
+    def test_escalation_fails_closed(self, monkeypatch):
+        import core.system1 as system1
+        monkeypatch.setattr(system1, "kernel_enabled", lambda: True)
+        monkeypatch.setattr(system1, "check_state",
+                            lambda *a, **k: {"answer": False, "escalate": True,
+                                             "reason": "low or unavailable margin"})
+        assert dom.is_send_like(self._node("Continue")) is True
+
+    def test_kernel_failure_fails_closed(self, monkeypatch):
+        import core.system1 as system1
+        monkeypatch.setattr(system1, "kernel_enabled", lambda: True)
+
+        def boom(*a, **k):
+            raise RuntimeError("no model")
+
+        monkeypatch.setattr(system1, "check_state", boom)
+        assert dom.is_send_like(self._node("Continue")) is True
+
+    def test_missing_answer_fails_closed(self, monkeypatch):
+        import core.system1 as system1
+        monkeypatch.setattr(system1, "kernel_enabled", lambda: True)
+        monkeypatch.setattr(system1, "check_state", lambda *a, **k: {"answer": None, "escalate": False})
+        assert dom.is_send_like(self._node("Continue")) is True

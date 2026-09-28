@@ -1492,6 +1492,14 @@ ADMIN_TOOLS = [
     },
 ]
 
+# Memory consolidation reads ONLY memorize_fact from the response, so it sends just
+# that schema instead of all 69 tools (~12.8k tokens saved per consolidation call,
+# which fires every 5 turns + at shutdown). Phase 1 / ID 7a of laya-integration.md.
+_MEMORIZE_ONLY_TOOLS = [
+    t for t in ADMIN_TOOLS
+    if (t.get("function") or {}).get("name") == "memorize_fact"
+]
+
 
 # ============================================================================
 # FUZZY DEDUPLICATION GATEKEEPER
@@ -1707,6 +1715,28 @@ def _execute_tool_impl(tool_name, arguments):
     elif tool_name == "check_context_health":
         return check_context_health()
     elif tool_name == "look_at_screen":
+        # ID 2: try the window/UIA text path first — it can answer "what app is this /
+        # what does it say" without an image prefill + an 800-token vision generation.
+        # The gate is conservative; anything less than a confident "text is enough"
+        # falls through to the screenshot path below unchanged.
+        _req = ""
+        try:
+            for _m in reversed(messages):
+                if isinstance(_m, dict) and _m.get("role") == "user":
+                    _c = _m.get("content")
+                    if isinstance(_c, str) and not _c.lstrip().startswith("[System"):
+                        _req = _c
+                        break
+        except Exception:
+            _req = ""
+        if _screen_answerable_from_text(_req):
+            _text_state = _foreground_text_state()
+            if _text_state:
+                print("[Aster Internal: look_at_screen answered from window/UIA text "
+                      "(no screenshot taken).]")
+                return (f"[Screen state — from the window title + UI element text; "
+                        f"no screenshot was taken]\n{_text_state}\n"
+                        "[If this is not enough to answer, call look_at_screen again.]")
         b64 = capture_screen_base64()
         if not b64:
             return "Error: Could not capture screen."
@@ -1966,10 +1996,7 @@ def _execute_tool_impl(tool_name, arguments):
                        f"Foreground window: {fg_title!r}.{change_note} "
                        f"[Check screenshot: if the target opened/is now active, this step is DONE — "
                        f"do NOT click '{goal}' again. Proceed to the next step in the task.]")
-        post_b64 = capture_screen_base64()
-        if post_b64:
-            return {"text": result_text, "ui_screenshot_b64": post_b64}
-        return result_text
+        return _attach_action_screenshot(result_text, action="smart_click")
     elif tool_name == "smart_type":
         goal = arguments.get("goal", "")
         text = arguments.get("text", "")
@@ -2021,10 +2048,7 @@ def _execute_tool_impl(tool_name, arguments):
                        f"(matched via {loc['source']}: {loc['text']!r}, score {loc['score']}). "
                        f"Foreground window: {fg_title!r}.{type_note}{submit_note} "
                        f"[Verify silently — continue with next action.]")
-        post_b64 = capture_screen_base64()
-        if post_b64:
-            return {"text": result_text, "ui_screenshot_b64": post_b64}
-        return result_text
+        return _attach_action_screenshot(result_text, action="smart_type")
     elif tool_name == "type_text":
         text = arguments.get("text", "")
         if not text:
@@ -2036,10 +2060,7 @@ def _execute_tool_impl(tool_name, arguments):
         fg_title = get_foreground_window_title()
         result_text = (f"Typed {text!r} at cursor. Foreground window: {fg_title!r}. "
                        f"[Verify silently — continue with next action.]")
-        post_b64 = capture_screen_base64()
-        if post_b64:
-            return {"text": result_text, "ui_screenshot_b64": post_b64}
-        return result_text
+        return _attach_action_screenshot(result_text, action="type_text")
     elif tool_name == "press_key":
         key = str(arguments.get("key", "")).strip().lower()
         if not key:
@@ -2050,10 +2071,7 @@ def _execute_tool_impl(tool_name, arguments):
         fg_title = get_foreground_window_title()
         result_text = (f"Pressed '{key}'. Foreground window: {fg_title!r}. "
                        f"[Verify silently — continue with next action.]")
-        post_b64 = capture_screen_base64()
-        if post_b64:
-            return {"text": result_text, "ui_screenshot_b64": post_b64}
-        return result_text
+        return _attach_action_screenshot(result_text, action="press_key")
     elif tool_name == "highlight_on_screen":
         goal = arguments.get("goal", "")
         if not goal:
@@ -2078,10 +2096,7 @@ def _execute_tool_impl(tool_name, arguments):
         )
         result_text = (f"Scrolled {direction} {clicks} clicks.{change_note} "
                        f"[Verify silently — continue with next action.]")
-        post_b64 = capture_screen_base64()
-        if post_b64:
-            return {"text": result_text, "ui_screenshot_b64": post_b64}
-        return result_text
+        return _attach_action_screenshot(result_text, action="smart_scroll")
     elif tool_name == "save_note":
         return save_note(arguments.get("text", ""))
     elif tool_name == "get_notes":
@@ -2312,11 +2327,195 @@ print(f"[Aster Core] {len(ADMIN_TOOLS)} tools registered for native tool calling
 # ============================================================================
 # EVALUATE AND MEMORIZE: Session consolidation
 # ============================================================================
-def evaluate_and_memorize(reason):
-    """Uses the LLM to extract novel atomic facts from the session and memorize them, cross-referencing a permanent vault."""
+def _session_may_hold_new_facts(recent_turns: list[str]) -> tuple[bool, str]:
+    """Laya pre-filter: does this session plausibly contain a NEW durable fact?
+
+    Returns (run_the_pass, why). CONSERVATIVE: returns True (run) whenever the kernel
+    is disabled, the digest is empty, the model fails, or the verdict is anything
+    other than a confident "no new fact". Only a confident "no" skips the expensive
+    35B consolidation call (full history + tool schemas + the whole memory.md
+    blacklist). It cannot know what is already saved — that stays the LLM's job —
+    so it only screens out windows that are pure chit-chat/meta/questions.
+
+    Added 2026-09-28 (Phase 1 of laya-integration.md, item ID 3).
+    """
+    try:
+        import core.system1 as system1
+        if not system1.kernel_enabled():
+            return True, "kernel disabled"
+    except Exception as e:
+        return True, f"kernel unavailable ({e.__class__.__name__})"
+    digest = "\n".join(t for t in recent_turns if t).strip()
+    if not digest:
+        return True, "empty digest"
+    try:
+        verdict = system1.choose(
+            "Do these recent messages contain at least one NEW, durable fact about the "
+            "owner (possessions, preferences, habits, relationships, names, projects, "
+            "health, plans)?",
+            {
+                "A": "yes — at least one durable personal fact is stated",
+                "B": "no — only chit-chat, questions, commands, meta or small talk",
+            },
+            key="new_fact",
+            state={"recent_messages": digest},
+        )
+    except Exception as e:
+        return True, f"kernel failure ({e.__class__.__name__})"
+    if verdict.get("escalate"):
+        return True, f"escalated ({verdict.get('reason')})"
+    if verdict.get("choice") == "B":
+        return False, f"confident no (margin {verdict.get('margin')})"
+    return True, "confident yes"
+
+
+def _foreground_text_state(max_nodes: int = 40) -> str:
+    """Window title + visible UIA element names/text as a compact text description.
+
+    The no-screenshot path for "what app is this / what does it say" requests
+    (Phase 1 of laya-integration.md, item ID 2).
+    """
+    parts = []
+    try:
+        title = get_foreground_window_title()
+    except Exception:
+        title = ""
+    if title:
+        parts.append(f"Foreground window: {title!r}")
+    nodes = []
+    try:
+        from tools.uia import uia_nodes
+        nodes, _ = uia_nodes()
+    except Exception:
+        nodes = []
+    seen = []
+    for node in (nodes or [])[:max_nodes]:
+        label = str(node.get("name") or node.get("text") or "").strip()
+        if not label:
+            continue
+        role = str(node.get("role") or "").strip()
+        item = f"{role}: {label}" if role else label
+        if item not in seen:
+            seen.append(item)
+    if seen:
+        parts.append("Visible elements: " + "; ".join(seen))
+    return "\n".join(parts)
+
+
+_VISUAL_REQUEST_RE = re.compile(
+    r"\b(?:colour|color|layout|look|looks|looking|appear|appears|image|picture|photo|"
+    r"chart|graph|icon|logo|shape|font|style|design|screenshot|visually|"
+    r"green|red|blue|yellow|black|white|dark|light|bright|readable)\b",
+    re.IGNORECASE,
+)
+
+
+def _screen_answerable_from_text(request: str) -> bool:
+    """Laya: can this screen request be answered from window/UIA text (no screenshot)?
+
+    CONSERVATIVE — returns False (use the vision path) on any doubt, kernel off,
+    failure, OR any request that mentions appearance at all (a live probe showed the
+    model calling "is the chart green or red?" answerable from text; that class needs
+    pixels, so it is hard-filtered). Only a confident text-only request skips the
+    image prefill + the 800-token vision generation.
+
+    Added 2026-09-28 (Phase 1 of laya-integration.md, item ID 2).
+    """
+    if _VISUAL_REQUEST_RE.search(request or ""):
+        return False
+    try:
+        import core.system1 as system1
+        if not system1.kernel_enabled():
+            return False
+        verdict = system1.choose(
+            "Can this screen request be answered from the window title and the names/text of "
+            "visible UI controls, WITHOUT looking at the actual screen image?",
+            {
+                "A": ("yes — it is only about which app/window is focused, or the text content "
+                      "and labels on screen; nothing about how anything looks"),
+                "B": ("no — anything about appearance, colour, layout, images, charts, icons or "
+                      "visual state needs the actual image"),
+            },
+            key="text_enough",
+            state={"request": (request or "")[:400]},
+        )
+    except Exception:
+        return False
+    return (not verdict.get("escalate")) and verdict.get("choice") == "A"
+
+
+def _needs_action_screenshot(result_text: str, action: str) -> bool:
+    """Laya gate: is a post-action screenshot needed to verify this GUI action?
+
+    CONSERVATIVE — returns True (attach the image) on any doubt: kernel disabled,
+    kernel failure, low margin, an unrecognized verdict, or any warning/failure
+    language already present in the action's own report. Only a confident "the
+    report is clear and complete" skips the image — which matters because the
+    screenshot enters conversation history and is re-prefilled on every later round.
+
+    Added 2026-09-28 (Phase 1 of laya-integration.md, item ID 1).
+    """
+    lowered = (result_text or "").lower()
+    if any(s in lowered for s in (
+        "warning", "did not visibly change", "did not change", "failed", "error",
+        "low confidence", "could not", "may have hit", "nothing was", "not a text field",
+    )):
+        return True
+    try:
+        import core.system1 as system1
+        if not system1.kernel_enabled():
+            return True
+        verdict = system1.choose(
+            "Is this GUI action's own report complete and trustworthy enough for the assistant "
+            "to proceed WITHOUT looking at the screen?",
+            {
+                "A": "no — the report is not enough; look at the screen to confirm the outcome",
+                "B": "yes — the report is complete and trustworthy; proceeding without looking is safe",
+            },
+            key="need_screenshot",
+            state={"action": action, "result": (result_text or "")[:600]},
+        )
+    except Exception:
+        return True
+    return bool(verdict.get("escalate")) or verdict.get("choice") != "B"
+
+
+def _attach_action_screenshot(result_text: str, action: str):
+    """Attach the post-action screenshot only when Laya says it is needed (ID 1)."""
+    if _needs_action_screenshot(result_text, action):
+        post_b64 = capture_screen_base64()
+        if post_b64:
+            return {"text": result_text, "ui_screenshot_b64": post_b64}
+        return result_text
+    print(f"[Aster Internal: Post-action screenshot skipped for {action} "
+          f"(Laya: the action's report is unambiguous).]")
+    return (result_text + "\n[Screenshot omitted — the action's report was unambiguous. "
+            "Call look_at_screen if you need to see the screen.]")
+
+
+def evaluate_and_memorize(reason, force: bool = False):
+    """Uses the LLM to extract novel atomic facts from the session and memorize them, cross-referencing a permanent vault.
+
+    `force=True` (manual /memorize) bypasses the Laya pre-filter.
+    """
     if not config.MEMORY_AVAILABLE:
         return
     try:
+        # 0. Laya pre-filter (Phase 1 / ID 3): skip the expensive pass when the recent
+        #    window is confidently free of new durable facts. Any doubt -> run it.
+        if not force:
+            recent_turns = [
+                str(m.get("content") or "")[:300]
+                for m in messages
+                if isinstance(m, dict) and m.get("role") == "user"
+                and not str(m.get("content") or "").lstrip().startswith("[System")
+            ][-6:]
+            run, why = _session_may_hold_new_facts(recent_turns)
+            if not run:
+                print(f"[Aster Internal: Memory consolidation SKIPPED by Laya pre-filter ({why}).]")
+                instrumentation.record_event("memory_prefilter_skip", reason=reason, detail=why)
+                return
+
         # 1. Read the permanent memory vault to prevent cross-session duplicates
         existing_memory = ""
         memory_file_path = os.path.join("Aster_Vault", "memory.md")
@@ -2357,10 +2556,13 @@ def evaluate_and_memorize(reason):
         })
         
         # 4. Execute the tool call and save every fact found in the response.
+        #    Only memorize_fact is ever read from this response (below), so send ONLY
+        #    that schema: the 69-tool payload was ~12.8k tokens of pure waste on a call
+        #    that runs every 5 turns (Phase 1 / ID 7a).
         response_msg = _execute_llm_completion(
             messages=eval_messages,
             temperature=0.3,
-            tools=ADMIN_TOOLS,
+            tools=_MEMORIZE_ONLY_TOOLS or ADMIN_TOOLS,
         )
         all_tool_calls = _extract_all_native_tool_calls(response_msg)
         for tool_payload in all_tool_calls:
@@ -2891,8 +3093,8 @@ def process_user_input(user_text, status_callback=None):
     if user_text.strip().lower() == "/memorize":
         print("\n[Aster Internal: Manual memory consolidation triggered by user...]")
         with config.brain_lock:
-            # Trigger the extraction prompt with a custom reason
-            evaluate_and_memorize("MANUAL USER REQUEST")
+            # Trigger the extraction prompt with a custom reason (force: the owner asked)
+            evaluate_and_memorize("MANUAL USER REQUEST", force=True)
             print("[Aster Internal: Consolidation complete.]")
         return "[Aster: bet. i just scanned our whole chat and locked any new facts about u into my long-term memory vault. what are we doing next? \U0001F440]"
 

@@ -294,3 +294,117 @@ class TestBoilerplateTrim:
 
     def test_empty_input_is_safe(self):
         assert rag._trim_boilerplate("") == ""
+
+
+# ── ID 22: Laya article pick + answerability gate ─────────────────────────────
+
+class TestLayaPickArticle:
+    def test_kernel_off_returns_none(self, monkeypatch):
+        import core.system1 as system1
+        monkeypatch.setattr(system1, "kernel_enabled", lambda: False)
+        assert rag._laya_pick_article("q", ["A article", "B article"]) is None
+
+    def test_picks_a_title(self, monkeypatch):
+        import core.system1 as system1
+        monkeypatch.setattr(system1, "kernel_enabled", lambda: True)
+        monkeypatch.setattr(system1, "choose",
+                            lambda *a, **k: {"choice": "B", "escalate": False})
+        assert rag._laya_pick_article("q", ["first", "second"]) == "second"
+
+    def test_none_key_returns_none(self, monkeypatch):
+        import core.system1 as system1
+        monkeypatch.setattr(system1, "kernel_enabled", lambda: True)
+        monkeypatch.setattr(system1, "choose",
+                            lambda *a, **k: {"choice": "Z", "escalate": False})
+        assert rag._laya_pick_article("q", ["first", "second"]) is None
+
+    def test_escalation_returns_none(self, monkeypatch):
+        import core.system1 as system1
+        monkeypatch.setattr(system1, "kernel_enabled", lambda: True)
+        monkeypatch.setattr(system1, "choose",
+                            lambda *a, **k: {"choice": "A", "escalate": True})
+        assert rag._laya_pick_article("q", ["first"]) is None
+
+    def test_kernel_failure_returns_none(self, monkeypatch):
+        import core.system1 as system1
+        monkeypatch.setattr(system1, "kernel_enabled", lambda: True)
+
+        def boom(*a, **k):
+            raise RuntimeError("no model")
+
+        monkeypatch.setattr(system1, "choose", boom)
+        assert rag._laya_pick_article("q", ["first"]) is None
+
+    def test_empty_titles_returns_none(self):
+        assert rag._laya_pick_article("q", []) is None
+
+
+class TestAnswerability:
+    """Scored, not a 3-way choice: the choice form called unrelated content "answers"."""
+
+    def _with(self, monkeypatch, normalized, escalate=False):
+        import core.system1 as system1
+        monkeypatch.setattr(system1, "kernel_enabled", lambda: True)
+        monkeypatch.setattr(system1, "score_candidates",
+                            lambda *a, **k: {"normalized": {"candidate": normalized},
+                                             "escalate": escalate})
+
+    def test_maps_normalized_scores_to_verdicts(self, monkeypatch):
+        for norm, expected in [(0.0, "irrelevant"), (0.33, "irrelevant"),
+                               (0.67, "background"), (1.0, "answers")]:
+            self._with(monkeypatch, norm)
+            assert rag._answerability("q", "content") == expected, norm
+
+    def test_escalation_is_unknown(self, monkeypatch):
+        self._with(monkeypatch, 1.0, escalate=True)
+        assert rag._answerability("q", "content") == ""
+
+    def test_missing_score_is_unknown(self, monkeypatch):
+        import core.system1 as system1
+        monkeypatch.setattr(system1, "kernel_enabled", lambda: True)
+        monkeypatch.setattr(system1, "score_candidates",
+                            lambda *a, **k: {"normalized": {}, "escalate": False})
+        assert rag._answerability("q", "content") == ""
+
+    def test_kernel_off_is_unknown(self, monkeypatch):
+        import core.system1 as system1
+        monkeypatch.setattr(system1, "kernel_enabled", lambda: False)
+        assert rag._answerability("q", "content") == ""
+
+
+class TestAnswerabilityRouting:
+    def test_irrelevant_wikipedia_falls_through_to_live_web(self, monkeypatch):
+        monkeypatch.setattr(rag, "_check_vault", MagicMock(return_value=None))
+        monkeypatch.setattr(rag, "_wikipedia_lookup",
+                            MagicMock(return_value={"title": "Matteo Renzi", "content": "italy"}))
+        monkeypatch.setattr(rag, "_answerability", MagicMock(return_value="irrelevant"))
+        fc = MagicMock(return_value="LIVE: the real answer")
+        monkeypatch.setattr(rag, "_firecrawl_search", fc)
+        monkeypatch.setattr(rag, "_save_to_vault", MagicMock())
+
+        out = rag.research("who is the prime minister of italy")
+        fc.assert_called_once()
+        assert out.startswith("[Source: Firecrawl | live web]")
+        assert "Renzi" not in out
+
+    def test_background_wikipedia_is_labelled(self, monkeypatch):
+        monkeypatch.setattr(rag, "_check_vault", MagicMock(return_value=None))
+        monkeypatch.setattr(rag, "_wikipedia_lookup",
+                            MagicMock(return_value={"title": "Quantum computing", "content": "qubits"}))
+        monkeypatch.setattr(rag, "_answerability", MagicMock(return_value="background"))
+        monkeypatch.setattr(rag, "_firecrawl_search", MagicMock())
+        monkeypatch.setattr(rag, "_save_to_vault", MagicMock())
+
+        out = rag.research("quantum computing")
+        assert out.startswith("[Source: Wikipedia | Quantum computing] — background only")
+        assert "qubits" in out
+
+    def test_answers_verdict_returns_plain_wikipedia(self, monkeypatch):
+        monkeypatch.setattr(rag, "_check_vault", MagicMock(return_value=None))
+        monkeypatch.setattr(rag, "_wikipedia_lookup",
+                            MagicMock(return_value={"title": "Quantum computing", "content": "qubits"}))
+        monkeypatch.setattr(rag, "_answerability", MagicMock(return_value="answers"))
+        monkeypatch.setattr(rag, "_save_to_vault", MagicMock())
+
+        out = rag.research("quantum computing")
+        assert out.startswith("[Source: Wikipedia | Quantum computing]\n")

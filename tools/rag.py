@@ -107,6 +107,73 @@ def _is_current_events(topic: str) -> bool:
 
 # ── internal helpers ──────────────────────────────────────────────────────────
 
+def _laya_pick_article(topic: str, titles: list) -> str | None:
+    """Laya: which candidate Wikipedia article is actually about `topic`? (ID 22)
+
+    Returns a title from `titles`, or None meaning "none / not sure / kernel off" —
+    the caller then falls back to the lexical gate. `Z` is the none-key (candidate
+    keys only go A..R, so it cannot collide).
+    """
+    titles = [str(t) for t in (titles or [])][:18]
+    if not titles:
+        return None
+    try:
+        import core.system1 as system1
+        if not system1.kernel_enabled():
+            return None
+        criteria = {chr(ord("A") + i): t for i, t in enumerate(titles)}
+        criteria["Z"] = "none of these — no article is about this topic"
+        verdict = system1.choose(
+            f"Which of these Wikipedia articles is about: {topic}?",
+            criteria, key="article", state={"topic": topic},
+        )
+    except Exception:
+        return None
+    if verdict.get("escalate"):
+        return None
+    choice = verdict.get("choice")
+    if not choice or choice == "Z":
+        return None
+    return criteria.get(choice)
+
+
+_ANSWER_LEVELS = ["irrelevant", "background only", "partly answers", "answers directly"]
+
+
+def _answerability(question: str, content: str) -> str:
+    """Laya: does this fetched content answer the question? (ID 22)
+
+    Returns "answers" | "background" | "irrelevant" | "" (unknown/kernel off/escalated).
+    The empty string means "make no judgement" — the caller behaves as before.
+
+    Scored (not a 3-way choice): a live probe showed the choice form calling an
+    unrelated Matteo-Renzi paragraph "answers", while the ordinal score ranked the
+    same content low. Levels run worst -> best; normalized thresholds map the score.
+    """
+    try:
+        import core.system1 as system1
+        if not system1.kernel_enabled():
+            return ""
+        verdict = system1.score_candidates(
+            _ANSWER_LEVELS,
+            "How well does this content answer the user's question?",
+            {"candidate": (content or "")[:800]},
+            state={"question": question},
+        )
+    except Exception:
+        return ""
+    if verdict.get("escalate"):
+        return ""
+    normalized = (verdict.get("normalized") or {}).get("candidate")
+    if normalized is None:
+        return ""
+    if normalized < 0.4:
+        return "irrelevant"
+    if normalized < 0.7:
+        return "background"
+    return "answers"
+
+
 def _check_vault(topic: str) -> str | None:
     """Returns vault content if fresh (<90 days), else None."""
     topic_clean = re.sub(r'[^a-zA-Z0-9]', '', topic).lower()
@@ -192,6 +259,19 @@ def _wikipedia_lookup(topic: str) -> dict | None:
     try:
         query_words = set(re.sub(r"[^a-z0-9]", " ", topic.lower()).split())
         candidates = wikipedia.search(topic, results=5)
+
+        # Laya semantic pick first (Phase 1 / ID 22): choose the article that is
+        # actually about the topic, or "none". Any doubt falls through to the
+        # lexical gate below, which is what caught the Matteo Renzi incident.
+        picked = _laya_pick_article(topic, candidates)
+        if picked:
+            try:
+                page = wikipedia.page(picked, auto_suggest=False)
+                if len(page.content) >= _MIN_WIKI_CHARS:
+                    print(f"[Aster Internal: Wikipedia Laya pick -> '{page.title}']")
+                    return {"title": page.title, "content": page.content}
+            except Exception:
+                pass
 
         best_title, best_score = None, 0.0
         for title in candidates:
@@ -429,9 +509,16 @@ def research(topic: str) -> str:
     if not time_sensitive:
         wiki = _wikipedia_lookup(entity)
         if wiki:
-            header = f"[Source: Wikipedia | {wiki['title']}]\n\n"
-            _save_to_vault(entity, header + wiki["content"])
-            return header + wiki["content"]
+            verdict = _answerability(entity, wiki["content"])
+            if verdict == "irrelevant":
+                print("[Aster Internal: Wikipedia result judged IRRELEVANT by Laya — going live]")
+            else:
+                header = f"[Source: Wikipedia | {wiki['title']}]"
+                if verdict == "background":
+                    header += " — background only; it does not answer the question directly"
+                header += "\n\n"
+                _save_to_vault(entity, header + wiki["content"])
+                return header + wiki["content"]
 
     # 3. Live web — Firecrawl, then Aster's own browser (Laya/DOM motor + Chrome)
     live = _firecrawl_search(entity)
