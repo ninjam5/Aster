@@ -173,13 +173,35 @@ def get_primary_face_crop_rgb(frame_or_b64) -> "np.ndarray | None":
         return None
 
 
-def capture_screen_base64() -> str | None:
+def _downscale_bgr(frame_bgr, max_width: int):
+    """Shrink a BGR frame so its width is at most max_width (aspect preserved).
+
+    The vision encoder tiles/downsamples internally, so detail above ~1280px is
+    largely discarded anyway — capping here removes encode cost for free.
+    max_width <= 0 disables the resize.
+    """
+    if max_width and frame_bgr.shape[1] > max_width:
+        scale = max_width / frame_bgr.shape[1]
+        frame_bgr = cv2.resize(
+            frame_bgr,
+            (max_width, max(1, int(frame_bgr.shape[0] * scale))),
+            interpolation=cv2.INTER_AREA,
+        )
+    return frame_bgr
+
+
+def capture_screen_base64(max_width: int | None = None) -> str | None:
     """Captures the primary monitor and returns raw base64 for multimodal injection.
 
     Bypasses YOLOv8/pytesseract — the raw screenshot is sent to the mmproj.
+    Downscales to `config.SCREENSHOT_MAX_WIDTH` (default 1280) before JPEG encoding;
+    pass `max_width=0` to keep the full physical resolution (e.g. a user-facing
+    screenshot artifact rather than an LLM input).
     """
     if mss is None:
         return None
+    if max_width is None:
+        max_width = getattr(config, "SCREENSHOT_MAX_WIDTH", 1280)
     try:
         with mss.mss() as sct:
             if len(sct.monitors) < 2:
@@ -187,7 +209,10 @@ def capture_screen_base64() -> str | None:
             monitor = sct.monitors[1]
             raw = sct.grab(monitor)
         frame_bgr = cv2.cvtColor(np.array(raw), cv2.COLOR_BGRA2BGR)
-        _, buffer = cv2.imencode(".jpg", frame_bgr)
+        frame_bgr = _downscale_bgr(frame_bgr, max_width)
+        ok, buffer = cv2.imencode(".jpg", frame_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+        if not ok:
+            return None
         return base64.b64encode(buffer).decode("utf-8")
     except Exception:
         return None

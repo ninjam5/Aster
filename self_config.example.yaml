@@ -89,6 +89,8 @@ vision:
   # Track-2 icon captioner for the pixel fallback. "llm" = resident model,
   # zero extra VRAM; "off" = match only OCR-readable boxes (no captioner call).
   icon_captioner: llm
+  # Max width (px) for screenshots sent to the vision model; 0 = full resolution.
+  screenshot_max_width: 1280
 
 integrations:
   # Intended state. Live availability is reported by tools/self_knowledge.py

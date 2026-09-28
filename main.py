@@ -159,7 +159,7 @@ if config.bot:
         config.bot.send_chat_action(message.chat.id, 'upload_photo')
         try:
             import io
-            img_bytes = base64.b64decode(capture_screen_base64())
+            img_bytes = base64.b64decode(capture_screen_base64(max_width=0))
             config.bot.send_photo(message.chat.id, io.BytesIO(img_bytes), caption="[Aster: Live screen capture]")
         except Exception as e:
             config.bot.reply_to(message, f"[Aster: Screenshot failed — {e}]")
