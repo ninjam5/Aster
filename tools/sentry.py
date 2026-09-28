@@ -173,8 +173,9 @@ def execute_sentry_sweep():
                 # Unknown person detected — snap pic and alert
                 WAITING_FOR_ID = True
                 temp_path = os.path.join(config.VAULT_DIR, "temp_intruder.jpg")
-                # Decode base64 back to image for Telegram
-                import base64
+                # QA round 2: use the MODULE-LEVEL base64. A local `import base64` here
+                # shadowed it for the whole function, so Route 2 (below) hit
+                # "cannot access local variable 'base64'" and the fallback was dead code.
                 img_bytes = base64.b64decode(img_b64)
                 with open(temp_path, "wb") as f:
                     f.write(img_bytes)

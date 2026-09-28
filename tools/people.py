@@ -216,9 +216,14 @@ def resolve_relationship(name, known_facts: str = "") -> str:
     stored = str(record.get("relationship") or "").strip()
     if stored:
         return stored
+    # QA round 2: an inconclusive guess used to be re-run on EVERY Discord message.
+    if record.get("relationship_tried"):
+        return "friend"
     guess = laya_guess_relationship(name, known_facts)
+    set_person(name, relationship_tried=True)
     if guess.get("relationship") and guess["relationship"] != "unknown":
-        set_person(name, relationship=guess["relationship"], source=record.get("source") or "laya")
+        set_person(name, relationship=guess["relationship"],
+                   source=record.get("source") or "laya")
         return guess["relationship"]
     return "friend"
 
@@ -235,13 +240,21 @@ def resolve_identity(name, known_facts: str = "") -> dict:
         return {"pronoun": pronoun, "honorific": honorific_for(name),
                 "needs_ask": False, "source": str(record.get("source") or "stored")}
 
+    # QA round 2: do not re-guess forever. Once a guess has been ATTEMPTED, skip the
+    # model on later turns (it was paying a Laya pass every message indefinitely).
+    if record.get("gender_tried"):
+        return {"pronoun": "unknown", "honorific": honorific_for(name),
+                "needs_ask": not bool(record.get("asked")), "source": "unknown"}
+
     guess = laya_guess_gender(name, known_facts)
     if guess.get("gender") in _GENDER_PRONOUN:
         pronoun = _GENDER_PRONOUN[guess["gender"]]
-        set_person(name, pronoun=pronoun, gender=guess["gender"], source="laya")
+        set_person(name, pronoun=pronoun, gender=guess["gender"], source="laya",
+                   gender_tried=True)
         return {"pronoun": pronoun, "honorific": honorific_for(name),
                 "needs_ask": False, "source": "laya"}
 
+    set_person(name, gender_tried=True)
     needs_ask = not bool(record.get("asked"))
     if needs_ask:
         set_person(name, asked=True)

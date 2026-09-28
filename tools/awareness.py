@@ -454,6 +454,12 @@ def _detect_one_change(before: str, after: str) -> str | None:
 
 def _maybe_trigger_compliment(prev_presence: str) -> None:
     """A5: user just returned from a ≥ AWARENESS_ABSENCE_THRESHOLD absence."""
+    # QA round 2: gate BEFORE latching any cooldown/flag. These triggers used to
+    # advance their "already fired" state first and then let _push_nudge drop the
+    # nudge, so a deferred nudge was lost for the whole cooldown (or forever).
+    if not _good_moment_to_speak():
+        print("[Awareness] Trigger deferred — not a good moment to speak.")
+        return
     if not _initiative_settings().get("compliment"):
         return
     if prev_presence != "away":
@@ -480,6 +486,12 @@ def _maybe_trigger_compliment(prev_presence: str) -> None:
 
 def _maybe_trigger_env_nudge(prev_lighting: str | None) -> None:
     """A6: lighting shifted to dim; rate-limited by AWARENESS_ENV_COOLDOWN."""
+    # QA round 2: gate BEFORE latching any cooldown/flag. These triggers used to
+    # advance their "already fired" state first and then let _push_nudge drop the
+    # nudge, so a deferred nudge was lost for the whole cooldown (or forever).
+    if not _good_moment_to_speak():
+        print("[Awareness] Trigger deferred — not a good moment to speak.")
+        return
     global _last_env_nudge
     if not _initiative_settings().get("env_nudges"):
         return
@@ -524,6 +536,12 @@ def _maybe_trigger_mood_checkin() -> None:
     chat). Coordinated with Idea 2 via the shared streak-guard + touch cooldown
     in ``tools.emotion_recognition`` so the two never double-nudge.
     """
+    # QA round 2: gate BEFORE latching any cooldown/flag. These triggers used to
+    # advance their "already fired" state first and then let _push_nudge drop the
+    # nudge, so a deferred nudge was lost for the whole cooldown (or forever).
+    if not _good_moment_to_speak():
+        print("[Awareness] Trigger deferred — not a good moment to speak.")
+        return
     global _last_checkin_streak
     if not getattr(config, "MOOD_CHECKIN_ENABLED", False):
         return
@@ -576,6 +594,12 @@ def _maybe_trigger_email_checkin() -> None:
     unread count grows past what was already notified (not every tick) and
     respects its own cooldown on top of that, so a persistently full inbox
     doesn't nag every AWARENESS_INTERVAL."""
+    # QA round 2: gate BEFORE latching any cooldown/flag. These triggers used to
+    # advance their "already fired" state first and then let _push_nudge drop the
+    # nudge, so a deferred nudge was lost for the whole cooldown (or forever).
+    if not _good_moment_to_speak():
+        print("[Awareness] Trigger deferred — not a good moment to speak.")
+        return
     global _last_email_checkin_count, _last_email_checkin_time
     if not getattr(config, "EMAIL_CHECKIN_ENABLED", False):
         return
@@ -618,6 +642,12 @@ def _maybe_trigger_reauth_reminder() -> None:
     token has lapsed, instead of the Gmail/Calendar tools just silently
     failing next time they're used. Latches so it only nudges once per
     lapse — clears itself once tools.google_auth reports success again."""
+    # QA round 2: gate BEFORE latching any cooldown/flag. These triggers used to
+    # advance their "already fired" state first and then let _push_nudge drop the
+    # nudge, so a deferred nudge was lost for the whole cooldown (or forever).
+    if not _good_moment_to_speak():
+        print("[Awareness] Trigger deferred — not a good moment to speak.")
+        return
     global _reauth_reminder_sent
     if not getattr(config, "GOOGLE_REAUTH_REMINDER_ENABLED", True):
         return

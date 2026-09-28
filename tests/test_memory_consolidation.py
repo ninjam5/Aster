@@ -29,12 +29,18 @@ def _no_real_logging(monkeypatch):
 
 # ── ID 7a: schema trim ────────────────────────────────────────────────────────
 
-class TestMemorizeOnlyTools:
-    def test_contains_exactly_memorize_fact(self):
-        names = [t["function"]["name"] for t in brain._MEMORIZE_ONLY_TOOLS]
-        assert names == ["memorize_fact"]
+class TestConsolidationTools:
+    """ID 7a was REVERTED for the prefix cache (QA round 2).
 
-    def test_consolidation_call_receives_only_that_schema(self, monkeypatch):
+    The consolidation call used to send only the `memorize_fact` schema. But the
+    froggeric template renders `tools` at the TOP of the prompt, so a different tools
+    block shares no prefix with the main loop — trimming it saved ~12.8k tokens on this
+    call and forced the NEXT user turn to re-prefill the whole ~16.4k-token prologue.
+    Net negative. It sends the full ADMIN_TOOLS so the consolidation call keeps the main
+    prefix warm; the saving now comes from ID 3's pre-filter.
+    """
+
+    def test_consolidation_sends_the_full_tool_set(self, monkeypatch):
         monkeypatch.setattr(brain, "_session_may_hold_new_facts", lambda turns: (True, "test"))
         seen = {}
 
@@ -46,8 +52,7 @@ class TestMemorizeOnlyTools:
 
         monkeypatch.setattr(brain, "_execute_llm_completion", fake_completion)
         brain.evaluate_and_memorize("TEST")
-        assert seen["tools"] == brain._MEMORIZE_ONLY_TOOLS
-        assert len(seen["tools"]) == 1
+        assert seen["tools"] is brain.ADMIN_TOOLS   # prefix-cache decision, not a subset
 
 
 # ── ID 3: the Laya pre-filter ─────────────────────────────────────────────────
@@ -58,8 +63,12 @@ class TestSessionPreFilter:
         run, why = brain._session_may_hold_new_facts(["hello there"])
         assert run is True and "kernel disabled" in why
 
-    def test_empty_digest_runs_the_pass(self):
-        assert brain._session_may_hold_new_facts(["", "   "])[0] is True
+    def test_empty_digest_runs_the_pass(self, monkeypatch):
+        # QA round 2: without the kernel enabled this passed on the "kernel disabled"
+        # short-circuit and never reached the digest branch.
+        monkeypatch.setattr(system1, "kernel_enabled", lambda: True)
+        run, why = brain._session_may_hold_new_facts(["", "   "])
+        assert run is True and why == "empty digest"
 
     def test_confident_no_skips(self, monkeypatch):
         monkeypatch.setattr(system1, "kernel_enabled", lambda: True)

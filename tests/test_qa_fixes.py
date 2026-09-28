@@ -128,7 +128,8 @@ class TestJunkQuestionScope:
 
 class TestWikipediaLayaPickGate:
     def test_an_irrelevant_laya_pick_is_rejected(self, monkeypatch):
-        monkeypatch.setattr(rag, "_laya_pick_article", lambda topic, cands: "Matteo Renzi")
+        pick = MagicMock(return_value="Matteo Renzi")
+        monkeypatch.setattr(rag, "_laya_pick_article", pick)
 
         class _Page:
             title = "Matteo Renzi"
@@ -137,7 +138,8 @@ class TestWikipediaLayaPickGate:
         monkeypatch.setattr(rag.wikipedia, "page", lambda *a, **k: _Page())
         monkeypatch.setattr(rag.wikipedia, "search", lambda *a, **k: ["Matteo Renzi"])
         out = rag._wikipedia_lookup("Israeli Prime Minister Netanyahu United Nations 2026")
-        assert out is None or "Renzi" not in out["title"]
+        pick.assert_called()          # QA round 2: the mock was never asserted
+        assert out is None            # the lexical gate rejects it -> fall through
 
 
 # ── a choice that disagrees with its distribution must not pass ───────────────
@@ -182,3 +184,8 @@ class TestSentryOwnerVsKnown:
         monkeypatch.setattr(sentry, "chat_id", 1, raising=False)
         sentry.execute_sentry_sweep()
         bot.send_message.assert_not_called()
+        # positive control: UNKNOWN in the SAME shape DOES send, so this test would
+        # catch the owner branch being deleted (QA round 2).
+        sentry._classify_frame_from_faces = lambda b64: "UNKNOWN"
+        sentry.execute_sentry_sweep()
+        assert bot.send_message.called or sentry.WAITING_FOR_ID is True

@@ -241,6 +241,9 @@ class TestSentryClassification:
         assert sentry._classify_frame_from_faces("b64") is None
 
     def test_undecodable_frame_falls_back(self, monkeypatch):
+        # QA round 2: must enable the kernel, or the guard short-circuits and the
+        # report mock is never consulted.
+        monkeypatch.setattr(system1, "kernel_enabled", lambda: True)
         self._report(monkeypatch, "", names=())
         assert sentry._classify_frame_from_faces("b64") is None
 
@@ -265,12 +268,18 @@ class TestQAFollowUps:
         monkeypatch.setattr(awareness, "_good_moment_to_speak", lambda: True)
         recorded = []
         monkeypatch.setattr(awareness, "_record_unsolicited", lambda: recorded.append(1))
-        monkeypatch.setattr(awareness, "process_user_input", MagicMock(), raising=False)
+        # QA round 2: `_push_nudge` does `from core.brain import process_user_input`
+        # INSIDE the function, so patching awareness.* was a no-op and the real brain
+        # ran. Patch core.brain's attribute instead.
+        brain_calls = []
+        monkeypatch.setattr(brain, "process_user_input",
+                            lambda text, media=None: brain_calls.append(text) or "ok")
         monkeypatch.setattr(awareness, "_send_telegram", lambda text: None)
         import webrtc_bridge as _w
         monkeypatch.setattr(_w, "call_is_active", lambda: False)
         awareness._push_nudge("[System Internal: hello]")
         assert recorded == [1]
+        assert brain_calls == ["[System Internal: hello]"]   # actually routed
 
     def test_intervention_respects_the_moment_gate(self, monkeypatch):
         """Regression: _trigger_intervention had its own delivery path and could speak

@@ -77,6 +77,14 @@ def _load_model():
     device = str(getattr(config, "LAYA_DEVICE", "cpu"))
     print(f"[System1] Loading Laya checkpoint {model_id} (device={device}) ...")
     try:
+        import config as _c
+        if not bool(getattr(_c, "LAYA_KEEP_RESIDENT", False)):
+            print("[System1] WARNING: laya_keep_resident is false — EVERY pass reloads "
+                  "the checkpoint (~35 s cold). Set automation.laya_keep_resident: true "
+                  "for any per-turn use (QA round 2).")
+    except Exception:
+        pass
+    try:
         return laya.load(model_id, device=device)
     except TypeError:
         return laya.load(model_id)
@@ -209,10 +217,15 @@ def _extract_choice(answer: dict, valid_keys: set):
             # distribution's top two. A response whose `choice` disagreed with its own
             # probabilities could otherwise pass the gate with a large "margin" on a key
             # that was not actually the argmax.
-            if choice is not None and choice in distribution:
-                chosen = float(distribution[choice])
-                others = [float(v) for k, v in distribution.items() if k != choice]
-                candidate = (chosen - max(others)) if others else None
+            if choice is not None:
+                if choice not in distribution:
+                    # QA round 2: the chosen key has no probability at all, so its
+                    # support is unknown — another key's margin must not stand in for it.
+                    candidate = None
+                else:
+                    chosen = float(distribution[choice])
+                    others = [float(v) for k, v in distribution.items() if k != choice]
+                    candidate = (chosen - max(others)) if others else None
             else:
                 vals = sorted((float(v) for v in distribution.values()), reverse=True)
                 candidate = vals[0] - vals[1]

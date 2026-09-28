@@ -165,7 +165,7 @@ def _extract_error_detail(response: requests.Response) -> str:
     return text[:280] if text else "Unknown Discord API error"
 
 
-def send_discord_message(target_name, message, confirm=False):
+def send_discord_message(target_name, message, confirm=False, assume_guess=False):
     """Send a Discord DM via bot token + REST API only (no discord.py).
 
     Target resolution (ID 15):
@@ -173,6 +173,11 @@ def send_discord_message(target_name, message, confirm=False):
       2. otherwise Laya picks among the known contacts, and unless `confirm=True` the
          tool REFUSES and reports the guess so it can be confirmed first — a wrong
          guess must never DM the wrong person silently.
+
+    `assume_guess=True` means the CALLER already knows the target was guessed (e.g. the
+    relay parser resolved a nickname to a real key). QA round 2: without it the guess
+    was canonicalised before this function saw it, so `resolve_contact` succeeded and
+    the confirmation was silently skipped — the gate was advisory only.
     """
     original_name = str(target_name or "").strip()
     content = str(message or "").strip()
@@ -181,6 +186,14 @@ def send_discord_message(target_name, message, confirm=False):
         return "Error: target_name is required."
     if not content:
         return "Error: message is required."
+
+    if assume_guess and not confirm:
+        return (
+            f"[CONFIRM REQUIRED: '{original_name}' was inferred from a nickname or fuzzy "
+            f"match, not stated exactly. Ask {config.OWNER_NAME} to confirm, then re-call "
+            f"send_discord_message with target_name='{original_name}' and confirm=true. "
+            f"Nothing was sent.]"
+        )
 
     resolved = resolve_contact(original_name)
     if resolved:

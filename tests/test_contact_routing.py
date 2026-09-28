@@ -25,6 +25,8 @@ FAKE_CONTACTS = {"george": "111", "farah": "222", "Adham": "333", "masky": "444"
 @pytest.fixture(autouse=True)
 def _contacts(monkeypatch):
     monkeypatch.setattr(discord_api, "CONTACTS", dict(FAKE_CONTACTS), raising=False)
+    # QA round 2: these tests must not depend on the owner's real secrets.yaml.
+    monkeypatch.setattr(discord_api, "DISCORD_BOT_TOKEN", "test-token", raising=False)
 
 
 # ── Part A: case-insensitive resolution ───────────────────────────────────────
@@ -225,7 +227,7 @@ class TestFuzzyTokenMatch:
             assert discord_api._fuzzy_token_match(text) is None, text
 
     def test_capitalised_key_resolves(self):
-        assert discord_api._fuzzy_token_match("tell Adhm hello") in (None, "Adham")
+        assert discord_api._fuzzy_token_match("tell Adhm hello") == "Adham"
 
     def test_typo_pick_needs_no_model_call(self, monkeypatch):
         called = []

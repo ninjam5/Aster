@@ -1519,14 +1519,6 @@ ADMIN_TOOLS = [
     },
 ]
 
-# Memory consolidation reads ONLY memorize_fact from the response, so it sends just
-# that schema instead of all 69 tools (~12.8k tokens saved per consolidation call,
-# which fires every 5 turns + at shutdown). Phase 1 / ID 7a of laya-integration.md.
-_MEMORIZE_ONLY_TOOLS = [
-    t for t in ADMIN_TOOLS
-    if (t.get("function") or {}).get("name") == "memorize_fact"
-]
-
 
 # ============================================================================
 # FUZZY DEDUPLICATION GATEKEEPER
@@ -2687,13 +2679,16 @@ def evaluate_and_memorize(reason, force: bool = False):
         })
         
         # 4. Execute the tool call and save every fact found in the response.
-        #    Only memorize_fact is ever read from this response (below), so send ONLY
-        #    that schema: the 69-tool payload was ~12.8k tokens of pure waste on a call
-        #    that runs every 5 turns (Phase 1 / ID 7a).
+        #    CACHE (QA round 2): this call sends the FULL ADMIN_TOOLS, not a trimmed
+        #    schema. Because the froggeric template renders `tools` at the very TOP of
+        #    the prompt, a different tools block shares no prefix with the main loop —
+        #    so trimming it here saved ~12.8k tokens on this call but forced the NEXT
+        #    user turn to re-prefill the whole ~16.4k-token prologue (~25-45 s). Net
+        #    negative. The saving now comes from ID 3's pre-filter instead.
         response_msg = _execute_llm_completion(
             messages=eval_messages,
             temperature=0.3,
-            tools=_MEMORIZE_ONLY_TOOLS or ADMIN_TOOLS,
+            tools=ADMIN_TOOLS,
         )
         all_tool_calls = _extract_all_native_tool_calls(response_msg)
         _saved = 0
@@ -2711,8 +2706,11 @@ def evaluate_and_memorize(reason, force: bool = False):
                 continue
             fact = tool_args.get("fact", "").strip()
             if fact:
-                execute_tool("memorize_fact", {"fact": fact})
-                _saved += 1
+                _res = execute_tool("memorize_fact", {"fact": fact})
+                # QA round 2: only a REAL write counts against the cap — a gate skip
+                # (duplicate) must not consume the budget and starve a new fact.
+                if not (isinstance(_res, str) and "NOT saved" in _res):
+                    _saved += 1
     except Exception as e:
         print(f"[Aster Internal: Memory consolidation failed: {e}]")
 
@@ -2989,7 +2987,7 @@ def process_discord_chat(sender_name: str, user_message: str) -> str:
     _pronoun_note = ""
     try:
         from tools.people import resolve_identity
-        _identity = resolve_identity(sender, get_user_facts(sender, query=incoming))
+        _identity = resolve_identity(sender, get_user_facts(sender))
         honorific = _identity.get("honorific") or honorific
         if _identity.get("needs_ask"):
             _pronoun_note = (
@@ -3004,15 +3002,25 @@ def process_discord_chat(sender_name: str, user_message: str) -> str:
 
     with config.brain_lock:
         history = _get_discord_chat_history(sender)
+        # CACHE (QA round 2): the system prompt must be BYTE-STABLE per conversation.
+        # It used to be rewritten every turn with `get_user_facts(sender, query=incoming)`
+        # — a per-message value — and because the system prompt is the head of the
+        # prompt, the whole Discord history re-prefilled on every message (~5-10 s).
+        # Facts are now the STABLE no-query list, and it is only rewritten when it
+        # actually changes. (The per-message relevance selection is gone from this path;
+        # the saving was a few hundred chars against a full re-prefill.)
+        _facts = get_user_facts(sender)
         if history and history[0].get("role") == "system":
-            history[0]["content"] = DISCORD_CHAT_SYSTEM_PROMPT.format(
+            _stable_prompt = DISCORD_CHAT_SYSTEM_PROMPT.format(
                 sender_name=sender,
-                known_facts=get_user_facts(sender, query=incoming),
+                known_facts=_facts,
                 honorific=honorific,
                 owner_name=config.OWNER_NAME,
                 tool_docs="",
                 relationship=_discord_relationship(sender),
             )
+            if history[0].get("content") != _stable_prompt:
+                history[0]["content"] = _stable_prompt
         history.append({"role": "user", "content": incoming})
         history[:] = trim_memory(history)
 
@@ -3299,8 +3307,15 @@ def process_user_input(user_text, status_callback=None):
     if not str(user_text).startswith("[System Internal"):
         _log_turn_mood(user_text)
 
-    discord_message_request = _is_discord_message_request(user_text)
     discord_intent = _extract_discord_message_intent(user_text)
+    # CACHE/COST (QA round 2): derive the boolean WITHOUT re-parsing. This used to call
+    # `_is_discord_message_request` (which parses again) and then parse a third time —
+    # up to 6 Laya passes for a plain "tell me a joke".
+    discord_message_request = discord_intent is not None
+    if not discord_message_request:
+        _lower_user = str(user_text).lower()
+        discord_message_request = ("discord" in _lower_user and bool(
+            re.search(r"\b(?:tell|ask|text|message|dm|send)\b", _lower_user)))
 
     # ID 8: resolve an overlapping-tool tie-break up front (one Laya call, and only when
     # a cheap cluster trigger matches). Injected as a round-0 hint — the model still
@@ -3518,13 +3533,14 @@ def process_user_input(user_text, status_callback=None):
                                 # forced the lowercased token, which is what made a
                                 # capitalised contact ('Adham') unreachable.
                                 tool_arguments["target_name"] = discord_intent["target"]
-                            # QA 2026-09-28: a GUESSED target must not be sendable on the
-                            # turn it was guessed. The directive was only advisory and
-                            # `confirm` is model-produced, so force it off here — a send
-                            # can then only happen on a later turn after the owner
-                            # actually confirms.
+                            # QA round 2: `confirm=False` alone was NOT enough — the
+                            # parser hands the tool a canonical key, so resolve_contact
+                            # succeeded and the confirmation was skipped. `assume_guess`
+                            # tells the tool the target was inferred, so it refuses
+                            # without an explicit confirm.
                             if not discord_intent.get("exact"):
                                 tool_arguments["confirm"] = False
+                                tool_arguments["assume_guess"] = True
                             # Do NOT fall back to the raw discord_intent payload for the message —
                             # the model must craft a butler-formatted message itself.
                             # If message is missing, execute_tool will return an error that

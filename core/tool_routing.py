@@ -17,8 +17,8 @@ import re
 # Each cluster: the overlapping tools and the distinguishing clause for each.
 CLUSTERS = {
     "read_web": {
-        "trigger": re.compile(r"https?://|www\.|\blink\b|\burl\b|\bweb ?page\b|\barticle\b",
-                              re.IGNORECASE),
+        "trigger": re.compile(r"https?://|www\.|\blink\b|\burl\b|\bweb ?page\b|\barticle\b|"
+                              r"\bpage\b|\blog ?in\b|\bsign ?in\b|\bbutton\b", re.IGNORECASE),
         "criteria": {
             "research": ("look up facts, or read ONE page through the web API — no browser, "
                          "works when the browser is unavailable or RAM is low"),

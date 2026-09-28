@@ -99,7 +99,7 @@ _FACT_RELEVANCE_LEVELS = [
     "possibly relevant",
     "clearly relevant",
 ]
-_FACT_KEEP_AT = 0.34          # keep "vaguely related" and above
+_FACT_KEEP_AT = 0.33          # keep "vaguely related" (index 1 of 4 = exactly 1/3)
 _FACT_MIN_ANSWER_CONF = 0.4   # ignore noisy scores
 
 
