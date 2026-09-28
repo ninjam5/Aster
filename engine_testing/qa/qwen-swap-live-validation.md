@@ -16,7 +16,7 @@ step is done; promote to `summary.md` when green.
 |---|---|
 | Engine binary | `E:\Models\beellama-v0.4.7-bin-win-cuda-12.4-x64\llama-server.exe` (BeeLlama = llama.cpp fork with KVarN) |
 | Model | `E:\Models\Qwen3.6-35B-A3B-UD-IQ4_XS.gguf` (MoE, 3B active) |
-| Vision | `E:\Models\Qwen3.6-35B-A3B-mmproj-F16.gguf`, served with `--no-mmproj-offload` (runs from RAM) |
+| Vision | `E:\Models\Qwen3.6-35B-A3B-mmproj-F16.gguf`, **served on the GPU** (RAM costs 15x on image prefill) |
 | Template | `E:\Models\qwen36_chat_template.jinja` (froggeric v22.5 fix) |
 | Flags | `--n-gpu-layers 99 --n-cpu-moe 26 --flash-attn on --cache-type-k kvarn4 --cache-type-v kvarn2 --image-min-tokens 1024 --kv-tail-tokens 1024 --spec-type draft-mtp --spec-draft-n-max 3 --spec-draft-p-min 0.75 --reasoning off --ctx-size 60000 --parallel 1 --threads 8 --batch-size 1024 --ubatch-size 512` |
 | Brain config | `config.N_CTX = 60000` (must match `--ctx-size`), `MODEL_NAME = Qwen3.6-35B-A3B-UD-IQ4_XS` |
@@ -263,3 +263,29 @@ first-call flakiness — no call on the *first* question).
 **Residual (open):** first-call flakiness on terse prompts at some rate (~1/3 in this small
 sample; matches harness `C1-06` flakiness). Levers if it matters: more sampling/retries, or
 constrained decoding on the first tool call.
+
+### 2026-09-27 (later) — A+B benchmark: the encode was never the problem; Whisper residency was
+
+Fixed 1280x720 image (`sample_screen.png`), n-cpu-moe 26, ~1,100-token prompts, no Whisper:
+
+| prompt | mmproj **on GPU** | mmproj **in RAM** |
+|---|---|---|
+| text ~1,119 tok | 3.7 s (302 tok/s) | 8.7 s (129 tok/s) |
+| **image 1,096 tok** | **4.4 s (248 tok/s)** | **64.7 s (17 tok/s)** |
+| text decode (900 tok) | 29.5 tok/s | 28.9 tok/s |
+| text prefill (4,022 tok) | ~526 pp tok/s | ~503 pp tok/s |
+
+→ The image encode costs only **~0.7 s** over an equivalent text prompt. mmproj on GPU
+costs nothing for text and wins **15x** on images. **Shipped: mmproj on GPU, n-cpu-moe 26.**
+
+The 50-100 s vision turns were caused by a **resident CUDA Whisper**: with ~600 MiB VRAM
+left, llama-server's compute buffers are starved and image prefill collapses to 22 tok/s
+(50.8 s at ncmoe 28) or 11 tok/s (101.8 s at ncmoe 26). It eventually failed to load at
+all (`mkl_malloc: failed to allocate memory` — RAM commit). **Fix:** Whisper off the GPU —
+voice notes use the CPU instance (5.6 s/note, measured), CUDA Whisper loads only for a
+LiveKit call. Net: a 1280-wide vision turn is now **~6.7 s** (was 50-100 s).
+
+**Option A result:** screenshot cap `config.SCREENSHOT_MAX_WIDTH = 1280` (new flag;
+`/screenshot` keeps full res via `max_width=0`). Quality identical at 1920/1600/1280/1024
+on the sample (app ID + tab names); image tokens 2,086 → 1,105. Do not go below 1280
+(no further speed gain — the `--image-min-tokens 1024` floor — only quality loss).

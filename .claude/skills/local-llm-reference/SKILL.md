@@ -44,13 +44,13 @@ operating commands → `aster-run-and-operate`; VRAM budgets/policy →
   budget (the `kvarn2`–`kvarn8` range; higher number = more bits) while keeping a
   **precision tail** (`--kv-tail-tokens 1024`) at full precision for the most recent
   tokens. ~0.9 GB at 60k context. Grounded: **Qwen 3.6 35B-A3B + 60k + KVarN ≈
-  9.4 GB model + ~1.2 GB resident Faster-Whisper / 12.3 GB** on the 3080 (measured).
+  10.4 GB model + GPU mmproj / 12.3 GB** on the 3080 (measured).
 - **MTP speculative decoding** (`--spec-type draft-mtp --spec-draft-n-max 3
   --spec-draft-p-min 0.75`) — the GGUF carries multi-token-prediction draft heads,
   so no separate draft model is loaded; measured draft acceptance ≈0.90.
 - **Flash attention** (`--flash-attn on`) — faster/leaner attention kernels; required
   for the above numbers.
-- **`--no-mmproj-offload`** — the vision projector is served from RAM, not VRAM.
+- **mmproj on the GPU** — the projector must be served on the GPU: image prompts prefill at ~248 tok/s on GPU vs ~17 tok/s when offloaded to RAM (`--no-mmproj-offload`).
 - **Context sizing**: server `--ctx-size 60000` must equal `config.N_CTX` (60000);
   the brain's trim budget is `int(N_CTX*0.9)` estimated tokens.
 
@@ -128,7 +128,7 @@ so the estimate typically UNDER-counts them.
 
 **mmproj** — multimodal projector GGUF (`E:\Models\Qwen3.6-35B-A3B-mmproj-F16.gguf`)
 that maps image embeddings into the LLM's token space; loaded via `--mmproj` with
-`--no-mmproj-offload` (served from RAM). Vision-only — without it image turns fail.
+served on the GPU. Vision-only — without it image turns fail.
 **-ngl 99** — offload (up to) 99 layers to GPU = everything. **int8 (CTranslate2)**
 — 8-bit inference quantization for Whisper, ≈half the VRAM of fp16.
 **KVarN** — BeeLlama's KV-cache quantization (`kvarn2`–`kvarn8`); `--kv-tail-tokens`

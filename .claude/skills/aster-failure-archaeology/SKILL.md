@@ -241,7 +241,7 @@ blocks. Adapter renamed `_execute_gemma_completion` → `_execute_llm_completion
   acceptance ~0.90, `ubatch 512`); ~32 tok/s on v0.4.4 and ~24-31 with the earlier
   configs. Prefill ~1.5-1.8k tok/s at ub 512, versus ~178 at ub 256 (the
   RAM-crash mitigation was the single biggest prefill cost).
-- VRAM **~9.4 GB model + 1.2 GB resident Whisper / 12.3** at `--n-cpu-moe 26 --ctx-size 60000`; the MoE is
+- VRAM **~10.4 GB (model + GPU mmproj) / 12.3** at `--n-cpu-moe 26 --ctx-size 60000`; the MoE is
   bandwidth-bound on DDR4-3200 dual channel, not GPU-bound.
 - Harness battery (52 scenarios): **31/37 auto (84%) at temp 1.0**, **27/37 (73%)
   at temp 0.7** — temp 1.0 is the keeper default (config already 1.0).
@@ -266,6 +266,13 @@ tool-law wording in `_shared_tool_laws.md`, to be A/B'd on the battery. Tracked 
    costs ~8× prefill; only lower it if commit charge is near the limit.
 5. **The Gemma engine is preserved on branch `gemma-4-e4b-lightweight`** — roll
    back by switching branches, not by restoring deleted code.
+6. **Never keep a second CUDA model resident beside the engine.** A resident CUDA
+   Whisper (~1.2 GB) starves llama-server's compute buffers: the same image prompt
+   prefilled at **248 tok/s without it vs 17 tok/s with it** (2026-09-27). Voice
+   notes use the CPU instance (~5.6 s/note); only a LiveKit call loads CUDA Whisper.
+7. **The mmproj must be served on the GPU.** Offloading the projector to RAM
+   (`--no-mmproj-offload`) costs **15x on image prefill** (248 → 17 tok/s); it also
+   slowed text prefill. It is not a VRAM-saving freebie.
 
 **Status:** SETTLED in code; **live validation OPEN** (boot, vision round-trip,
 tool-calling behavior, Whisper route, harness regression) — checklist in

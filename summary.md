@@ -31,7 +31,7 @@
 | Telegram Bot | **pyTelegramBotAPI** (`telebot`) |
 | Discord Bot | **discord.py** (listener) + raw **requests** REST API (sender) |
 | Spotify Control | **Spotipy** (OAuth2, `SpotifyOAuth`) |
-| Vision | **Qwen 3.6 mmproj** (native vision via `/v1/chat/completions`, served from RAM — primary), **face_recognition** (fallback), **OpenCV** |
+| Vision | **Qwen 3.6 mmproj** (native vision via `/v1/chat/completions`, **served on the GPU** — primary), **face_recognition** (fallback), **OpenCV** |
 | OCR | **pytesseract** (ACTIVE — full-screen `image_to_data` two-track locator, see Section 2.6.1) |
 | UI Detection | **DOM motor** (`tools/dom.py`; ARIA/CDP + UIA shortlist, opt-in) → UIA → pytesseract → **OmniParser v2** (icon_detect YOLOv8 via `ultralytics` + `huggingface_hub`; flag-gated pixel fallback) |
 | Screen Capture | **mss** |
@@ -66,11 +66,11 @@
 | Base GGUF File | `Qwen3.6-35B-A3B-UD-IQ4_XS.gguf` (17.0 GB) — MoE, ~3B active params/token (≈35B total) |
 | Speculative Decoding | Built into the GGUF (MTP heads): `--spec-type draft-mtp --spec-draft-n-max 3` (~90% draft acceptance measured) |
 | Server Binary | **BeeLlama v0.4.7** (`E:\Models\beellama-v0.4.7-bin-win-cuda-12.4-x64\llama-server.exe`) — llama.cpp fork adding KVarN KV quantization + MTP |
-| Multimodal Projector | `Qwen3.6-35B-A3B-mmproj-F16.gguf` (~0.86 GB) — **loaded with `--no-mmproj-offload` (runs from RAM, zero VRAM)** |
+| Multimodal Projector | `Qwen3.6-35B-A3B-mmproj-F16.gguf` (~0.86 GB) — **served on the GPU** (image prefill ~248 tok/s vs ~17 tok/s from RAM) |
 | Quantization | **IQ4_XS** (4-bit, importance matrix) |
 | KV Cache Type | **KVarN** (`--cache-type-k kvarn4 --cache-type-v kvarn2 --kv-tail-tokens 1024`) |
 | Context Window | **60,000 tokens** (`--ctx-size 60000`, `config.N_CTX=60000`) |
-| GPU Offload | Attention/dense/embeddings on GPU; routed MoE experts split (`--n-gpu-layers 99 --n-cpu-moe 26`, sized so Faster-Whisper CUDA ~1.2 GB stays resident); `--threads 8` (P-cores), `--ubatch-size 512` |
+| GPU Offload | Attention/dense/embeddings + mmproj on GPU; routed MoE experts split (`--n-gpu-layers 99 --n-cpu-moe 26`); `--threads 8` (P-cores), `--ubatch-size 512`; Faster-Whisper kept off the GPU |
 | Flash Attention | **Enabled** (`--flash-attn on`) |
 | API Endpoint | `http://localhost:8080/v1/chat/completions` |
 | Token Counting | **Character heuristic** (~4 chars per token) |
@@ -639,7 +639,7 @@ any mood colour.
 | Component | Estimated VRAM |
 |---|---|
 | llama-server/BeeLlama: Qwen 3.6 35B-A3B (IQ4_XS, 60k ctx, KVarN KV, ~26 MoE layers on CPU) + mmproj in RAM | **~9.4 GB (measured)** |
-| Faster-Whisper medium.en (int8 CUDA, shared by calls + voice notes, **resident**) | **~1.2 GB GPU (measured)**; CPU instance is the fallback only |
+| Faster-Whisper medium.en (int8) — voice notes on **CPU** (~1.5 GB RAM); CUDA only during a LiveKit call | ~1.2 GB GPU **during a call only** — never resident |
 | SpeechBrain ECAPA (voice recognition, eager CUDA) | ~80 MB |
 | openWakeWord (CPU-only, negligible GPU) | ~0 MB GPU |
 | Silero VAD | ~50 MB |

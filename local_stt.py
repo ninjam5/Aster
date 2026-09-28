@@ -157,18 +157,13 @@ def format_transcript(text: str, speaker: str | None = None,
 def transcribe_file(path: str) -> str:
     """Transcribe a 16 kHz mono WAV file to text.
 
-    Prefers the shared CUDA model — the launchers reserve VRAM for it
-    (`--n-cpu-moe 26`), so voice notes and LiveKit calls share one GPU instance
-    that stays resident. If the CUDA load fails (e.g. VRAM lost to another app),
-    falls back to the lazy CPU instance rather than failing the turn.
+    Uses the CPU instance unless a LiveKit call already holds the CUDA model.
+    A *resident* CUDA Whisper is deliberately avoided: it consumes ~1.2 GB of the
+    12 GB card, which starves llama-server's compute buffers and slows vision
+    prefill ~15x (measured 2026-09-27: image prompt 4.4 s without it vs 64.7 s
+    with the GPU nearly full). Calls load CUDA Whisper for their duration only.
     """
-    model = _shared_whisper
-    if model is None:
-        try:
-            model = get_whisper_model()
-        except Exception as exc:
-            print(f"[Aster Ears] CUDA Faster-Whisper unavailable ({exc}) \u2014 using the CPU instance.")
-            model = _get_cpu_whisper()
+    model = _shared_whisper if _shared_whisper is not None else _get_cpu_whisper()
     segments, _ = model.transcribe(
         path,
         beam_size=5,

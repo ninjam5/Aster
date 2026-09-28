@@ -16,7 +16,7 @@ templates, KV cache) use `local-llm-reference`.
 ## The system in one paragraph
 
 One llama-server process (**BeeLlama v0.4.7 fork: Qwen 3.6 35B-A3B IQ4_XS MoE,
-60k ctx, KVarN KV, MTP speculative decoding, mmproj-F16 vision from RAM, port 8080**)
+60k ctx, KVarN KV, MTP speculative decoding, mmproj-F16 vision on the GPU, port 8080**)
 serves every LLM request. One Python process (`main.py`) hosts the brain: a 15-round
 native OpenAI-format tool-calling loop over 69 admin tools, plus daemon threads for
 Telegram, Discord, LiveKit voice, awareness, intervention, ambient audio, and a
