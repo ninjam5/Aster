@@ -316,3 +316,23 @@ collapsed 3.6x for a small image gain.
 
 Note: the earlier "~1,600 pp" figure was a **4,022-token** probe — small prompts prefill
 less efficiently per token, so it is not comparable to the ~1,100-token tests above.
+
+### 2026-09-27 (final) — CONTROLLED config test: vision-first wins; the app is the real tax
+
+Server-reported prefill, same prompts, main.py stopped (desktop unchanged):
+
+| config | free VRAM | text 1.1k | image 1.1k |
+|---|---|---|---|
+| text-first (mmproj RAM, ncmoe 21) | 901 MiB | **398 tok/s** (2.8 s) | 42 tok/s (26.0 s) |
+| **vision-first A (mmproj GPU, ncmoe 26)** | 1,583 MiB | 304 tok/s (3.7 s) | **269 tok/s (4.1 s)** |
+| vision-first B (mmproj GPU, ncmoe 30) | 2,994 MiB | 294 tok/s (3.8 s) | 261 tok/s (4.2 s) |
+
+=> **mmproj in RAM buys only ~1 s on text and costs ~22 s per screenshot.** Earlier
+text-first numbers were based on an unreliable probe estimate; the server timer shows
+the placement trade is small. **Shipped: vision-first, mmproj on GPU, ncmoe 28, ub 512**
+(ncmoe 30 buys 1.4 GB headroom for ~3% speed; 28 chosen to keep RAM commit viable).
+
+**With the app running** (main.py: ECAPA + Telegram + face server + watchdog, 1.9 GB VRAM free):
+text 6.1 s (185 tok/s), image 17.5 s (63 tok/s) — i.e. the app costs **2.6x on text and
+4.3x on image**. That is CPU contention from the daemon threads on the shared P-cores,
+not VRAM (1.9 GB was free) — the next lever.

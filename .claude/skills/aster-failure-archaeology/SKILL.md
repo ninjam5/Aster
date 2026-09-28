@@ -273,11 +273,13 @@ tool-law wording in `_shared_tool_laws.md`, to be A/B'd on the battery. Tracked 
 7. **VRAM headroom is the dominant cost, not any single flag.** Below ~500 MB free,
    llama-server's compute buffers starve and prefill collapses (measured: text
    227 → 63 tok/s at 360 MB free; image 248 → 17 tok/s with a resident Whisper).
-   Everything else is a placement trade: **mmproj on the GPU** = image prefill
-   ~248 tok/s but costs ~1.4 GB VRAM, forcing ~6 more expert layers to the CPU
-   (slower text); **mmproj in RAM** = best text prefill/decode, image encode
-   ~30 s/screenshot. **Shipped text-first 2026-09-27** (`--n-cpu-moe 21`, mmproj in
-   RAM, `--ubatch-size 512`). `--ubatch-size 1024` was measured and rejected (it grew
+   Placement is a much smaller trade than it looked: controlled A/B on the same
+   prompts (server-reported) — **mmproj on GPU = text 304 / image 269 tok/s;
+   mmproj in RAM = text 398 / image 42.** RAM buys ~1 s on text and costs ~22 s per
+   screenshot. **Shipped vision-first 2026-09-27** (`--n-cpu-moe 28`, mmproj on GPU,
+   `--ubatch-size 512`). **The app itself costs 2.6-4.3x** (text 304 → 185, image
+   269 → 63 with main.py running at 1.9 GB free) — CPU contention from the daemons
+   on the shared P-cores, the next lever to attack. `--ubatch-size 1024` was measured and rejected (it grew
    the compute buffers into the starvation zone: text 227 → 63 tok/s).
 
 **Status:** SETTLED in code; **live validation OPEN** (boot, vision round-trip,

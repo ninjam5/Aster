@@ -7,7 +7,7 @@ description: Load this whenever a change touches ML models, GPU memory, or perfo
 
 The owner's #1 standing rule (stated 2026-07-05): **Aster must be as optimized as
 possible. 12 GB (RTX 3080) is a hard ceiling. On the Qwen 3.6 35B-A3B engine
-llama-server alone measures ~11.8 GB / 12.3 GB at `--n-cpu-moe 21` + 60k ctx (mmproj in RAM) —
+llama-server alone measures ~10.4 GB / 12.3 GB at `--n-cpu-moe 28` + 60k ctx (mmproj on GPU) —
 and **VRAM starvation is the dominant cost: below ~500 MB free, prefill collapses (227 → 63 tok/s at 360 MB free; a resident CUDA Whisper took image prefill 248 → 17 tok/s).** New ML models
 are **lazy-loaded and offloaded when idle** via ref-counting — not eagerly preloaded.
 (This *reverses* an older 2026-05 eager-preload preference; existing eager loads are

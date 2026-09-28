@@ -44,13 +44,13 @@ operating commands → `aster-run-and-operate`; VRAM budgets/policy →
   budget (the `kvarn2`–`kvarn8` range; higher number = more bits) while keeping a
   **precision tail** (`--kv-tail-tokens 1024`) at full precision for the most recent
   tokens. ~0.9 GB at 60k context. Grounded: **Qwen 3.6 35B-A3B + 60k + KVarN ≈
-  11.8 GB model (mmproj in RAM) / 12.3 GB** on the 3080 (measured).
+  10.4 GB model + GPU mmproj / 12.3 GB** on the 3080 (measured).
 - **MTP speculative decoding** (`--spec-type draft-mtp --spec-draft-n-max 3
   --spec-draft-p-min 0.75`) — the GGUF carries multi-token-prediction draft heads,
   so no separate draft model is loaded; measured draft acceptance ≈0.90.
 - **Flash attention** (`--flash-attn on`) — faster/leaner attention kernels; required
   for the above numbers.
-- **mmproj placement is a trade** — on the GPU: image prefill ~248 tok/s but it costs ~1.4 GB VRAM, which forces ~6 more expert layers onto the CPU (slower text). In RAM (`--no-mmproj-offload`): best text prefill/decode, image encode ~30 s per 1280 screenshot. Shipped text-first (2026-09-27).
+- **mmproj on the GPU (shipped 2026-09-27)** — controlled A/B on the same prompts: GPU = text 304 tok/s / image 269 tok/s; RAM (`--no-mmproj-offload`) = text 398 / image 42. RAM buys ~1 s on text and costs ~22 s per screenshot, so the GPU placement wins.
 - **Context sizing**: server `--ctx-size 60000` must equal `config.N_CTX` (60000);
   the brain's trim budget is `int(N_CTX*0.9)` estimated tokens.
 
