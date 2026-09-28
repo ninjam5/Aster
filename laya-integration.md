@@ -181,6 +181,34 @@ covered by mocked tests. Listed as TODO in `laya-integration-testing.md`.
 **Tests:** `tests/test_people.py` (39), `tests/test_phase3_selection.py` (14) — suite
 **647 passed**.
 
+### Phase 4 status — DONE 2026-09-28 (live call + background daemons), QA-reviewed
+
+| ID | Item | Result |
+|----|------|--------|
+| **19** | "Is this utterance addressed to Aster?" | **SHIPPED** — `webrtc_bridge._addressed_to_aster`, called from `_flush_pending_transcript`. Word-bounded "aster" shortcut (no model call), else a 2-way Laya gate at **margin 0.6**. Runs off the event loop via `asyncio.to_thread`. |
+| **20** | "Is now a bad moment to speak?" | **SHIPPED** — `awareness._good_moment_to_speak` at the top of `_push_nudge`, **and** now in `intervention._trigger_intervention` (which had its own ungated copy of the delivery logic). Hard stop while the brain is mid-turn; Laya judges the rest (call active, away-for, seconds since last message). |
+| **5** | Awareness scene from window/UIA text | **SHIPPED** — the `screen` field comes from `_foreground_text_state()` and the screen image is dropped from the periodic call; the webcam frame stays (Laya cannot read pixels). Skipped the LLM entirely when there is text screen and no webcam. |
+| **4** | Sentry person classification | **SHIPPED** — `_face_match_report` + `_classify_frame_from_faces` (text-only) tried before the vision call, with a full vision fallback on any doubt. |
+
+**Corrections to the original plan wording:** ID 19 is implemented as a **2-way** choice
+(addressed vs not) rather than 3-way — the media/other-person distinction folded into the
+"not addressed" option. ID 5 uses the window/UIA text **directly** rather than asking Laya
+to label it; the raw title+elements list is more useful to the model than a prose label,
+and it removes the image prefill either way.
+
+**Independent QA review found and fixed (all pinned by tests):** the ID 19 gate **blocked
+the asyncio event loop** (now `asyncio.to_thread`); a Sentry **key collision** meant the
+4th enrolled person was overwritten by `EMPTY`; Sentry's Route-2 fallback was **dead code**
+(`base64` function-local); **ID 20 had a second ungated delivery point** in the
+intervention daemon; `_predict` was **not serialized** across the four threads that now
+call it; the `"aster"` substring matched *master/disaster/faster*; and ID 4 paid the face
+pass even with the kernel off. Full table in `laya-integration-testing.md` §5.
+
+**Open from the review:** the Sentry known-face list is bounded by the key space (20
+names) — beyond that, extras have no candidate and could be forced to `UNKNOWN`.
+
+**Tests:** `tests/test_phase4_daemons.py` (33) — suite **680 passed**.
+
 ---
 
 ## 3. Build order at a glance (first → last)

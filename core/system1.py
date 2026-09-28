@@ -44,6 +44,7 @@ _OPERATION_BY_KEY = {
 _MODEL = None
 _REFCOUNT = 0
 _LOCK = threading.RLock()
+_PREDICT_LOCK = threading.Lock()
 _LOG_LOCK = threading.Lock()
 
 
@@ -131,10 +132,17 @@ def release():
 
 
 def _predict(state: dict, questions: dict):
-    """Model call seam (mocked in tests). One forward pass over all questions."""
+    """Model call seam (mocked in tests). One forward pass over all questions.
+
+    `agent.predict` is serialized under `_PREDICT_LOCK`: the kernel is now called from
+    several threads (the LiveKit RTC loop, the awareness daemon, the sentry daemon, the
+    brain thread) and they share one resident model instance. Laya is not documented as
+    reentrant, and serializing costs only the ~0.31 s the pass takes anyway.
+    """
     agent = acquire()
     try:
-        return agent.predict(state, questions)
+        with _PREDICT_LOCK:
+            return agent.predict(state, questions)
     finally:
         release()
 

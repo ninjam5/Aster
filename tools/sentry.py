@@ -1,3 +1,4 @@
+import base64
 import cv2
 import face_recognition
 import time
@@ -46,6 +47,92 @@ def _analyze_frame_with_llm(img_b64: str) -> str | None:
         return None
 
 
+def _face_match_report(img_b64: str):
+    """(text report of the face matches, known names) from a webcam frame — no LLM.
+
+    Returns ("", []) when the frame cannot be decoded. "no faces visible" when it holds
+    no faces at all (which is itself a complete answer: EMPTY).
+    """
+    try:
+        import base64
+        import numpy as np
+        raw = img_b64.split(",", 1)[-1] if "," in img_b64 else img_b64
+        frame = cv2.imdecode(np.frombuffer(base64.b64decode(raw), np.uint8), cv2.IMREAD_COLOR)
+        if frame is None:
+            return "", []
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        locations = face_recognition.face_locations(rgb)
+        if not locations:
+            return "no faces visible", []
+        encodings = face_recognition.face_encodings(rgb, locations)
+    except Exception as e:
+        print(f"[Sentry] face report failed: {e}")
+        return "", []
+
+    lines = []
+    for i, encoding in enumerate(encodings, 1):
+        if known_face_encodings:
+            distances = face_recognition.face_distance(known_face_encodings, encoding)
+            best = int(distances.argmin())
+            lines.append(f"face {i}: closest enrolled face is '{known_face_names[best]}' "
+                         f"(distance {distances[best]:.2f}; a match is usually under 0.5)")
+        else:
+            lines.append(f"face {i}: no known faces are enrolled")
+    return "; ".join(lines), list(known_face_names)
+
+
+def _classify_frame_from_faces(img_b64: str):
+    """Text-only Sentry classification (ID 4): owner name / KNOWN:<name> / UNKNOWN / EMPTY.
+
+    Uses the `face_recognition` match text instead of a vision prefill, which is the
+    expensive path on this install. Returns None on ANY doubt so the caller falls back
+    to the vision call — exactly today's behaviour.
+
+    Kernel off returns None BEFORE any face work: with Laya disabled this route must
+    not add a per-sweep face pass to installs that never opted in.
+    """
+    try:
+        import core.system1 as system1
+        if not system1.kernel_enabled():
+            return None
+    except Exception:
+        return None
+    report, names = _face_match_report(img_b64)
+    if report == "no faces visible":
+        return "EMPTY"
+    if not report:
+        return None
+    try:
+        import core.system1 as system1
+        if not system1.kernel_enabled():
+            return None
+        # Key space is RESERVED: A = owner, U/E/Z = the special labels, and known
+        # people get a disjoint range. (An earlier version used B, C, D… for names and
+        # then wrote "E" for EMPTY, so with >=4 enrolled faces the 4th person's option
+        # was silently overwritten by "EMPTY" and became unselectable.)
+        label_of = {"A": config.OWNER_NAME.upper()}
+        criteria = {"A": f"the owner, {config.OWNER_NAME}"}
+        owner_lower = config.OWNER_NAME.lower()
+        known = [n for n in names if str(n).lower() != owner_lower]
+        person_keys = "BCDFGHIJKLMNOPQRSTVWXY"   # no A, E, U or Z
+        for key, name in zip(person_keys, known):
+            label_of[key] = f"KNOWN:{name}"
+            criteria[key] = f"a known person: {name}"
+        label_of["U"] = "UNKNOWN"
+        criteria["U"] = "an unrecognized person (no enrolled face matches)"
+        label_of["E"] = "EMPTY"
+        criteria["E"] = "no people are visible"
+        criteria["Z"] = "cannot tell from this report"
+        verdict = system1.choose(
+            "Who is visible in this webcam frame, based on the face-match report?",
+            criteria, key="sentry", state={"report": report}, min_margin=0.5)
+    except Exception:
+        return None
+    if verdict.get("escalate"):
+        return None
+    return label_of.get(verdict.get("choice"))
+
+
 def execute_sentry_sweep():
     global WAITING_FOR_ID
     if WAITING_FOR_ID or not telegram_bot:
@@ -57,8 +144,11 @@ def execute_sentry_sweep():
         if not img_b64:
             return
 
-        # Route 1: Use native vision via REST endpoint
-        analysis = _analyze_frame_with_llm(img_b64)
+        # Route 0 (ID 4): classify from the face-match text first — no vision prefill.
+        # Falls through to the vision call on any doubt.
+        analysis = _classify_frame_from_faces(img_b64)
+        if not analysis:
+            analysis = _analyze_frame_with_llm(img_b64)   # Route 1: native vision
         if analysis:
             analysis_upper = analysis.upper()
             current_time = time.time()

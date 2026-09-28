@@ -521,9 +521,19 @@ class ManualWebRTCBridge:
         transcript = self._pending_transcript.strip()
         self._pending_transcript = ""
         self._debounce_task = None
-        if transcript:
-            print(f"[Aster LiveKit] Coalesced turn: '{transcript}'")
-            await self._start_response_pipeline(transcript)
+        if not transcript:
+            return
+        print(f"[Aster LiveKit] Coalesced turn: '{transcript}'")
+        # ID 19: once awake, EVERY final transcript used to become a full 15-round admin
+        # turn — including a side conversation or TV audio caught inside the wake
+        # timeout. Conservative: anything but a confident "not for me" is sent.
+        # Run the gate OFF the event loop: Laya is a synchronous CPU pass (~0.31 s
+        # resident, up to ~35 s on a cold load) and this is the interactive RTC loop —
+        # blocking it stalls audio, STT, wake detection and barge-in.
+        if not await asyncio.to_thread(_addressed_to_aster, transcript):
+            print(f"[Aster LiveKit] Ignored — not addressed to Aster: '{transcript[:60]}'")
+            return
+        await self._start_response_pipeline(transcript)
 
     @staticmethod
     def _create_wake_detector() -> Any:
@@ -636,6 +646,53 @@ async def _entrypoint(ctx: JobContext) -> None:
             _active_bridge = None
             _active_loop = None
         await bridge.aclose()
+
+
+_ASTER_NAME_RE = re.compile(r"\baster\b", re.IGNORECASE)
+
+
+def _addressed_to_aster(transcript: str) -> bool:
+    """Is this utterance actually meant for Aster? (ID 19 of laya-integration.md)
+
+    Cheap exact check first: if the transcript names Aster, it is for him — no model
+    call. Word-bounded so "master", "disaster", "faster" and "plaster" do not count.
+    Otherwise a conservative Laya gate at a STRICTER margin than the usual 0.25.
+
+    FAIL-OPEN by design: kernel off, low margin, a failure or an unrecognized verdict
+    all return True (send it to the brain). Suppressing a real request is the worse
+    error, so the only suppression is a confident, logged verdict.
+    """
+    text = str(transcript or "").strip()
+    if not text:
+        return False
+    if _ASTER_NAME_RE.search(text):
+        return True
+    try:
+        import core.system1 as system1
+        if not system1.kernel_enabled():
+            return True
+        verdict = system1.choose(
+            "Is this utterance addressed to the AI assistant Aster, or is it speech "
+            "between other people / from a TV or recording?",
+            {
+                "A": "addressed to the assistant — a question, request or command for Aster",
+                "B": ("a conversation between other people, or speech from media — "
+                      "not intended for the assistant"),
+            },
+            key="addressed",
+            state={"transcript": text[:400]},
+            min_margin=0.6,   # stricter than the 0.25 default: suppression is a real loss
+        )
+    except Exception:
+        return True
+    if verdict.get("escalate"):
+        return True
+    if verdict.get("choice") == "B":
+        # Log the evidence — a wrong suppression is otherwise invisible.
+        print(f"[Aster LiveKit] Gate judged NOT addressed (margin "
+              f"{verdict.get('margin')}, dist {verdict.get('distribution')}).")
+        return False
+    return True
 
 
 def call_is_active() -> bool:

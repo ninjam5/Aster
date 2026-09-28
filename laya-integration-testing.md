@@ -128,15 +128,47 @@ import core.brain as brain, core.memory as memory, core.system1 as system1, tool
 
 ---
 
-## 5. Phase 4 — live call + daemons (TODO)
+## 5. Phase 4 — live call + daemons
 
-| ID | E2E test | Expected |
-|----|----------|----------|
-| **19** | LiveKit: awake, then talk to another person in the room (not to Aster) | **no** brain turn is triggered |
-| **19b** | LiveKit: a real request to Aster | answered normally (no over-suppression) |
-| **20** | Start a call, then let a proactive nudge become due | nothing is spoken **into** the call |
-| **5** | Awareness scene poll | the screen field comes from window/UIA text (no screen image); the webcam frame path still works |
-| **4** | Sentry on: sweep with a known face | classified from face-match text, not a vision call per sweep |
+| ID | E2E test | Expected | Layer |
+|----|----------|----------|-------|
+| **19a** | LiveKit: awake, then talk to another person in the room (not to Aster) | **no** brain turn; console shows `Ignored — not addressed to Aster` + the verdict/margin line | B (live) |
+| **19b** | LiveKit: a real request to Aster, **without** saying his name | answered normally (fail-open) | B (live) |
+| **19c** | LiveKit: any request containing "aster" | answered with **no** Laya call (the word-boundary shortcut) | B (live) |
+| **19d** | LiveKit: responsiveness while the gate runs | audio/STT/barge-in do **not** stall — the gate runs off the event loop (`asyncio.to_thread`) | B (live) |
+| **20a** | Start a call, then let a proactive nudge become due | nothing is spoken **into** the call | B (live) |
+| **20b** | Same for a distraction nudge (intervention daemon) | also suppressed — it now shares the moment gate | B (live) |
+| **20c** | Owner away / brain mid-turn | nudge dropped, and it does **not** burn the unsolicited budget | B (live) |
+| **5a** | Awareness poll with a window open | `screen` comes from window/UIA text; **one** image (webcam) in the call, not two | B (live) |
+| **5b** | Awareness poll with the text path unavailable | falls back to the old two-image call | A |
+| **4a** | Sentry on: sweep with a known face | classified from the face-match text, no vision call | B (live) |
+| **4b** | Sentry on: an unrecognized face | `UNKNOWN` → the intruder flow (`WAITING_FOR_ID` + photo) still fires | B (live) |
+| **4c** | Sentry with the kernel **off** | no extra face pass; the vision call runs exactly as before | A |
+
+> **Phase 4 status: SHIPPED + QA-reviewed; Layer A DONE, Layer B TODO.**
+> `tests/test_phase4_daemons.py` — **33 tests**, suite **680 passed**.
+
+### Independent QA review (2026-09-28) — findings and fixes
+
+A separate review agent audited the four gates for correctness and efficiency. What it
+found, and what was done:
+
+| Severity | Finding | Fix |
+|---|---|---|
+| **Critical** | **ID 19 blocked the asyncio event loop.** `_flush_pending_transcript` is a coroutine on the RTC loop and called Laya synchronously — ~0.31 s per gated turn, and up to ~35 s on a cold load (no startup prewarm). That stalls audio, STT, wake detection and barge-in. | `await asyncio.to_thread(_addressed_to_aster, transcript)`. Pinned by a test that the loop is not blocked. |
+| **High** | **ID 19 could swallow a real request** on a confident "B". | Margin raised to **0.6** (vs the 0.25 default) and the verdict + distribution is now **logged** on every suppression, so a wrong one is visible and tunable. |
+| **High** | **Sentry key collision.** Names used keys B, C, D… while `EMPTY` was also `E`, so with **≥4 enrolled faces** the 4th person's option was overwritten by "EMPTY" and became unselectable. | Reserved key space: `A` = owner, `U`/`E`/`Z` = specials, names get a disjoint range. Pinned by a test with 5 names. |
+| **High** | **Sentry Route 2 was dead code** — `import base64` inside `execute_sentry_sweep` made `base64` function-local, so the fallback raised `UnboundLocalError`. Pre-existing, but it sits on the new escalation path. | `import base64` moved to module top. |
+| **High** | **ID 20 had a second, ungated delivery point**: `intervention._trigger_intervention` duplicated the delivery logic and could speak over a live call — the exact bug ID 20 exists to fix. | It now calls the shared `awareness._good_moment_to_speak()` before mutating trigger state (so a deferral can retry). Pinned by a test. |
+| **Medium** | **`_predict` was not serialized.** Four threads now share one resident model; Laya is not documented as reentrant. | `agent.predict` runs under a `_PREDICT_LOCK`. Pinned by a concurrency test. |
+| **Medium** | **ID 4 paid the face pass even with the kernel off**, and double-decoded on escalation. | `_classify_frame_from_faces` returns `None` **before** any decode when the kernel is off — behaviour on default installs is unchanged. |
+| **Medium** | **`"aster"` substring false-positives** (master, disaster, faster, plaster). | Word-boundary regex `\baster\b`. Pinned by a test. |
+| **Low** | `text_state[:300]` could cut mid-element. | `_truncate_on_boundary` cuts on a `; ` node boundary. |
+| **Low** | Doc drift (ID 5 says "label it with Laya"; ID 19 says 3-way). | Corrected in `laya-integration.md`. |
+
+**Still open from the review:** the known-face list is capped by the key space (20 names) —
+if more than 20 people are enrolled, the extras have no candidate and may be forced to
+`UNKNOWN` (a false intruder alert). Worth revisiting if the enrolled set ever grows.
 
 ---
 

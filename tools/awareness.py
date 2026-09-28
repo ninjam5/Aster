@@ -118,14 +118,46 @@ _SCENE_PROMPT = (
 )
 
 
+def _truncate_on_boundary(text: str, limit: int) -> str:
+    """Cut `text` to <= limit chars on a '; ' node boundary where possible (ID 5).
+
+    `_foreground_text_state` is a title plus up to 40 UIA elements, so a hard cut lands
+    mid-element and reads as garbage.
+    """
+    text = str(text or "")
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    cut = head.rfind("; ")
+    return (head[:cut] if cut > limit // 2 else head).rstrip("; ")
+
+
 def _brief_scene_describe(screen_b64: str | None, webcam_b64: str | None) -> dict:
     """One LLM call that captures screen + webcam at low token budget.
 
     Returns a dict with keys ``screen``, ``webcam``, ``lighting``. Missing
     images are tolerated (returns None for that field). Bypasses tools and
     never appends to ``messages``.
+
+    ID 5: the SCREEN field is derived from the foreground window title + UIA element
+    text first, which removes a screen image prefill from this periodic call. The
+    webcam field genuinely needs the frame, so that image stays.
     """
     out = {"screen": None, "webcam": None, "lighting": None}
+    if not screen_b64 and not webcam_b64:
+        return out
+
+    if screen_b64:
+        try:
+            from core.brain import _foreground_text_state
+            text_state = _foreground_text_state()
+        except Exception as e:
+            text_state = ""
+            print(f"[Awareness] window/UIA text unavailable ({e}); using the screen image")
+        if text_state:
+            out["screen"] = _truncate_on_boundary(text_state, 300)
+            screen_b64 = None   # no screen image needed for this call
+
     if not screen_b64 and not webcam_b64:
         return out
 
@@ -158,7 +190,9 @@ def _brief_scene_describe(screen_b64: str | None, webcam_b64: str | None) -> dic
             continue
         upper = stripped.upper()
         if upper.startswith("SCREEN:"):
-            out["screen"] = stripped.split(":", 1)[1].strip() or None
+            # Never clobber a screen value already derived from window/UIA text (ID 5).
+            if not out.get("screen"):
+                out["screen"] = stripped.split(":", 1)[1].strip() or None
         elif upper.startswith("WEBCAM:"):
             webcam_text = stripped.split(":", 1)[1].strip()
             out["webcam"] = webcam_text or None
@@ -298,9 +332,60 @@ def release_brain() -> None:
 
 
 # ── proactive nudges (A5, A6) ─────────────────────────────────────────────────
+def _good_moment_to_speak() -> bool:
+    """Is now a reasonable moment for an unprompted nudge? (ID 20 of laya-integration.md)
+
+    The trigger cascades only ever checked budgets/cooldowns, never whether the moment
+    itself was reasonable — so an ambient nudge could be spoken over a live call.
+
+    One deterministic hard stop (never interrupt the brain mid-turn), then a
+    conservative Laya judgement over the live signals, which is where the fuzzy part
+    lives. FAIL-OPEN on kernel doubt: speak, i.e. today's behaviour.
+    """
+    if _brain_busy.is_set():
+        return False
+    try:
+        import webrtc_bridge
+        call_live = bool(webrtc_bridge.call_is_active())
+    except Exception:
+        call_live = False
+    away_for = ""
+    try:
+        if current_context.get("absence_since"):
+            away_for = f"{(datetime.now() - current_context['absence_since']).total_seconds():.0f}s"
+    except Exception:
+        pass
+    since_msg = _seconds_since_last_user_msg()
+    try:
+        import core.system1 as system1
+        if not system1.kernel_enabled():
+            return True
+        verdict = system1.check_state(
+            "Is this a good moment to say something unprompted to the owner?",
+            yes_description="yes — he is around and it is a natural moment to speak",
+            no_description="no — he is away, busy, or it would interrupt something",
+            state_text=(
+                f"a call is {'active' if call_live else 'not active'}; "
+                f"he has been away for {away_for or 'not away'}; "
+                f"seconds since his last message: "
+                f"{'unknown' if since_msg is None else f'{since_msg:.0f}'}"
+            ),
+            min_margin=0.5,
+        )
+    except Exception:
+        return True
+    if verdict.get("escalate"):
+        return True
+    return verdict.get("answer") is not False
+
+
 def _push_nudge(nudge: str) -> None:
     """Route a [System Internal] cue through WebRTC if a call is live, else Telegram."""
     if not _budget_remaining():
+        return
+    # ID 20: never speak into a bad moment (see _good_moment_to_speak).
+    if not _good_moment_to_speak():
+        print("[Awareness] Nudge dropped — not a good moment to speak.")
         return
     _record_unsolicited()
     try:

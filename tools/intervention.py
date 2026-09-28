@@ -91,6 +91,16 @@ def _send_telegram_intervention(text: str) -> None:
 def _trigger_intervention(category: str, window) -> None:
     """Flag the window and route an in-persona nudge through the brain."""
     global _flagged_window, _last_intervention
+    # ID 20: this path had its own copy of the delivery logic and never asked whether
+    # now was a reasonable moment — so a distraction nudge could be spoken over a live
+    # call. Gate it BEFORE mutating the trigger state, so a deferral can retry.
+    try:
+        from tools.awareness import _good_moment_to_speak
+        if not _good_moment_to_speak():
+            print("[Intervention] Deferred — not a good moment to speak.")
+            return
+    except Exception as e:
+        print(f"[Intervention] moment gate unavailable ({e}); proceeding")
     minutes = max(1, round(_focus_seconds / 60))
     _flagged_window = window
     _last_intervention = time.time()
