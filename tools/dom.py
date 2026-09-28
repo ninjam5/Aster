@@ -420,6 +420,14 @@ class RealProfileUnavailable(RuntimeError):
     dedicated Aster profile (login_once.py)."""
 
 
+class InsufficientMemoryForBrowser(RuntimeError):
+    """Raised when free system RAM is too low to safely launch Aster's browser.
+
+    Deterministic refusal (like RealProfileUnavailable): no retry, no launch.
+    Launching Chrome beside llama-server's mmap'd MoE experts OOM'd this machine
+    (2026-09-28). The message is surfaced to the model verbatim.
+    """
+
 def _real_profile_message() -> str:
     """Single source of truth for the honest, actionable refusal."""
     return (
@@ -447,6 +455,27 @@ def _free_port(start: int, tries: int = 20) -> int:
     return start
 
 
+def _memory_headroom_ok() -> tuple[bool, str]:
+    """True when there is enough free RAM to open a browser without OOMing the box.
+
+    Returns (ok, reason_when_not_ok). Never raises - on any probe failure it
+    returns True so a missing psutil cannot block browsing.
+    """
+    import config as _cfgmod
+    need = float(getattr(_cfgmod, "BROWSER_MIN_FREE_RAM_GB", 1.5) or 0)
+    if need <= 0:
+        return True, ""
+    try:
+        import psutil
+        avail_gb = psutil.virtual_memory().available / (1024 ** 3)
+    except Exception:
+        return True, ""
+    if avail_gb < need:
+        return False, (f"only {avail_gb:.1f} GB RAM free and opening a browser needs "
+                       f">= {need:.1f} GB - close some applications and try again")
+    return True, ""
+
+
 def _spawn_cdp_browser(pw, exe, profile, port, headless):
     """Spawn the system browser on a FREE debug port with the dedicated profile
     and attach. Returns (browser, context, mode, popen) or None.
@@ -457,6 +486,9 @@ def _spawn_cdp_browser(pw, exe, profile, port, headless):
     the port (that is how a stale guest hijacked the session)."""
     if not exe or headless or not profile:
         return None
+    ok, why = _memory_headroom_ok()
+    if not ok:
+        raise InsufficientMemoryForBrowser(why)
     import subprocess
     os.makedirs(profile, exist_ok=True)
     args = [exe, f"--remote-debugging-port={port}",
@@ -537,6 +569,9 @@ def _launch_own_browser(pw, port: int):
     if bool(getattr(_cfgmod, "BROWSER_USE_REAL_PROFILE", False)):
         raise RealProfileUnavailable(_real_profile_message())
     headless = bool(getattr(_cfgmod, "BROWSER_HEADLESS", False))
+    ok, why = _memory_headroom_ok()
+    if not ok:
+        raise InsufficientMemoryForBrowser(why)
 
     exe = None
     try:
@@ -647,6 +682,21 @@ def _attach_impl():
             print(f"[DOM] Attached to browser via CDP at {_cdp_url()}")
         return _WEB
     except RealProfileUnavailable:
+        raise
+    except InsufficientMemoryForBrowser as e:
+        # Deterministic refusal like RealProfileUnavailable: no failure cooldown
+        # (a low-RAM refusal must not poison the retry window) and re-raised so
+        # the caller hears the real reason instead of "is Chrome installed?".
+        if pw is not None:
+            try:
+                pw.stop()
+            except Exception:
+                pass
+        _WEB = None
+        _WEB_FAILED_AT = 0.0
+        _WEB_INFO["attached"] = False
+        _WEB_INFO["warning"] = str(e)
+        print(f"[DOM] browser launch refused ({e})")
         raise
     except Exception as e:
         if pw is not None:
@@ -1171,8 +1221,8 @@ def _browse_on_worker(url: str, query: str, site: str, max_chars: int):
     for attempt in (1, 2):
         try:
             ctx = _attach_impl()
-        except RealProfileUnavailable as e:
-            # Deterministic configuration refusal — no retry, no guest fallback.
+        except (RealProfileUnavailable, InsufficientMemoryForBrowser) as e:
+            # Deterministic refusals - no retry, no guest fallback.
             return {"ok": False, "error": str(e), "warning": str(e)}
         if ctx is None:
             return {"ok": False, "error": last}

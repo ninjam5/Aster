@@ -256,6 +256,12 @@ ICON_CAPTIONER = str(_cfg("vision", "icon_captioner", default="llm")).lower()
 # capping here cuts the encode cost ~2x with no measured quality loss (2026-09-27).
 SCREENSHOT_MAX_WIDTH = int(_cfg("vision", "screenshot_max_width", default=1280))
 
+# Minimum free system RAM (GB) required before Aster launches its own browser.
+# Launching Chrome on top of llama-server's mmap'd MoE experts has OOM'd this box
+# (2026-09-28: 2.1 GB free, commit 41.9/47.5 GB) - fail closed with a readable
+# message instead of dying mid-turn.
+BROWSER_MIN_FREE_RAM_GB = float(_cfg("automation", "browser_min_free_ram_gb", default=1.5))
+
 # ============================================================================
 # AUTOMATION MOTOR (DOM-first perception; see tools/dom.py, core/system1.py)
 # ============================================================================

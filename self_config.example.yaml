@@ -56,6 +56,10 @@ runtime:
   auto_compact_threshold: 0.75       # fraction of context_window that triggers auto-compaction (0.75 × 60k ≈ 45k tokens)
 
 automation:
+  # Minimum free system RAM (GB) before Aster launches its own browser for
+  # browse_web/research. Below this it refuses with a readable message instead
+  # of risking an OOM (llama-server's MoE experts + Chrome can exhaust RAM).
+  browser_min_free_ram_gb: 1.5
   # DOM-first perception motor (tools/dom.py). When enabled, web tasks are
   # driven through the attached browser's accessibility tree (Playwright over
   # CDP) and Windows tasks through a UIA shortlist before the OCR/YOLO

@@ -822,3 +822,44 @@ class TestDegradation:
         with patch.object(dom, "_web_call", side_effect=lambda fn, timeout=12.0: fn()), \
              patch.object(dom, "_active_page_impl", return_value=None):
             assert snapshot_web() == []
+
+
+class TestBrowserMemoryGuard:
+    """Feature 8 - low-RAM guard before launching Aster's browser (2026-09-28).
+
+    Launching Chrome beside llama-server's mmap'd MoE experts OOM'd the box
+    (2.1 GB free, commit 41.9/47.5). The guard refuses deterministically with a
+    readable message instead of dying mid-turn.
+    """
+
+    def test_headroom_ok_when_ram_is_ample(self):
+        fake = MagicMock()
+        fake.virtual_memory.return_value = MagicMock(available=8 * 1024 ** 3)
+        with patch.dict(sys.modules, {"psutil": fake}):
+            ok, why = dom._memory_headroom_ok()
+        assert ok is True and why == ""
+
+    def test_headroom_blocks_when_ram_is_low(self):
+        fake = MagicMock()
+        fake.virtual_memory.return_value = MagicMock(available=int(0.4 * 1024 ** 3))
+        with patch.dict(sys.modules, {"psutil": fake}):
+            ok, why = dom._memory_headroom_ok()
+        assert ok is False
+        assert "RAM free" in why and "close some applications" in why
+
+    def test_launch_own_browser_refuses_when_ram_is_low(self):
+        with patch.object(dom, "_memory_headroom_ok", return_value=(False, "low RAM")):
+            try:
+                dom._launch_own_browser(MagicMock(), 1234)
+            except dom.InsufficientMemoryForBrowser as e:
+                assert "low RAM" in str(e)
+            else:
+                raise AssertionError("expected InsufficientMemoryForBrowser")
+
+    def test_browse_returns_failure_without_retry_on_low_ram(self):
+        with patch.object(dom, "_attach_impl",
+                          side_effect=dom.InsufficientMemoryForBrowser("low RAM")):
+            with patch.object(dom, "_web_call", side_effect=lambda fn, timeout=None: fn()):
+                out = dom._browse_on_worker("https://example.com", "", "", 500)
+        assert out["ok"] is False
+        assert "low RAM" in out["error"]
