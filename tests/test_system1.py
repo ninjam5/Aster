@@ -364,3 +364,193 @@ class TestHardening:
         assert len(lines) == 200
         for line in lines:
             json.loads(line)  # every appended line must parse
+
+
+# ============================================================================
+# Feature 7 — choose (generic bounded choice)
+# ============================================================================
+
+class TestChoose:
+    def test_high_margin_choice_wins(self):
+        answer = {"choice": "B", "probabilities": {"A": 0.1, "B": 0.8, "C": 0.1}}
+        with patch.object(system1, "_predict", return_value=_laya_result("pick", answer)):
+            v = system1.choose("which bucket?", {"A": "one", "B": "two", "C": "three"}, key="pick")
+        assert v["choice"] == "B" and v["escalate"] is False
+        assert v["margin"] == pytest.approx(0.7)
+        assert v["keys"] == ["A", "B", "C"]
+
+    def test_accepts_a_list_of_labels(self):
+        captured = {}
+
+        def fake_predict(state, questions):
+            captured.update(questions["pick"]["criteria"])
+            return _laya_result("pick", {"choice": "A", "probabilities": {"A": 0.9, "B": 0.1}})
+
+        with patch.object(system1, "_predict", side_effect=fake_predict):
+            v = system1.choose("q", ["male", "female", "unknown"], key="pick")
+        assert captured == {"A": "male", "B": "female", "C": "unknown"}
+        assert v["choice"] == "A" and v["escalate"] is False
+
+    def test_low_margin_escalates_but_reports_choice(self):
+        answer = {"choice": "A", "probabilities": {"A": 0.4, "B": 0.35, "C": 0.25}}
+        with patch.object(system1, "_predict", return_value=_laya_result("pick", answer)):
+            v = system1.choose("q", ["x", "y", "z"], key="pick")
+        assert v["choice"] == "A" and v["escalate"] is True
+        assert v["reason"] == "low or unavailable margin"
+
+    def test_kernel_failure_escalates(self):
+        with patch.object(system1, "_predict", side_effect=RuntimeError("no model")):
+            v = system1.choose("q", ["x", "y"], key="pick")
+        assert v["choice"] is None and v["escalate"] is True
+        assert "kernel failure" in v["reason"]
+
+    def test_empty_criteria_escalates(self):
+        v = system1.choose("q", {}, key="pick")
+        assert v["escalate"] is True and v["reason"] == "empty criteria"
+
+    def test_unrecognized_choice_escalates(self):
+        answer = {"choice": "Z", "probabilities": {"A": 0.9, "B": 0.1}}
+        with patch.object(system1, "_predict", return_value=_laya_result("pick", answer)):
+            v = system1.choose("q", ["x", "y"], key="pick")
+        assert v["escalate"] is True and v["choice"] is None
+
+    def test_state_text_reaches_the_model(self):
+        seen = {}
+
+        def fake_predict(state, questions):
+            seen.update(state)
+            return _laya_result("pick", {"choice": "A", "probabilities": {"A": 0.9, "B": 0.1}})
+
+        with patch.object(system1, "_predict", side_effect=fake_predict):
+            system1.choose("q", ["x", "y"], key="pick", state={"transcript": "hello there"})
+        assert seen["transcript"] == "hello there"
+        assert seen["question"] == "q"
+
+
+# ============================================================================
+# Feature 8 — score_candidates (ordinal scoring; NOT a per-candidate probability)
+# ============================================================================
+
+class TestScoreCandidates:
+    LEVELS = ["irrelevant", "background", "partly answers", "answers"]
+
+    def _score_result(self, mapping):
+        return {"answers": {k: {"type": "score", "score": v, "answer_confidence": 0.9}
+                            for k, v in mapping.items()}}
+
+    def test_ranks_by_expected_level_index(self):
+        res = self._score_result({"A": 3.0, "B": 0.5, "C": 2.0})
+        with patch.object(system1, "_predict", return_value=res):
+            v = system1.score_candidates(self.LEVELS, "does this answer it?", {"A": "a", "B": "b", "C": "c"})
+        assert v["best"] == "A"
+        assert v["scores"]["A"] == pytest.approx(3.0)
+        # normalized against len(levels)-1 == 3
+        assert v["normalized"]["A"] == pytest.approx(1.0)
+        assert v["normalized"]["B"] == pytest.approx(0.5 / 3)
+        assert v["margin"] == pytest.approx(1.0 - (2.0 / 3))
+        assert v["escalate"] is False
+
+    def test_batches_one_question_per_candidate(self):
+        seen = {}
+
+        def fake_predict(state, questions):
+            seen["n"] = len(questions)
+            seen["types"] = {q["type"] for q in questions.values()}
+            seen["criteria"] = [q["criteria"] for q in questions.values()]
+            return self._score_result({"A": 3.0, "B": 0.0})
+
+        with patch.object(system1, "_predict", side_effect=fake_predict):
+            system1.score_candidates(self.LEVELS, "q", ["one", "two"])
+        assert seen["n"] == 2
+        assert seen["types"] == {"score"}
+        assert all(c == self.LEVELS for c in seen["criteria"])
+
+    def test_near_tie_escalates(self):
+        res = self._score_result({"A": 2.0, "B": 2.0})
+        with patch.object(system1, "_predict", return_value=res):
+            v = system1.score_candidates(self.LEVELS, "q", {"A": "a", "B": "b"})
+        assert v["escalate"] is True and v["reason"] == "low or unavailable margin"
+
+    def test_single_candidate_escalates_on_low_answer_confidence(self):
+        res = {"answers": {"A": {"type": "score", "score": 2.0, "answer_confidence": 0.2}}}
+        with patch.object(system1, "_predict", return_value=res):
+            v = system1.score_candidates(self.LEVELS, "q", ["only"])
+        assert v["best"] == "A" and v["escalate"] is True
+        assert "answer confidence" in v["reason"]
+
+    def test_single_candidate_ok_when_confident(self):
+        res = {"answers": {"A": {"type": "score", "score": 3.0, "answer_confidence": 0.8}}}
+        with patch.object(system1, "_predict", return_value=res):
+            v = system1.score_candidates(self.LEVELS, "q", ["only"])
+        assert v["best"] == "A" and v["escalate"] is False and v["margin"] is None
+
+    def test_kernel_failure_escalates(self):
+        with patch.object(system1, "_predict", side_effect=RuntimeError("boom")):
+            v = system1.score_candidates(self.LEVELS, "q", ["a", "b"])
+        assert v["best"] is None and v["escalate"] is True
+        assert "kernel failure" in v["reason"]
+
+    def test_empty_levels_escalates(self):
+        v = system1.score_candidates([], "q", ["a"])
+        assert v["escalate"] is True and v["reason"] == "empty levels"
+
+    def test_empty_candidates_escalates(self):
+        v = system1.score_candidates(self.LEVELS, "q", {})
+        assert v["escalate"] is True and v["reason"] == "empty candidates"
+
+    def test_unscored_candidates_are_skipped(self):
+        res = {"answers": {"A": {"type": "score", "score": 2.0, "answer_confidence": 0.9}}}
+        with patch.object(system1, "_predict", return_value=res):
+            v = system1.score_candidates(self.LEVELS, "q", {"A": "a", "B": "b"})
+        assert v["best"] == "A" and "B" not in v["scores"]
+        assert v["escalate"] is False  # single usable score -> confidence gate only
+
+    def test_no_usable_scores_escalates(self):
+        res = {"answers": {"A": {"type": "score"}}}
+        with patch.object(system1, "_predict", return_value=res):
+            v = system1.score_candidates(self.LEVELS, "q", {"A": "a"})
+        assert v["escalate"] is True
+        assert "no usable scores" in v["reason"]
+
+
+# ============================================================================
+# Feature 9 — ask_batch (independent questions, one forward pass)
+# ============================================================================
+
+class TestAskBatch:
+    def test_runs_all_questions_in_one_call(self):
+        calls = []
+
+        def fake_predict(state, questions):
+            calls.append(len(questions))
+            return {"answers": {qid: {"type": "choice", "choice": "A",
+                                      "probabilities": {"A": 0.9, "B": 0.1}}
+                                for qid in questions}}
+
+        qs = {
+            "addressed": {"type": "choice", "instructions": "addressed to Aster?",
+                          "criteria": {"A": "yes", "B": "no"}},
+            "urgent": {"type": "choice", "instructions": "is it urgent?",
+                       "criteria": {"A": "yes", "B": "no"}},
+        }
+        with patch.object(system1, "_predict", side_effect=fake_predict):
+            out = system1.ask_batch(qs, state={"transcript": "hey aster"})
+        assert calls == [2]  # ONE predict for two questions
+        assert out["ok"] is True
+        assert set(out["answers"]) == {"addressed", "urgent"}
+
+    def test_empty_questions_is_not_ok(self):
+        out = system1.ask_batch({})
+        assert out["ok"] is False and out["error"] == "empty questions"
+
+    def test_kernel_failure_never_raises(self):
+        with patch.object(system1, "_predict", side_effect=RuntimeError("no model")):
+            out = system1.ask_batch({"q": {"type": "choice", "instructions": "x",
+                                           "criteria": {"A": "a", "B": "b"}}})
+        assert out["ok"] is False and "kernel failure" in out["error"]
+
+    def test_malformed_response_is_not_ok(self):
+        with patch.object(system1, "_predict", return_value={"nope": 1}):
+            out = system1.ask_batch({"q": {"type": "choice", "instructions": "x",
+                                           "criteria": {"A": "a", "B": "b"}}})
+        assert out["ok"] is False and "no answers" in out["error"]

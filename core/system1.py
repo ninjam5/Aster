@@ -342,6 +342,160 @@ def check_state(question: str, yes_description: str, no_description: str,
                     state_text=state_text)
 
 
+def _criteria_dict(criteria) -> dict:
+    """Normalize caller-supplied options into {KEY: description} with neutral keys.
+
+    Accepts a dict (keys preserved, values stringified) or a list/tuple of labels
+    (keys A, B, C... in order). Laya itself accepts either shape; normalizing here
+    means callers of `choose`/`score_candidates` never have to think about keys.
+    """
+    if isinstance(criteria, dict):
+        return {str(k): ("" if v is None else str(v)) for k, v in criteria.items()}
+    if isinstance(criteria, (list, tuple)):
+        return {chr(ord("A") + i): str(c) for i, c in enumerate(criteria)}
+    return {}
+
+
+def choose(question: str, criteria, key: str = "choice", state: dict = None,
+           kind: str = "choice") -> dict:
+    """Generic bounded choice over caller-supplied options (neutral keys).
+
+    The workhorse for every non-DOM decision: pass the question and the option set,
+    get back the picked option plus a margin-gated verdict. Use `check_state` for
+    the common binary yes/no case; use this for >2 options or caller-defined keys.
+
+    `criteria` is a dict {KEY: description} (keys preserved) or a list of labels
+    (keys A..R in order). `key` is the question id in the Laya payload (only matters
+    for debugging/log correlation). `state` adds extra text the model should see.
+
+    Returns the standard verdict dict: {"choice", "margin", "distribution",
+    "escalate", "reason", "keys", "criteria", "threshold", ...}. Escalation is
+    caller-owned — never act on an `escalate=True` verdict without a fallback.
+    """
+    options = _criteria_dict(criteria)
+    qid = str(key or "choice")
+    if not options:
+        return _verdict(kind, question, None, None, None, True, "empty criteria",
+                        key=None, keys=[], criteria={})
+    state_payload = {"question": question, "options": options}
+    if state:
+        state_payload.update(state)
+    questions = {qid: {"type": "choice", "instructions": question, "criteria": options}}
+    choice, margin, distribution, reason = _ask(state_payload, questions, qid, set(options))
+    escalate = choice is None or _gate_escalates(margin)
+    if escalate and not reason:
+        reason = "unrecognized choice" if choice is None else "low or unavailable margin"
+    return _verdict(kind, question, choice, margin, distribution, escalate, reason,
+                    key=choice, keys=list(options), criteria=options)
+
+
+def score_candidates(levels, instruction: str, candidates, state: dict = None,
+                     min_confidence: float = 0.5) -> dict:
+    """Ordinal-score candidates on a caller-defined ordered scale (Laya `score`).
+
+    IMPORTANT — Laya's `score` is NOT a per-candidate probability. Its answer is the
+    **expected level index** over `levels`, so `levels` must run worst -> best
+    (index 0 first), e.g. ["irrelevant", "background", "partly answers", "answers"].
+    To rank N candidates we issue one score question per candidate and run them all
+    in a SINGLE batched forward pass (that is what `_predict` is for).
+
+    Returns {"scores": {id: raw_index}, "normalized": {id: 0..1}, "best": id|None,
+    "margin": float|None, "answer_confidence": {id: float}, "escalate", "reason", ...}.
+
+    Escalation: multiple candidates escalate when the normalized best-vs-runner-up
+    margin is below the gate; a single candidate escalates when its calibrated
+    `answer_confidence` is below `min_confidence` (there is no margin to compare).
+    """
+    lv = [str(x) for x in (levels or [])]
+    cands = _criteria_dict(candidates)
+    base = {"levels": lv, "scores": {}, "normalized": {}, "best": None,
+            "answer_confidence": {}, "keys": list(cands)}
+    if not lv:
+        return _verdict("score", instruction, None, None, None, True, "empty levels", **base)
+    if not cands:
+        return _verdict("score", instruction, None, None, None, True, "empty candidates", **base)
+    scale = max(1, len(lv) - 1)
+    state_payload = {"question": instruction, "levels": lv}
+    if state:
+        state_payload.update(state)
+    questions = {
+        cid: {"type": "score",
+              "instructions": f"{instruction} Candidate: {desc}",
+              "criteria": lv}
+        for cid, desc in cands.items()
+    }
+    try:
+        result = _predict(state_payload, questions)
+    except Exception as e:
+        return _verdict("score", instruction, None, None, None, True,
+                        f"kernel failure: {e.__class__.__name__}: {e}", **base)
+    answers = result.get("answers") if isinstance(result, dict) else None
+    if not isinstance(answers, dict):
+        return _verdict("score", instruction, None, None, None, True,
+                        "no answers in model response", **base)
+    scores, normalized, conf = {}, {}, {}
+    for cid in cands:
+        answer = answers.get(cid)
+        if not isinstance(answer, dict) or answer.get("score") is None:
+            continue
+        try:
+            raw = float(answer["score"])
+        except (TypeError, ValueError):
+            continue
+        scores[cid] = raw
+        normalized[cid] = max(0.0, min(1.0, raw / scale))
+        try:
+            conf[cid] = float(answer.get("answer_confidence"))
+        except (TypeError, ValueError):
+            pass
+    if not scores:
+        return _verdict("score", instruction, None, None, None, True,
+                        "no usable scores in model response", **base)
+    order = sorted(scores, key=lambda c: scores[c], reverse=True)
+    best = order[0]
+    margin = None
+    escalate, reason = False, ""
+    if len(order) > 1:
+        margin = normalized[best] - normalized[order[1]]
+        if _gate_escalates(margin):
+            escalate, reason = True, "low or unavailable margin"
+    else:
+        c = conf.get(best)
+        if c is not None and c < float(min_confidence):
+            escalate = True
+            reason = f"low answer confidence ({c:.2f} < {min_confidence})"
+    return _verdict("score", instruction, best, margin, None, escalate, reason,
+                    scores=scores, normalized=normalized, best=best, levels=lv,
+                    answer_confidence=conf, keys=list(cands))
+
+
+def ask_batch(questions: dict, state: dict = None) -> dict:
+    """Run several INDEPENDENT questions in ONE forward pass.
+
+    `questions` is the raw Laya payload: {qid: {"type": "choice"|"score"|"noul",
+    "instructions": str, "criteria": ...}}. This is the batching seam — independent
+    gates cost one model call, not N, which is what makes Laya viable per turn.
+
+    Returns {"ok": bool, "answers": {qid: answer}, "error": str}. Callers own the
+    margin gate per answer; for a single decision with gating use `choose`,
+    `score_candidates` or `check_state` instead.
+    """
+    if not questions:
+        return {"ok": False, "answers": {}, "error": "empty questions"}
+    try:
+        result = _predict(dict(state or {}), questions)
+    except Exception as e:
+        return {"ok": False, "answers": {},
+                "error": f"kernel failure: {e.__class__.__name__}: {e}"}
+    if not isinstance(result, dict) or not isinstance(result.get("answers"), dict):
+        return {"ok": False, "answers": {}, "error": "no answers in model response"}
+    _log({"kind": "batch", "goal": "", "choice": None, "margin": None,
+          "distribution": None, "escalate": False, "reason": "",
+          "threshold": _margin_threshold(), "questions": list(questions),
+          "answered": sorted(result["answers"])})
+    return {"ok": True, "answers": result["answers"], "error": ""}
+
+
 def kernel_status() -> dict:
     """Cheap, read-only status (never loads the model)."""
     status = {"enabled": kernel_enabled(), "loaded": _MODEL is not None,

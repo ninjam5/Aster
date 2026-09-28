@@ -48,6 +48,31 @@ callers**.
 
 > Until P1–P3 are done, no item below can be safely or efficiently enabled.
 
+### Phase 0 status — DONE 2026-09-28 (branch `qwen-3.6/laya-integration`)
+
+| Prereq | Status | Detail |
+|--------|--------|--------|
+| **P1** | **DONE** | `choose(question, criteria, key, state)` and `score_candidates(levels, instruction, candidates, state, min_confidence)` added to `core/system1.py`, plus `ask_batch(questions, state)` — the batching seam (independent gates cost **one** forward pass). `criteria` accepts a dict or a plain list of labels. 21 new tests → `tests/test_system1.py` **51 passed**. |
+| **P2** | **DONE (live)** | `laya_margin_threshold` **0.01 → 0.25** in `self_config.yaml`. Proper calibration from a precision curve (`engine_testing/calibrate_system1.py`) is still **pending** — it needs a labeled decision set. Needs a `main.py` restart to take effect. |
+| **P3** | **DONE (live)** | `laya_keep_resident` **false → true** in `self_config.yaml`. |
+
+**Measured (one-off probe, CPU):** Laya costs **~2.2 GB RSS** resident, **34.6 s** cold
+load, **0.31 s** per `predict`. With `keep_resident: false` every decision paid a reload —
+that is why per-turn use requires resident. **RAM caveat:** on a RAM-starved box (llama-server
+MoE experts + browser), 2.2 GB resident is real money; `keep_resident: false` remains the
+conservative choice for rare/background calls.
+
+**Laya `score` semantics (important):** a score answer is the **expected level index** over
+an ordered `criteria` list, **not** a per-candidate probability — so `levels` must run
+**worst → best**, and ranking N candidates means N batched score questions (which
+`score_candidates` does in one pass).
+
+**New calibration caveat:** the shipped checkpoint logs
+*"invalid temperatures … using choice:11+=0.1006 -> 0.5. Treat confidence from the affected
+entries as uncalibrated"* — i.e. Laya's confidence is **uncalibrated for choice questions
+with 11+ options**. That directly affects the ≥11-candidate uses (tool shortlisting,
+recall rerank, contact lists); their gates should not be trusted until calibrated.
+
 ---
 
 ## 3. Build order at a glance (first → last)
