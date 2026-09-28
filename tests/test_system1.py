@@ -554,3 +554,45 @@ class TestAskBatch:
             out = system1.ask_batch({"q": {"type": "choice", "instructions": "x",
                                            "criteria": {"A": "a", "B": "b"}}})
         assert out["ok"] is False and "no answers" in out["error"]
+
+
+# ============================================================================
+# Feature 10 — per-call margin threshold (min_margin)
+# ============================================================================
+
+class TestPerCallThreshold:
+    """Write-time and safety-critical gates need a stricter threshold than the
+    DOM motor's global one, so `choose`/`check_state` accept `min_margin`."""
+
+    def test_choose_default_uses_the_global_threshold(self):
+        answer = {"choice": "A", "probabilities": {"A": 0.6, "B": 0.35}}
+        with patch.object(system1, "_predict", return_value=_laya_result("pick", answer)):
+            v = system1.choose("q", ["x", "y"], key="pick")
+        assert v["margin"] == pytest.approx(0.25)
+        assert v["escalate"] is False  # 0.25 >= the 0.25 default
+
+    def test_choose_min_margin_escalates_a_borderline_margin(self):
+        answer = {"choice": "A", "probabilities": {"A": 0.6, "B": 0.35}}
+        with patch.object(system1, "_predict", return_value=_laya_result("pick", answer)):
+            v = system1.choose("q", ["x", "y"], key="pick", min_margin=0.5)
+        assert v["escalate"] is True
+        assert v["threshold"] == pytest.approx(0.5)
+
+    def test_choose_min_margin_still_passes_a_confident_margin(self):
+        answer = {"choice": "A", "probabilities": {"A": 0.9, "B": 0.05}}
+        with patch.object(system1, "_predict", return_value=_laya_result("pick", answer)):
+            v = system1.choose("q", ["x", "y"], key="pick", min_margin=0.5)
+        assert v["escalate"] is False
+
+    def test_check_state_min_margin(self):
+        answer = {"choice": "A", "probabilities": {"A": 0.75, "B": 0.25}}
+        with patch.object(system1, "_predict", return_value=_laya_result("check", answer)):
+            v = system1.check_state("q", "yes", "no", min_margin=0.6)
+        assert v["answer"] is True and v["escalate"] is True
+        assert v["threshold"] == pytest.approx(0.6)
+
+    def test_check_state_default_still_works(self):
+        answer = {"choice": "B", "probabilities": {"A": 0.1, "B": 0.9}}
+        with patch.object(system1, "_predict", return_value=_laya_result("check", answer)):
+            v = system1.check_state("q", "yes", "no")
+        assert v["answer"] is False and v["escalate"] is False

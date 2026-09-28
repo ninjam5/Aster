@@ -213,9 +213,14 @@ def _extract_choice(answer: dict, valid_keys: set):
     return choice, margin, distribution
 
 
-def _gate_escalates(margin) -> bool:
-    """True when a margin is missing, non-finite, or below threshold."""
-    threshold = _margin_threshold()
+def _gate_escalates(margin, threshold: float = None) -> bool:
+    """True when a margin is missing, non-finite, or below `threshold`.
+
+    `threshold` overrides the global `LAYA_MARGIN_THRESHOLD` for one call — write-time
+    and safety-critical decisions use a stricter value than the DOM motor's.
+    """
+    if threshold is None:
+        threshold = _margin_threshold()
     if margin is None or not math.isfinite(margin):
         return True
     return margin < threshold
@@ -318,12 +323,14 @@ def pick_operation(goal: str) -> dict:
 
 
 def check_state(question: str, yes_description: str, no_description: str,
-                state_text: str = "") -> dict:
+                state_text: str = "", min_margin: float = None) -> dict:
     """Neutral-key yes/no gate (deliberately NOT Laya `noul` — bug #156).
 
+    `min_margin` overrides the global threshold for this call.
     Returns {"answer": bool | None, "margin", "escalate", ...}.
     """
     criteria = {"A": yes_description, "B": no_description}
+    effective = _margin_threshold() if min_margin is None else float(min_margin)
     questions = {
         "check": {"type": "choice", "instructions": question, "criteria": criteria}
     }
@@ -334,12 +341,12 @@ def check_state(question: str, yes_description: str, no_description: str,
         answer = True
     elif choice == "B":
         answer = False
-    escalate = answer is None or _gate_escalates(margin)
+    escalate = answer is None or _gate_escalates(margin, effective)
     if escalate and not reason:
         reason = "unrecognized answer" if answer is None else "low or unavailable margin"
     return _verdict("state", question, answer, margin, distribution, escalate,
                     reason, key=choice, answer=answer, criteria=criteria,
-                    state_text=state_text)
+                    state_text=state_text, threshold=effective)
 
 
 def _criteria_dict(criteria) -> dict:
@@ -357,7 +364,7 @@ def _criteria_dict(criteria) -> dict:
 
 
 def choose(question: str, criteria, key: str = "choice", state: dict = None,
-           kind: str = "choice") -> dict:
+           kind: str = "choice", min_margin: float = None) -> dict:
     """Generic bounded choice over caller-supplied options (neutral keys).
 
     The workhorse for every non-DOM decision: pass the question and the option set,
@@ -367,6 +374,8 @@ def choose(question: str, criteria, key: str = "choice", state: dict = None,
     `criteria` is a dict {KEY: description} (keys preserved) or a list of labels
     (keys A..R in order). `key` is the question id in the Laya payload (only matters
     for debugging/log correlation). `state` adds extra text the model should see.
+    `min_margin` overrides the global threshold for this call (write-time and
+    safety-critical gates use a stricter value).
 
     Returns the standard verdict dict: {"choice", "margin", "distribution",
     "escalate", "reason", "keys", "criteria", "threshold", ...}. Escalation is
@@ -374,19 +383,20 @@ def choose(question: str, criteria, key: str = "choice", state: dict = None,
     """
     options = _criteria_dict(criteria)
     qid = str(key or "choice")
+    effective = _margin_threshold() if min_margin is None else float(min_margin)
     if not options:
         return _verdict(kind, question, None, None, None, True, "empty criteria",
-                        key=None, keys=[], criteria={})
+                        key=None, keys=[], criteria={}, threshold=effective)
     state_payload = {"question": question, "options": options}
     if state:
         state_payload.update(state)
     questions = {qid: {"type": "choice", "instructions": question, "criteria": options}}
     choice, margin, distribution, reason = _ask(state_payload, questions, qid, set(options))
-    escalate = choice is None or _gate_escalates(margin)
+    escalate = choice is None or _gate_escalates(margin, effective)
     if escalate and not reason:
         reason = "unrecognized choice" if choice is None else "low or unavailable margin"
     return _verdict(kind, question, choice, margin, distribution, escalate, reason,
-                    key=choice, keys=list(options), criteria=options)
+                    key=choice, keys=list(options), criteria=options, threshold=effective)
 
 
 def score_candidates(levels, instruction: str, candidates, state: dict = None,
@@ -467,6 +477,29 @@ def score_candidates(levels, instruction: str, candidates, state: dict = None,
     return _verdict("score", instruction, best, margin, None, escalate, reason,
                     scores=scores, normalized=normalized, best=best, levels=lv,
                     answer_confidence=conf, keys=list(cands))
+
+
+def answer_margin(answer: dict) -> float | None:
+    """top1-top2 margin of a RAW answer dict (choice/score probabilities).
+
+    For callers that batch independent questions through `ask_batch` and must gate
+    each answer themselves — batched answers do not go through `_verdict`, so the
+    caller needs the margin to apply its own (often stricter) threshold. Returns
+    None when the distribution is missing or degenerate.
+    """
+    if not isinstance(answer, dict):
+        return None
+    probs = answer.get("probabilities") or {}
+    if not isinstance(probs, dict):
+        return None
+    try:
+        vals = sorted((float(v) for v in probs.values()), reverse=True)
+    except (TypeError, ValueError):
+        return None
+    if len(vals) < 2:
+        return None
+    margin = vals[0] - vals[1]
+    return margin if math.isfinite(margin) else None
 
 
 def ask_batch(questions: dict, state: dict = None) -> dict:

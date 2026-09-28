@@ -1,3 +1,4 @@
+import difflib
 import math
 import os
 import re
@@ -10,22 +11,168 @@ from config import MEMORY_AVAILABLE, MD_FILE, memory_collection
 
 
 # ============================================================================
+# LAYA WRITE GATE  (Phase 2 of laya-integration.md — IDs 9 / 10 / 11)
+# ============================================================================
+# The dedup gate used to live only in the brain's `memorize_fact` tool dispatch, so
+# gmail_tool, face_server, vision and the Discord sync all bypassed it — that is how
+# the duplicate pairs (memory.md:9/11, :10/12) and ~78 "Aster sent an email reply"
+# lines got in. It now runs HERE, at the single choke point every writer goes through.
+_GATE_MARGIN = 0.5  # stricter than the DOM motor's 0.25: a wrong "skip" loses a fact
+_NONE_KEY = "Z"
+_NONE_OPTION = "none of these — this is new information"
+
+
+def _similar_existing_facts(fact: str, k: int = 6) -> list:
+    """The k most textually similar existing vault facts (timestamp prefix stripped)."""
+    if not os.path.exists(MD_FILE):
+        return []
+    try:
+        with open(MD_FILE, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except Exception:
+        return []
+    fact_clean = fact.strip().lower()
+    scored = []
+    for line in lines:
+        m = re.match(r"- \*\*\[.+?\]\*\*\s*(.*)", line)
+        text = (m.group(1) if m else line).strip()
+        if text:
+            scored.append((difflib.SequenceMatcher(None, fact_clean, text.lower()).ratio(), text))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [t for _, t in scored[:k]]
+
+
+def _pick_saved_fact(system1, question: str, fact: str, candidates: list, key: str):
+    """Laya candidate-pick over saved facts. Returns (matched_fact_or_None, verdict).
+
+    Laya's STRONG shape: the candidates are the `criteria` and the new fact is the
+    state (same shape as `pick_element` / the Wikipedia article pick). Batching
+    several of these into one pass DEGRADED the margins — a verbatim duplicate scored
+    0.14 batched vs 0.72 alone — so each question gets its own call.
+    """
+    criteria = {chr(65 + i): c[:200] for i, c in enumerate(candidates[:8])}
+    criteria[_NONE_KEY] = _NONE_OPTION
+    verdict = system1.choose(question, criteria, key=key,
+                             state={"new_fact": fact}, min_margin=_GATE_MARGIN)
+    if verdict.get("escalate"):
+        return None, verdict
+    choice = verdict.get("choice")
+    if not choice or choice == _NONE_KEY:
+        return None, verdict
+    return criteria.get(choice), verdict
+
+
+def _gate_fact(fact: str) -> dict:
+    """Laya write gate: is this junk, a duplicate, or in conflict with a saved fact?
+
+    CONSERVATIVE — any escalation, missing answer, or kernel failure means WRITE: a
+    fact is never silently dropped on a weak signal. Shapes and thresholds below were
+    picked from live probes (see laya-integration.md Phase 2 status).
+    Returns {"skip", "reason", "category", "conflict", "supersedes"}.
+    """
+    decision = {"skip": False, "reason": "", "category": "", "conflict": "", "supersedes": None}
+    try:
+        import core.system1 as system1
+        if not system1.kernel_enabled():
+            return decision
+
+        # ID 10 — junk filter (neutral-key binary). Verified live: the email action log
+        # answers False with margin 0.55; real facts escalate, so they are written.
+        junk = system1.check_state(
+            "Is this a durable personal fact about the owner, or an action log / system "
+            "event / status report?",
+            yes_description="a durable personal fact about the owner",
+            no_description="an action log, system event, or status report — not a personal fact",
+            state_text=f"item: {fact[:400]}",
+            min_margin=_GATE_MARGIN,
+        )
+        if not junk.get("escalate") and junk.get("answer") is False:
+            decision.update(skip=True, category="junk",
+                            reason="classified as an action log / system event, not a personal fact")
+            return decision
+
+        candidates = _similar_existing_facts(fact, 6)
+        if not candidates:
+            return decision
+
+        # ID 11 — duplicate / paraphrase. Verified live: a verbatim duplicate picks the
+        # matching saved fact with margin 0.72; a new detail picks "none".
+        matched, _ = _pick_saved_fact(
+            system1,
+            "Which saved fact already contains this information? (Same meaning counts, "
+            "even if the wording differs.)",
+            fact, candidates, key="duplicate")
+        if matched:
+            decision.update(skip=True, category="fact",
+                            reason="already saved — the same information is in the vault")
+            return decision
+
+        # ID 9 — contradiction / supersede detection is NOT enabled. Measured live
+        # 2026-09-28: the candidate-pick shape ("which saved fact does this REPLACE /
+        # CONTRADICT?") returned margins 0.00-0.07, and a binary pair check returned
+        # 0.16-0.28 with a wrong "contradicts" on unrelated text — both inert at the
+        # 0.5 write threshold. Shipping it would add two Laya calls per write for
+        # nothing, so the fields below stay empty and the plumbing in `memorize_fact`
+        # (the SUPERSEDE / CONTRADICTS notes) is kept as the seam for a future,
+        # calibrated detector. Do not re-add without a fresh measurement.
+        return decision
+    except Exception as e:
+        decision["reason"] = f"gate error ({e.__class__.__name__}: {e})"
+        return decision
+
+
+# ============================================================================
 # HYBRID MEMORY TOOLS
 # ============================================================================
-def memorize_fact(fact):
-    """Dual-writes a fact to both the Markdown vault and ChromaDB."""
+def memorize_fact(fact, source: str = "agent", skip_gate: bool = False):
+    """Dual-writes a fact to both the Markdown vault and ChromaDB.
+
+    Runs the Laya write gate first (Phase 2) unless `skip_gate` is set. The gate can
+    SKIP a write (confident duplicate or junk) and reports a detected conflict — it
+    never deletes or rewrites existing facts.
+    """
     if not MEMORY_AVAILABLE: return "Error: Memory system offline."
+    fact = str(fact or "").strip()
+    if not fact:
+        return "Error: empty fact."
+
+    decision = {"skip": False, "reason": "", "category": "", "conflict": "", "supersedes": None}
+    if not skip_gate:
+        decision = _gate_fact(fact)
+        if decision.get("skip"):
+            print(f"[Aster Internal: Memory write skipped by Laya gate "
+                  f"({decision['reason']}): '{fact[:80]}']")
+            try:
+                import core.instrumentation as _inst
+                _inst.record_event("memory_write_skip", source=source,
+                                   reason=decision.get("reason", ""), fact=fact[:200])
+            except Exception:
+                pass
+            return (f"[System Note: NOT saved — {decision['reason']}. The information is "
+                    f"already covered, or it is not a durable personal fact.]")
+
     try:
         # 1. Write to Human-Readable Markdown
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with open(MD_FILE, "a", encoding="utf-8") as f:
             f.write(f"- **[{timestamp}]** {fact}\n")
 
-        # 2. Write to Semantic Vector Database
-        doc_id = f"mem_{int(time.time())}"
+        # 2. Write to Semantic Vector Database. The id used to be second-granular
+        #    (`mem_{int(time.time())}`), so facts written in the same second collided
+        #    and were silently dropped by ChromaDB.
+        doc_id = f"mem_{int(time.time() * 1000)}_{abs(hash(fact)) % 100000}"
         memory_collection.add(documents=[fact], ids=[doc_id])
 
-        return f"Successfully committed to Vault and Neural DB: '{fact}'"
+        result = f"Successfully committed to Vault and Neural DB: '{fact}'"
+        if decision.get("conflict") == "supersedes":
+            result += (f"\n[NOTE: this appears to SUPERSEDE an earlier fact: "
+                       f"'{str(decision.get('supersedes'))[:120]}'. Tell {_config.OWNER_NAME} "
+                       f"and offer to forget the old one.]")
+        elif decision.get("conflict") == "contradicts":
+            result += (f"\n[NOTE: this CONTRADICTS an earlier fact: "
+                       f"'{str(decision.get('supersedes'))[:120]}'. Surface it to "
+                       f"{_config.OWNER_NAME}; do not silently treat both as true.]")
+        return result
     except Exception as e:
         return f"Failed to memorize: {e}"
 

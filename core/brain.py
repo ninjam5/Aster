@@ -1541,7 +1541,7 @@ def sync_discord_memories() -> str:
     """Moves unsynced Discord staging facts into Admin long-term vector memory."""
 
     def _vector_save(formatted_fact: str) -> str:
-        return memorize_fact(formatted_fact)
+        return memorize_fact(formatted_fact, source="discord_sync")
 
     return sync_unsynced_facts(_vector_save)
 
@@ -1704,7 +1704,8 @@ def _execute_tool_impl(tool_name, arguments):
             return "[System Note: This fact already exists in your permanent memory vault. Database write bypassed to prevent duplicates.]"
             
         # If it's a completely new fact, proceed with the actual database write
-        return memorize_fact(fact_to_save)
+        # (the Laya write gate runs inside memorize_fact, covering every writer)
+        return memorize_fact(fact_to_save, source="tool")
     elif tool_name == "recall_memory":
         return recall_memory(arguments.get("query", ""))
     elif tool_name == "aster_shutdown_protocol":
@@ -2359,6 +2360,7 @@ def _session_may_hold_new_facts(recent_turns: list[str]) -> tuple[bool, str]:
             },
             key="new_fact",
             state={"recent_messages": digest},
+            min_margin=0.5,  # strict: a false "no new facts" silently loses a fact
         )
     except Exception as e:
         return True, f"kernel failure ({e.__class__.__name__})"

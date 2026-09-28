@@ -113,6 +113,49 @@ distribution is *less* sharp than the checkpoint intended, so gates there over-e
 **Tests:** `tests/test_memory_consolidation.py` (12), `tests/test_laya_gates.py` (17),
 `tests/test_rag.py` (+16), `tests/test_dom.py` (+7) — suite **541 passed**.
 
+### Phase 2 status — DONE 2026-09-28 (one item measured OUT, not shipped)
+
+| ID | Item | Result |
+|----|------|--------|
+| **11** | Dedup at every write | **SHIPPED** — the gate moved into `core.memory.memorize_fact`, the choke point every writer uses (the tool, the Discord sync, Gmail, the face server, vision, consolidation). Verbatim duplicate margin **0.72**, natural paraphrase **0.65** → skip. |
+| **10** | Fact categorization / store routing | **SHIPPED as a junk filter** — `check_state` neutral-key binary. The email action log answers "not a personal fact" with margin **0.55** → skipped; real facts escalate → written. Only *confident junk* is dropped. |
+| **9** | Contradiction / supersede | **MEASURED OUT — not shipped** (see below). |
+
+**Shapes that work (recorded so they are reused):**
+
+- Laya's strong shape is **candidates as `criteria`, the target in the state** (same as
+  `pick_element` / `_laya_pick_article`).
+- **Batching that shape degrades it**: the same verbatim duplicate scored **0.14** when
+  three candidate-pick questions shared one `ask_batch`, vs **0.72** alone. Each pick
+  question now gets its own call.
+- The junk question works as a **neutral-key binary** (`check_state`), *not* as a
+  categories-as-criteria `choose` — the latter answered "durable personal fact" for an
+  email log at margin 0.70 (confidently wrong).
+
+**ID 9 measured out — fences:**
+
+- candidate-pick ("which saved fact does this REPLACE / CONTRADICT?") → margins **0.00–0.07**
+- binary pair check ("do these two statements contradict?") → **0.16–0.28**, and it answered
+  "contradicts" for an *unrelated* fact.
+
+Both are inert at the 0.5 write threshold, so shipping it would cost two Laya calls per
+write for nothing. The `conflict`/`supersedes` fields and the SUPERSEDE/CONTRADICTS note
+plumbing are kept as the seam for a future calibrated detector. **Do not re-add without a
+fresh measurement.**
+
+**Also found and fixed while measuring:**
+
+- **ID 3's pre-filter was unsafe.** At the global 0.25 threshold it answered "no new facts"
+  for a genuine fact window ("my sister just got married in Cairo", margin 0.41) — i.e. it
+  would have **skipped consolidating a real fact**. It now passes `min_margin=0.5`, so only
+  a very confident "no" skips.
+- **`memorize_fact` doc ids collided.** They were second-granular
+  (`mem_{int(time.time())}`), so facts written in the same second were silently dropped by
+  ChromaDB — now millisecond + content hash.
+
+**Tests:** `tests/test_memory_write_gate.py` (19), `test_system1.py` `min_margin` (+5) —
+suite **565 passed**.
+
 ---
 
 ## 3. Build order at a glance (first → last)
