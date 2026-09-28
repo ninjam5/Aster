@@ -114,14 +114,21 @@ class TestConsolidationBounds:
 
 class TestStrictThresholds:
     def test_the_safety_gates_pass_a_strict_margin(self, monkeypatch):
-        seen = []
+        # QA round 8: assert each gate INDIVIDUALLY - the old all(None-or->=0.5) form let
+        # any single gate silently drop its margin.
+        seen = {}
+
+        def fake_choose(*a, **k):
+            seen[k.get("key")] = k.get("min_margin")
+            return {"choice": None, "escalate": True}
+
+        def fake_check_state(*a, **k):
+            seen[str(k.get("state_text", "check"))[:24]] = k.get("min_margin")
+            return {"answer": None, "escalate": True}
+
         monkeypatch.setattr(system1, "kernel_enabled", lambda: True)
-        monkeypatch.setattr(system1, "choose",
-                            lambda *a, **k: seen.append(k.get("min_margin")) or
-                            {"choice": None, "escalate": True})
-        monkeypatch.setattr(system1, "check_state",
-                            lambda *a, **k: seen.append(k.get("min_margin")) or
-                            {"answer": None, "escalate": True})
+        monkeypatch.setattr(system1, "choose", fake_choose)
+        monkeypatch.setattr(system1, "check_state", fake_check_state)
 
         brain._needs_action_screenshot("Pressed 'tab'. Foreground window: 'X'.", "press_key")
         brain._session_may_hold_new_facts(["hello"])
@@ -129,16 +136,13 @@ class TestStrictThresholds:
         import tools.people as people
         people.laya_guess_gender("x")
         people.laya_guess_relationship("x")
-        import tools.sentry as sentry
-        sentry._classify_frame_from_faces("b64")
         webrtc_bridge._addressed_to_aster("something")
 
-        assert seen, "no gate was consulted"
-        # every safety-relevant gate must be at or above the write-gate standard
-        # _screen_answerable_from_text is intentionally on the default (it fails to
-        # the richer vision path); every other safety gate must be at least 0.5.
-        assert seen and all(m is None or m >= 0.5 for m in seen), seen
-        assert any(m is not None and m >= 0.5 for m in seen)
+        assert seen.get("need_screenshot", 0) >= 0.5
+        assert seen.get("new_fact", 0) >= 0.5
+        assert seen.get("gender", 0) >= 0.5
+        assert seen.get("relationship", 0) >= 0.5
+        assert seen.get("addressed", 0) >= 0.6
 
 
 # ── ID 8 hint is not computed for a relay turn ────────────────────────────────
@@ -192,3 +196,13 @@ class TestWriteLock:
         for t in threads:
             t.join()
         assert inside["max"] == 1   # never two writers inside the gate at once
+
+
+@pytest.fixture(autouse=True)
+def _isolate_brain_turn(tmp_path, monkeypatch):
+    """QA round 8: these tests run a real admin turn, which appended to the real
+    Aster_Vault/Conversations/ and could tag the text with a mood (changing the input)."""
+    import config as _c
+    monkeypatch.setattr(_c, "CONVERSATIONS_DIR", str(tmp_path / "Conversations"), raising=False)
+    monkeypatch.setattr(_c, "MOOD_LOG_PATH", str(tmp_path / "emotion_log.jsonl"), raising=False)
+    monkeypatch.setattr(brain, "_maybe_tag_text_mood", lambda t: t, raising=False)

@@ -1054,10 +1054,17 @@ def _web_click_on_page(page, goal: str, confirm_send: bool = False):
     return None
 
 
-def _web_type_on_page(page, goal: str, text: str, submit: bool = False):
+def _web_type_on_page(page, goal: str, text: str, submit: bool = False,
+                      confirm_send: bool = False):
     """Pure logic against a page object (test seam). Returns text or None.
 
-    submit=True presses Enter after filling (search boxes / form submits)."""
+    submit=True presses Enter after filling (search boxes / form submits).
+
+    QA round 8: this path had NO send/destructive gate, and with `dom_motor: true` it
+    runs BEFORE the native one — so typing into (or clicking) a Send/Delete control
+    activated it with `submit=False`. The candidate is now gated exactly like
+    `_web_click_on_page`.
+    """
     if page is None:
         return None
     nodes = filter_nodes(_snapshot_impl(page))
@@ -1069,6 +1076,11 @@ def _web_type_on_page(page, goal: str, text: str, submit: bool = False):
         return None
     preferred = _kernel_pick(shortlist, goal, "type")
     for node in _ordered_candidates(shortlist, preferred, limit=4):
+        if _send_policy() == "confirm" and not confirm_send and is_send_like(node):
+            return (f"FAILED — BLOCKED — {node.get('name')!r} looks like a "
+                    f"send/destructive control, so typing into or clicking it would "
+                    f"activate it. Nothing was typed. Confirm with the owner, then "
+                    f"re-call with confirm_send=true.")
         loc, ambiguous = resolve_locator(page, node)
         if loc is None or not _is_visible(loc):
             continue
@@ -1126,12 +1138,13 @@ def web_click(goal: str, confirm_send: bool = False):
         return f"FAILED — {e}"
 
 
-def web_type(goal: str, text: str, submit: bool = False):
+def web_type(goal: str, text: str, submit: bool = False, confirm_send: bool = False):
     """Locate a field in the current browser page and fill it (optionally submit
     with Enter — for search boxes)."""
     try:
-        return _web_call(lambda: _web_type_on_page(_active_page_impl(), goal, text, submit),
-                         timeout=60.0)
+        return _web_call(
+            lambda: _web_type_on_page(_active_page_impl(), goal, text, submit, confirm_send),
+            timeout=60.0)
     except RealProfileUnavailable as e:
         return f"FAILED — {e}"
 

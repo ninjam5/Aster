@@ -1279,6 +1279,12 @@ ADMIN_TOOLS = [
                             "'backspace', 'delete', 'space', 'up', 'down', 'left', 'right', "
                             "'home', 'end', 'pageup', 'pagedown', 'f1'-'f12', 'ctrl', 'alt', etc."
                         )
+                    },
+                    "confirm_send": {
+                        "type": "boolean",
+                        "description": ("Set true ONLY after the owner confirms a submit/"
+                                        "destructive key press (enter/return/space/delete/"
+                                        "backspace). Never for ordinary navigation keys."),
                     }
                 },
                 "required": ["key"]
@@ -1326,6 +1332,11 @@ ADMIN_TOOLS = [
                     "text": {
                         "type": "string",
                         "description": "The text to type at the current cursor position"
+                    },
+                    "confirm_send": {
+                        "type": "boolean",
+                        "description": ("Set true ONLY after the owner confirms pasting "
+                                        "multi-line text (a newline executes in a terminal)."),
                     }
                 },
                 "required": ["text"]
@@ -1921,19 +1932,19 @@ def _execute_tool_impl(tool_name, arguments):
         print(f"\n[Aster Internal: Awareness Mode toggled {status}]")
         return f"[System Note: Awareness Mode is now {status}.]"
     elif tool_name == "toggle_mood_actions":
-        state = bool(arguments.get("state", True))
+        state = _as_bool(arguments.get("state", True))
         config.MOOD_ACTIONS_ENABLED = state
         status = "ON" if state else "OFF"
         print(f"\n[Aster Internal: Mood-action offers toggled {status}]")
         return f"[System Note: Mood-action offers are now {status}.]"
     elif tool_name == "toggle_mood_checkins":
-        state = bool(arguments.get("state", True))
+        state = _as_bool(arguments.get("state", True))
         config.MOOD_CHECKIN_ENABLED = state
         status = "ON" if state else "OFF"
         print(f"\n[Aster Internal: Proactive mood check-ins toggled {status}]")
         return f"[System Note: Proactive mood check-ins are now {status}.]"
     elif tool_name == "toggle_face_emotion":
-        state = bool(arguments.get("state", True))
+        state = _as_bool(arguments.get("state", True))
         config.FACE_EMOTION_ENABLED = state
         if state:
             try:
@@ -1945,7 +1956,7 @@ def _execute_tool_impl(tool_name, arguments):
         print(f"\n[Aster Internal: Facial-emotion reading toggled {status}]")
         return f"[System Note: Facial-emotion reading is now {status}.]"
     elif tool_name == "toggle_ambient_audio":
-        state = bool(arguments.get("state", True))
+        state = _as_bool(arguments.get("state", True))
         config.AMBIENT_AUDIO_ENABLED = state
         if not state:
             try:
@@ -2043,7 +2054,7 @@ def _execute_tool_impl(tool_name, arguments):
             try:
                 from tools.dom import web_click
                 dom_result = web_click(
-                    goal, confirm_send=bool(arguments.get("confirm_send", False))
+                    goal, confirm_send=_as_bool(arguments.get("confirm_send", False))
                 )
                 if dom_result:
                     return dom_result
@@ -2059,7 +2070,7 @@ def _execute_tool_impl(tool_name, arguments):
         # hatch as the web path.
         try:
             from tools.dom import _send_policy, is_send_like
-            if _send_policy() == "confirm" and not arguments.get("confirm_send"):
+            if _send_policy() == "confirm" and not _as_bool(arguments.get("confirm_send")):
                 if is_send_like({"role": loc.get("source", ""),
                                  "name": loc.get("text", ""), "text": loc.get("text", "")}):
                     return tool_fail(
@@ -2071,7 +2082,7 @@ def _execute_tool_impl(tool_name, arguments):
             # tools.dom inside the except, so if THAT import was what failed, control
             # still reached pyautogui.click. No import here — just refuse.
             print(f"[DOM] native send-gate error ({e}); failing closed")
-            if not arguments.get("confirm_send"):
+            if not _as_bool(arguments.get("confirm_send")):
                 return tool_fail(
                     f'FAILED — BLOCKED — could not verify that "{goal}" is safe to click '
                     f'(the send/destructive check errored). Confirm with the owner, then '
@@ -2108,21 +2119,22 @@ def _execute_tool_impl(tool_name, arguments):
         if submit:
             try:
                 from tools.dom import submit_needs_confirm
-                if submit_needs_confirm(goal) and not arguments.get("confirm_send"):
+                if submit_needs_confirm(goal) and not _as_bool(arguments.get("confirm_send")):
                     return tool_fail(
                         f'FAILED — BLOCKED — pressing Enter for "{goal}" would submit a form '
                         f'(a send/destructive action). Nothing was typed or submitted. '
                         f'Confirm with the owner, then re-call with confirm_send=true.')
             except Exception as e:
                 print(f"[DOM] submit gate error ({e}); failing closed")
-                if not arguments.get("confirm_send"):
+                if not _as_bool(arguments.get("confirm_send")):
                     return tool_fail(
                         f'FAILED — BLOCKED — could not verify that submitting "{goal}" is safe '
                         f'(the check errored). Re-call with confirm_send=true.')
         if config.USE_DOM_MOTOR:
             try:
                 from tools.dom import web_type
-                dom_result = web_type(goal, text, submit=submit)
+                dom_result = web_type(goal, text, submit=submit,
+                                      confirm_send=_as_bool(arguments.get("confirm_send")))
                 if dom_result:
                     return dom_result
             except Exception as e:
@@ -2134,7 +2146,7 @@ def _execute_tool_impl(tool_name, arguments):
         # ID 17 (QA round 7): clicking to FOCUS is itself an activation — a Send/Delete/
         # Confirm control would fire here with submit=False, bypassing the submit gate.
         # Gate the click the same way smart_click does (fail closed).
-        if not arguments.get("confirm_send"):
+        if not _as_bool(arguments.get("confirm_send")):
             try:
                 from tools.dom import _send_policy, is_send_like
                 if _send_policy() == "confirm" and is_send_like(
@@ -2212,7 +2224,7 @@ def _execute_tool_impl(tool_name, arguments):
             # All are destructive/send activations, so all are gated. Search-like /
             # dialog windows stay exempt (automation.dom_motor_send_policy: allow
             # disables the gate entirely).
-            if not arguments.get("confirm_send"):
+            if not _as_bool(arguments.get("confirm_send")):
                 try:
                     from tools.dom import submit_needs_confirm
                     if submit_needs_confirm("", get_foreground_window_title()):

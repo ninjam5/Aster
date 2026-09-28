@@ -86,6 +86,10 @@ class TestRelayConfirmForcing:
         # passed merely because the intent was None (nothing forced).
         assert sent.get("assume_guess") is False
         assert sent.get("target") == "george"
+        # QA round 8: the target above is the MODEL's own argument, so it proves nothing
+        # about the parser. Assert the parse itself, or deleting the parser stays green.
+        intent = brain._extract_discord_message_intent("tell george I'll be late")
+        assert intent is not None and intent["exact"] is True and intent["target"] == "george"
 
 
 class TestRelayToolBlocklist:
@@ -104,3 +108,13 @@ class TestRelayToolBlocklist:
         brain.process_user_input("tell george I'll be late", None)
 
         assert clicked == [], "a relay turn must not drive the desktop"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_brain_turn(tmp_path, monkeypatch):
+    """QA round 8: these tests run a real admin turn, which appended to the real
+    Aster_Vault/Conversations/ and could tag the text with a mood (changing the input)."""
+    import config as _c
+    monkeypatch.setattr(_c, "CONVERSATIONS_DIR", str(tmp_path / "Conversations"), raising=False)
+    monkeypatch.setattr(_c, "MOOD_LOG_PATH", str(tmp_path / "emotion_log.jsonl"), raising=False)
+    monkeypatch.setattr(brain, "_maybe_tag_text_mood", lambda t: t, raising=False)

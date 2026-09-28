@@ -174,7 +174,7 @@ class TestSentryOwnerVsKnown:
         sentry.execute_sentry_sweep()
         assert sent and "Dana" in sent[0]
 
-    def test_the_owner_still_suppresses_the_alert(self, monkeypatch):
+    def test_the_owner_still_suppresses_the_alert(self, monkeypatch, tmp_path):
         monkeypatch.setattr(config, "OWNER_NAME", "Dan", raising=False)
         monkeypatch.setattr(sentry, "capture_frame_base64", lambda: "b64", raising=False)
         monkeypatch.setattr(sentry, "_classify_frame_from_faces", lambda b64: "DAN",
@@ -194,6 +194,9 @@ class TestSentryOwnerVsKnown:
         _ok, _buf = _cv2.imencode(".jpg", _np.zeros((40, 40, 3), dtype=_np.uint8))
         _frame = _b64.b64encode(_buf.tobytes()).decode()
         monkeypatch.setattr(sentry, "capture_frame_base64", lambda: _frame, raising=False)
+        _vault = tmp_path / "vault"
+        _vault.mkdir(exist_ok=True)
+        monkeypatch.setattr(config, "VAULT_DIR", str(_vault), raising=False)
         monkeypatch.setattr(sentry, "_classify_frame_from_faces",
                             lambda b64: "UNKNOWN", raising=False)
         sentry.execute_sentry_sweep()
