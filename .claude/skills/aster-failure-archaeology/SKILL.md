@@ -277,9 +277,12 @@ tool-law wording in `_shared_tool_laws.md`, to be A/B'd on the battery. Tracked 
    prompts (server-reported) — **mmproj on GPU = text 304 / image 269 tok/s;
    mmproj in RAM = text 398 / image 42.** RAM buys ~1 s on text and costs ~22 s per
    screenshot. **Shipped vision-first 2026-09-27** (`--n-cpu-moe 28`, mmproj on GPU,
-   `--ubatch-size 512`). **The app itself costs 2.6-4.3x** (text 304 → 185, image
-   269 → 63 with main.py running at 1.9 GB free) — CPU contention from the daemons
-   on the shared P-cores, the next lever to attack. `--ubatch-size 1024` was measured and rejected (it grew
+   `--ubatch-size 512`).
+8. **Desktop load is the dominant variable, not the app.** Back-to-back A/B: main.py
+   running = text 470 / image 310 tok/s; stopped = 510 / 333 (~5-8% app cost). The
+   daemons are ~free at idle (main.py: 0-3% of one core across 84 threads). But the
+   same config measured **63 tok/s with a video playing** vs 310 idle — a 5x swing
+   from the desktop alone. Measure prefill on an idle machine or the numbers are junk. `--ubatch-size 1024` was measured and rejected (it grew
    the compute buffers into the starvation zone: text 227 → 63 tok/s).
 
 **Status:** SETTLED in code; **live validation OPEN** (boot, vision round-trip,

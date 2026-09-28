@@ -332,7 +332,9 @@ text-first numbers were based on an unreliable probe estimate; the server timer 
 the placement trade is small. **Shipped: vision-first, mmproj on GPU, ncmoe 28, ub 512**
 (ncmoe 30 buys 1.4 GB headroom for ~3% speed; 28 chosen to keep RAM commit viable).
 
-**With the app running** (main.py: ECAPA + Telegram + face server + watchdog, 1.9 GB VRAM free):
-text 6.1 s (185 tok/s), image 17.5 s (63 tok/s) — i.e. the app costs **2.6x on text and
-4.3x on image**. That is CPU contention from the daemon threads on the shared P-cores,
-not VRAM (1.9 GB was free) — the next lever.
+**CORRECTION (measured 2026-09-28, back-to-back same session):** the app is NOT the tax.
+With main.py running: text 470 tok/s / image 310 tok/s. With main.py stopped: 510 / 333.
+=> the app costs **~5-8%**, and its daemons are ~free at idle (main.py uses 0-3% of one
+core across 84 threads). The earlier "app costs 2.6-4.3x" reading (185 / 63 tok/s) was
+taken while the DESKTOP was busy (video playback) — **desktop load is the dominant
+variable: the same config measured 63 tok/s then and 310 tok/s on an idle machine (5x).**
