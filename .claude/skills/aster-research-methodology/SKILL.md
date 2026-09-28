@@ -123,6 +123,24 @@ survived the adversarial pass + soaked live if behavioral + documented in the
 right doc of record (`aster-docs-and-writing`) + shipped through
 `aster-change-control`. Anything less is labeled candidate.
 
+## Measurement traps that cost real time (2026-09-27/28)
+
+1. **`usage.prompt_tokens` is the full prompt size, not the prefill work.**
+   llama-server returns top-level `timings` with `prompt_n` (tokens actually
+   processed), `prompt_ms`, `prompt_per_second`. With a shared system+tools prefix
+   (~13k), a warm call prefills only ~50-200 tokens while `prompt_tokens` still
+   reads 13k. Reading the wrong field made a fast harness look like it re-prefilled
+   12.5k per call - it did not.
+2. **Prefill tok/s is length-dependent.** Small prompts are overhead-dominated
+   (a 1.1k cold prompt reads ~190-400 tok/s; a 4k prompt ~860; the same config).
+   Never compare rates across different prompt sizes - compare absolute ms for the
+   same prompt, or quote `prompt_n` + `prompt_ms`.
+3. **Single-sample A/B is noise.** The 37-auto battery swung 29-35 across identical
+   configs. Use `--repeat N` + the FLAKY list before claiming a win.
+4. **Wall-clock-minus-assumed-decode estimates overstate prefill.** The probe's
+   "~1,600 pp tok/s" estimate disagreed with the server's timer (~860). Prefer the
+   server's own timings.
+
 ## Provenance and maintenance
 
 Authored 2026-07-05.

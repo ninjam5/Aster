@@ -34,7 +34,7 @@ if SCRIPT_DIR not in sys.path:
 
 # ── Local imports (harness and scenarios live alongside this file) ─────────────
 from harness import (
-    get_server_props, run_scenario, aggregate_metrics,
+    get_server_props, run_scenario, aggregate_metrics, aggregate_latency, summarize_repeats,
     check_single_tool, check_no_tool, check_tool_sequence,
     check_no_hallucination, check_cutoff_routing,
     check_persona, check_discord_relay, check_vision, check_loop_discipline,
@@ -189,9 +189,13 @@ def build_report(
     total_text_leaks: int,
     total_json_errors:int,
     total_api_calls:  int,
+    latency:          dict | None = None,
+    repeats:          dict | None = None,
+    run_meta:         dict | None = None,
 ) -> str:
     text_leak_rate = (total_text_leaks / max(total_api_calls, 1)) * 100
     json_err_rate  = (total_json_errors / max(total_api_calls, 1)) * 100
+    run_meta       = run_meta or {}
 
     # Build per-category scorecard
     cat_scores: dict[str, list] = {}
@@ -217,6 +221,9 @@ def build_report(
         f"  Timestamp: {datetime.datetime.now().isoformat(timespec='seconds')}",
         f"  Server:    localhost:8080",
         f"  Tool path: NATIVE (tools= param, role:tool feedback)",
+        f"  Repeats:   {run_meta.get('repeat', 1)} per scenario   |   "
+        f"seed base: {run_meta.get('seed') if run_meta.get('seed') is not None else 'none (server random)'}",
+        f"  n_predict: {run_meta.get('n_predict', '?')}   |   max rounds: {run_meta.get('max_rounds', '?')}",
         "",
     ]
 
@@ -224,15 +231,45 @@ def build_report(
     lines += [
         "── EFFICIENCY ──────────────────────────────────────────────────────────",
         f"  Avg generation speed:       {agg['avg_gen_tok_s']:.1f} tok/s",
-        f"  Avg prompt processing:      {agg['avg_prompt_tok_s']:.1f} tok/s  (0 = not reported by server)",
         f"  Avg latency per turn:       {agg['avg_latency_s']:.2f}s",
         f"  Total wall time:            {wall_elapsed:.1f}s",
         f"  Total generation tokens:    {agg['total_gen_tokens']}",
-        f"  Total prompt tokens:        {agg['total_prompt_tokens']}",
+        f"  Prompt tokens (full size):  {agg['total_prompt_tokens']}   "
+        f"(prefilled by server: {agg.get('total_prefilled_tokens', '?')})",
         f"  Text tool-syntax leak rate: {text_leak_rate:.1f}%  ({total_text_leaks}/{total_api_calls} API calls)",
         f"  JSON decode failure rate:   {json_err_rate:.1f}%  ({total_json_errors}/{total_api_calls} API calls)  (native args)",
         "",
     ]
+
+    # ── Latency breakdown (server-reported, cache-aware) ───────────────────────
+    if latency:
+        lines.append("── LATENCY BREAKDOWN (server timings; prompt_n = tokens actually prefilled) ──")
+        for name, label in (("cold", "cold prefill (prefix re-processed)"),
+                            ("cached", "cached prefill (prefix reused)"),
+                            ("image", "image calls"),
+                            ("text", "text calls")):
+            d = latency.get(name, {})
+            if not d.get("calls"):
+                continue
+            if name == "cold":
+                lines.append(
+                    f"  {label:<34} {d['calls']:>3} calls  "
+                    f"avg {d['avg_tokens']:>7.0f} tok in {d['avg_ms']:>8.0f} ms  "
+                    f"({d['avg_tok_s']:>5.0f} tok/s)"
+                )
+            elif name == "cached":
+                lines.append(
+                    f"  {label:<34} {d['calls']:>3} calls  "
+                    f"avg delta {d['avg_tokens']:>6.0f} tok in {d['avg_ms']:>7.0f} ms  "
+                    f"(small deltas are overhead-dominated)"
+                )
+            else:
+                lines.append(
+                    f"  {label:<34} {d['calls']:>3} calls  "
+                    f"avg {d['avg_tokens']:>7.0f} tok in {d['avg_ms']:>8.0f} ms  "
+                    f"({d['avg_tok_s']:>5.0f} tok/s)"
+                )
+        lines.append("")
 
     # ── Scorecard ──────────────────────────────────────────────────────────────
     lines.append("── SCORECARD ───────────────────────────────────────────────────────────")
@@ -255,6 +292,18 @@ def build_report(
         f"  AUTO-SCORED TOTAL: {total_pass}/{total_definite}  ({pct:.0f}%)",
         "",
     ]
+
+    # ── Flaky scenarios (only meaningful with --repeat > 1) ────────────────────
+    if repeats and repeats.get("flaky"):
+        lines.append("── FLAKY SCENARIOS (mixed pass/fail across repeats) ────────────────────")
+        for f in repeats["flaky"]:
+            lines.append(f"  {f['id']:<8} [{f['cat']}]  {f['passed']}/{f['n']} passed "
+                         f"({f['rate']*100:.0f}%)")
+        lines.append("")
+    elif repeats and run_meta.get("repeat", 1) > 1:
+        lines += ["── FLAKY SCENARIOS ─────────────────────────────────────────────────────",
+                  "  none — every scenario was consistent across repeats.", ""]
+
 
     # ── Detailed Results ───────────────────────────────────────────────────────
     lines.append("── DETAILED RESULTS ────────────────────────────────────────────────────")
@@ -389,6 +438,16 @@ def main() -> None:
                         help="Override repeat_penalty (e.g. 1.15 for the 'tight' preset)")
     parser.add_argument("--min-p", type=float, default=None,
                         help="Override min_p token sampling floor (e.g. 0.05)")
+    parser.add_argument("--repeat", type=int, default=1,
+                        help="Run each scenario N times to measure flakiness (default 1). "
+                             "Fidelity: single samples swing several scenarios.")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Base seed; repeat r uses seed+r (reproducible AND independent). "
+                             "Omit for server-random sampling.")
+    parser.add_argument("--n-predict", type=int, default=1000,
+                        help="Per-call generation cap (production brain uses 1000)")
+    parser.add_argument("--max-rounds", type=int, default=15,
+                        help="Tool-loop round cap (production brain uses 15)")
     args = parser.parse_args()
 
     # Apply sampling overrides to harness globals — preset first, then individual
@@ -411,6 +470,9 @@ def main() -> None:
         _harness.REPEAT_PENALTY = args.repeat_penalty
     if args.min_p is not None:
         _harness.MIN_P = args.min_p
+    _harness.N_PREDICT      = args.n_predict
+    _harness.MAX_TOOL_ROUNDS = args.max_rounds
+    _harness.SEED_BASE      = args.seed
 
     print("=" * 72)
     print("  ASTER ENGINE TEST SUITE")
@@ -434,6 +496,8 @@ def main() -> None:
         f"  min_p={_harness.MIN_P if _harness.MIN_P is not None else 'server default'}"
     )
     print(f"  System prompt length: {len(SYSTEM_PROMPT):,} chars")
+    print(f"  Repeats: {args.repeat}/scenario   seed: {args.seed if args.seed is not None else 'server-random'}"
+          f"   n_predict: {args.n_predict}   max rounds: {args.max_rounds}")
     print("=" * 72)
 
     # Vision asset
@@ -463,71 +527,83 @@ def main() -> None:
 
     wall_start = time.perf_counter()
 
-    for i, scenario in enumerate(scenarios_to_run):
-        sid    = scenario["id"]
-        cat    = scenario.get("category", "?")
-        prompt = scenario["prompt"]
-        mode   = f" [{scenario['mode'].upper()}]" if "mode" in scenario else ""
+    for rep in range(args.repeat):
+        if args.repeat > 1:
+            print("=" * 72)
+            print(f"  REPEAT {rep + 1}/{args.repeat}")
+            print("=" * 72)
+        for i, scenario in enumerate(scenarios_to_run):
+            sid    = scenario["id"]
+            cat    = scenario.get("category", "?")
+            prompt = scenario["prompt"]
+            mode   = f" [{scenario['mode'].upper()}]" if "mode" in scenario else ""
 
-        print(f"[{i+1:02d}/{len(scenarios_to_run)}] {sid} ({cat}{mode})")
-        print(f"  Prompt: {prompt[:90]}{'...' if len(prompt) > 90 else ''}")
+            print(f"[{i+1:02d}/{len(scenarios_to_run)}] {sid} ({cat}{mode})")
+            print(f"  Prompt: {prompt[:90]}{'...' if len(prompt) > 90 else ''}")
 
-        # Attach vision payload if needed
-        if scenario.get("vision"):
-            if vision_b64 is None or args.no_vision:
-                print("  SKIPPED — no screenshot.\n")
-                entries.append({"scenario": scenario, "skipped": True})
+            # Attach vision payload if needed
+            if scenario.get("vision"):
+                if vision_b64 is None or args.no_vision:
+                    print("  SKIPPED — no screenshot.\n")
+                    entries.append({"scenario": scenario, "skipped": True, "rep": rep})
+                    continue
+                scenario = {**scenario, "vision_b64": vision_b64}
+
+            try:
+                result = run_scenario(scenario)
+            except Exception as exc:
+                print(f"  ERROR: {exc}\n")
+                entries.append({"scenario": scenario, "error": str(exc), "rep": rep})
                 continue
-            scenario = {**scenario, "vision_b64": vision_b64}
 
-        try:
-            result = run_scenario(scenario)
-        except Exception as exc:
-            print(f"  ERROR: {exc}\n")
-            entries.append({"scenario": scenario, "error": str(exc)})
-            continue
+            verdicts = run_auto_checks(scenario, result)
 
-        verdicts = run_auto_checks(scenario, result)
+            # Tally native-path robustness metrics
+            total_text_leaks  += result["text_leak_count"]
+            total_json_errors += result["json_error_count"]
+            total_api_calls   += result["rounds_used"]
+            all_metrics_lists.append(result["all_metrics"])
 
-        # Tally native-path robustness metrics
-        total_text_leaks  += result["text_leak_count"]
-        total_json_errors += result["json_error_count"]
-        total_api_calls   += result["rounds_used"]
-        all_metrics_lists.append(result["all_metrics"])
+            # Overall pass/fail — auto-only checks decide; manual-only → None
+            auto_verdicts = {k: v for k, v in verdicts.items() if not v.get("manual")}
+            overall: bool | None = (
+                all(v["passed"] for v in auto_verdicts.values())
+                if auto_verdicts else None
+            )
 
-        # Overall pass/fail — auto-only checks decide; manual-only → None
-        auto_verdicts = {k: v for k, v in verdicts.items() if not v.get("manual")}
-        overall: bool | None = (
-            all(v["passed"] for v in auto_verdicts.values())
-            if auto_verdicts else None
-        )
+            status = "✓ PASS" if overall is True else ("✗ FAIL" if overall is False else "⚠ MANUAL")
+            last_m = result["all_metrics"][-1] if result["all_metrics"] else {}
+            print(
+                f"  {status}  |  Tools: {result['tool_calls']}  "
+                f"|  Rounds: {result['rounds_used']}  "
+                f"|  {last_m.get('gen_tok_per_s', 0):.1f} tok/s  "
+                f"|  prefill {last_m.get('prefilled_tokens', '?')} tok"
+            )
+            for check_name, verdict in verdicts.items():
+                flag = "✓" if verdict["passed"] else ("?" if verdict.get("manual") else "✗")
+                print(f"    [{flag}] {check_name}: {verdict['notes'][:110]}")
+            print()
 
-        status = "✓ PASS" if overall is True else ("✗ FAIL" if overall is False else "⚠ MANUAL")
-        last_m = result["all_metrics"][-1] if result["all_metrics"] else {}
-        print(
-            f"  {status}  |  Tools: {result['tool_calls']}  "
-            f"|  Rounds: {result['rounds_used']}  "
-            f"|  {last_m.get('gen_tok_per_s', 0):.1f} tok/s"
-        )
-        for check_name, verdict in verdicts.items():
-            flag = "✓" if verdict["passed"] else ("?" if verdict.get("manual") else "✗")
-            print(f"    [{flag}] {check_name}: {verdict['notes'][:110]}")
-        print()
-
-        entries.append({
-            "scenario": scenario,
-            "result":   result,
-            "verdicts": verdicts,
-            "overall":  overall,
-        })
+            entries.append({
+                "scenario": scenario,
+                "result":   result,
+                "verdicts": verdicts,
+                "overall":  overall,
+                "rep":      rep,
+            })
 
     wall_elapsed = time.perf_counter() - wall_start
 
     # ── Report ────────────────────────────────────────────────────────────────
-    agg = aggregate_metrics(all_metrics_lists)
+    agg       = aggregate_metrics(all_metrics_lists)
+    latency   = aggregate_latency(all_metrics_lists)
+    repeats   = summarize_repeats(entries)
+    run_meta  = {"repeat": args.repeat, "seed": args.seed,
+                 "n_predict": args.n_predict, "max_rounds": args.max_rounds}
     report = build_report(
         entries, model_name, ctx_size, agg,
         wall_elapsed, total_text_leaks, total_json_errors, total_api_calls,
+        latency=latency, repeats=repeats, run_meta=run_meta,
     )
 
     ts         = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -552,7 +628,19 @@ def main() -> None:
     print(f"  Report: {report_path}")
     print(f"  Auto-scored: {auto_passed}/{auto_total}  "
           f"({auto_passed/auto_total*100:.0f}%)" if auto_total else "  Auto-scored: 0/0")
+    if repeats["flaky"]:
+        print(f"  Flaky: {len(repeats['flaky'])} scenario(s) mixed pass/fail — see the report.")
     print(f"  Avg generation: {agg['avg_gen_tok_s']:.1f} tok/s")
+    lat_bits = []
+    if latency["cold"]["calls"]:
+        lat_bits.append(f"cold {latency['cold']['avg_tok_s']:.0f} tok/s")
+    if latency["cached"]["calls"]:
+        lat_bits.append(f"cached {latency['cached']['avg_tokens']:.0f} tok in "
+                        f"{latency['cached']['avg_ms']:.0f} ms")
+    if latency["image"]["calls"]:
+        lat_bits.append(f"image {latency['image']['avg_tok_s']:.0f} tok/s")
+    if lat_bits:
+        print(f"  Prefill: {' / '.join(lat_bits)}")
     print(f"  Total wall time: {wall_elapsed:.1f}s")
     print("=" * 72)
 

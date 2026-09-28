@@ -264,3 +264,75 @@ def test_loop_trap_scenarios_registered():
     assert len(traps) == 5
     assert all(s.get("mock_results") for s in traps)
     assert all(not s.get("manual") for s in traps)
+
+
+# ── cache-aware metrics, seed pass-through, latency + repeat aggregation ─────
+
+def test_llm_call_reads_server_timings_and_flags_cache_hit():
+    timings = {"prompt_n": 111, "prompt_ms": 1060.0, "prompt_per_second": 104.7,
+               "predicted_n": 12, "predicted_ms": 300.0, "predicted_per_second": 40.0}
+    with patch("requests.post", return_value=_mock_response(_final_message("ok"), timings=timings)):
+        _, m = harness.llm_call([{"role": "user", "content": "hi"}])
+    assert m["prefilled_tokens"] == 111          # delta only -> cache hit
+    assert m["prefix_cached"] is True
+    assert m["prompt_ms"] == 1060.0
+    assert m["gen_tok_per_s"] == 40.0
+
+
+def test_llm_call_flags_cold_prefill():
+    timings = {"prompt_n": 13169, "prompt_ms": 32928.0, "prompt_per_second": 400.0}
+    with patch("requests.post", return_value=_mock_response(_final_message("ok"), timings=timings)):
+        _, m = harness.llm_call([{"role": "user", "content": "hi"}])
+    assert m["prefilled_tokens"] == 13169
+    assert m["prefix_cached"] is False
+
+
+def test_llm_call_passes_seed_when_given():
+    with patch("requests.post", return_value=_mock_response(_final_message("ok"))) as mock_post:
+        harness.llm_call([{"role": "user", "content": "hi"}], seed=1234)
+    assert mock_post.call_args.kwargs["json"]["seed"] == 1234
+
+
+def _m(prefilled, is_image=False):
+    return {"prompt_tokens": 13000, "completion_tokens": 10, "elapsed_s": 1.0,
+            "gen_tok_per_s": 40.0, "prompt_tok_per_s": 0.0,
+            "prefilled_tokens": prefilled, "prompt_ms": 1000.0,
+            "predicted_tokens": 10, "predicted_ms": 250.0,
+            "prefix_cached": prefilled <= harness.PREFIX_CACHE_HIT_TOKENS,
+            "round": 0, "is_image": is_image}
+
+
+def test_aggregate_latency_classifies_cold_cached_image_text():
+    lat = harness.aggregate_latency([[_m(13000), _m(120)], [_m(110, is_image=True)]])
+    assert lat["cold"]["calls"] == 1 and lat["cold"]["tokens"] == 13000
+    assert lat["cached"]["calls"] == 2
+    assert lat["image"]["calls"] == 1 and lat["text"]["calls"] == 2
+    assert lat["cold"]["avg_tok_s"] == 13000.0  # 13000 tok / 1.0 s
+
+
+def test_aggregate_metrics_sums_prefilled_tokens():
+    agg = harness.aggregate_metrics([[_m(13000), _m(120)]])
+    assert agg["total_prompt_tokens"] == 26000      # full sizes
+    assert agg["total_prefilled_tokens"] == 13120   # actually processed
+
+
+def test_summarize_repeats_detects_flaky_and_consistent():
+    def entry(sid, overall):
+        return {"scenario": {"id": sid, "category": "single_tool"}, "overall": overall}
+    entries = [entry("C1-01", True), entry("C1-01", True),
+               entry("C1-06", True), entry("C1-06", False)]
+    out = harness.summarize_repeats(entries)
+    flaky_ids = [f["id"] for f in out["flaky"]]
+    assert flaky_ids == ["C1-06"]
+    assert out["rates"]["C1-01"]["rate"] == 1.0
+    assert out["rates"]["C1-06"]["rate"] == 0.5
+
+
+def test_summarize_repeats_ignores_manual_and_errors():
+    entries = [
+        {"scenario": {"id": "C7-01", "category": "persona"}, "overall": None},
+        {"scenario": {"id": "C1-02", "category": "single_tool"}, "error": "boom"},
+    ]
+    out = harness.summarize_repeats(entries)
+    assert out["flaky"] == []
+    assert out["rates"] == {}

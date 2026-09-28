@@ -52,6 +52,19 @@ TOP_K:          int   | None = None   # None = let server default apply
 REPEAT_PENALTY: float | None = None   # None = let server default apply
 MIN_P:          float | None = None   # None = let server default apply
 
+# Per-call generation cap. Production's brain uses n_predict=1000; the old 3000
+# let rambling runs burn time without changing scores.
+N_PREDICT: int = 1000
+
+# A call whose server-reported prefill (`timings.prompt_n`) is at or below this is
+# treated as a prefix-cache hit (only the new suffix was processed) rather than a
+# cold prefill. The system+tools prefix is ~13k tokens, so a hit prefills ~50-200.
+PREFIX_CACHE_HIT_TOKENS = 512
+
+# Set by the runner (`--seed`) so repeats are reproducible AND independent:
+# call N gets SEED_BASE + round. None = let the server pick (non-reproducible).
+SEED_BASE: int | None = None
+
 import requests
 
 
@@ -76,7 +89,8 @@ def get_server_props() -> dict:
 def llm_call(
     messages: list[dict],
     temperature: float = TEMPERATURE,
-    n_predict: int = 3000,
+    n_predict: int = N_PREDICT,
+    seed: int | None = None,
 ) -> tuple[dict, dict]:
     """
     POST to llama-server /v1/chat/completions with native tool calling enabled.
@@ -84,11 +98,17 @@ def llm_call(
     Mirrors _execute_llm_completion() in brain.py — same payload shape (incl.
     `tools`/`tool_choice="auto"`) — but without the debug spam.
 
+    `seed` is passed through when set (llama-server accepts `seed`); the runner
+    derives one per repeat so repeated runs are reproducible AND independent.
+
     Returns:
         message     — full choices[0]["message"] dict (role/content/tool_calls),
                       same shape _execute_llm_completion returns
-        metrics     — {prompt_tokens, completion_tokens, elapsed_s,
-                       gen_tok_per_s, prompt_tok_per_s}
+        metrics     — total prompt/completion tokens, wall elapsed, generation
+                      tok/s, and the server's OWN prefill/generation timings.
+                      `prefilled_tokens` (timings.prompt_n) is the cache-aware
+                      number: on a cache hit it is only the new suffix, while
+                      `prompt_tokens` (usage) is always the full prompt size.
     """
     msgs = list(messages)
 
@@ -101,6 +121,8 @@ def llm_call(
         "tools": ADMIN_TOOLS,
         "tool_choice": "auto",
     }
+    if seed is not None:
+        payload["seed"] = seed
     if TOP_P is not None:
         payload["top_p"] = TOP_P
     if TOP_K is not None:
@@ -135,18 +157,25 @@ def llm_call(
     prompt_tokens     = usage.get("prompt_tokens", 0)
     completion_tokens = usage.get("completion_tokens", 0)
 
-    # Prefer llama-server's own timings (more accurate than wall-clock)
-    timings        = data.get("timings", {})
-    gen_tok_per_s  = (timings.get("predicted_per_second")
-                      or (completion_tokens / elapsed if elapsed > 0 else 0.0))
+    # llama-server returns its own top-level `timings`; prefer them over wall-clock.
+    timings          = data.get("timings", {}) or {}
+    prefilled        = timings.get("prompt_n")
+    gen_tok_per_s    = (timings.get("predicted_per_second")
+                        or (completion_tokens / elapsed if elapsed > 0 else 0.0))
     prompt_tok_per_s = timings.get("prompt_per_second") or 0.0
 
     metrics = {
-        "prompt_tokens":     prompt_tokens,
+        "prompt_tokens":     prompt_tokens,      # full prompt size (cache-independent)
         "completion_tokens": completion_tokens,
         "elapsed_s":         elapsed,
         "gen_tok_per_s":     gen_tok_per_s,
         "prompt_tok_per_s":  prompt_tok_per_s,
+        # Server-reported, cache-aware prefill detail
+        "prefilled_tokens":  prefilled if prefilled is not None else prompt_tokens,
+        "prompt_ms":         timings.get("prompt_ms") or 0.0,
+        "predicted_tokens":  timings.get("predicted_n") or completion_tokens,
+        "predicted_ms":      timings.get("predicted_ms") or 0.0,
+        "prefix_cached":     (prefilled is not None and prefilled < PREFIX_CACHE_HIT_TOKENS),
     }
     return message, metrics
 
@@ -229,7 +258,12 @@ def run_scenario(scenario: dict) -> dict:
     for _round in range(MAX_TOOL_ROUNDS):
         eval_msgs = list(history)
 
-        response_msg, metrics = llm_call(eval_msgs)
+        response_msg, metrics = llm_call(
+            eval_msgs,
+            seed=(SEED_BASE + _round) if SEED_BASE is not None else None,
+        )
+        metrics["round"] = _round
+        metrics["is_image"] = bool(vision_b64)
         all_metrics.append(metrics)
         last_message = response_msg
         content = response_msg.get("content") or ""
@@ -563,26 +597,91 @@ def check_vision(result: dict) -> dict:
 
 def aggregate_metrics(all_scenario_metrics: list[list[dict]]) -> dict:
     gen_speeds:    list[float] = []
-    prompt_speeds: list[float] = []
     latencies:     list[float] = []
-    total_gen    = 0
-    total_prompt = 0
+    total_gen      = 0
+    total_prompt   = 0     # full prompt sizes (cache-independent)
+    total_prefilled = 0    # tokens the server actually processed
 
     for scenario_metrics in all_scenario_metrics:
         for m in scenario_metrics:
             if m["gen_tok_per_s"] > 0:
                 gen_speeds.append(m["gen_tok_per_s"])
-            if m["prompt_tok_per_s"] > 0:
-                prompt_speeds.append(m["prompt_tok_per_s"])
             latencies.append(m["elapsed_s"])
-            total_gen    += m["completion_tokens"]
-            total_prompt += m["prompt_tokens"]
+            total_gen       += m["completion_tokens"]
+            total_prompt    += m["prompt_tokens"]
+            total_prefilled += m.get("prefilled_tokens", m["prompt_tokens"])
 
     avg = lambda lst: sum(lst) / len(lst) if lst else 0.0
     return {
-        "avg_gen_tok_s":     avg(gen_speeds),
-        "avg_prompt_tok_s":  avg(prompt_speeds),
-        "avg_latency_s":     avg(latencies),
-        "total_gen_tokens":  total_gen,
+        "avg_gen_tok_s":      avg(gen_speeds),
+        "avg_latency_s":      avg(latencies),
+        "total_gen_tokens":   total_gen,
         "total_prompt_tokens": total_prompt,
+        "total_prefilled_tokens": total_prefilled,
     }
+
+
+def aggregate_latency(all_scenario_metrics: list[list[dict]]) -> dict:
+    """Latency breakdown by call class, from the server's own timings.
+
+    Classes (a call can be in several):
+      cold   — prefilled > PREFIX_CACHE_HIT_TOKENS (the system+tools prefix was
+               re-processed; happens on the first call after a cache eviction)
+      cached — prefilled <= PREFIX_CACHE_HIT_TOKENS (prefix reused; delta only)
+      image  — the call's prompt contained an image
+      text   — the call's prompt contained no image
+    """
+    classes: dict[str, list[dict]] = {"cold": [], "cached": [], "image": [], "text": []}
+    for scenario_metrics in all_scenario_metrics:
+        for m in scenario_metrics:
+            (classes["cold"] if not m.get("prefix_cached", False) else classes["cached"]).append(m)
+            (classes["image"] if m.get("is_image") else classes["text"]).append(m)
+
+    out: dict[str, dict] = {}
+    for name, ms in classes.items():
+        if not ms:
+            out[name] = {"calls": 0, "avg_ms": 0.0, "avg_tok_s": 0.0,
+                         "avg_tokens": 0.0, "tokens": 0}
+            continue
+        tokens = sum(m.get("prefilled_tokens", m["prompt_tokens"]) for m in ms)
+        ms_total = sum(m.get("prompt_ms", 0.0) for m in ms)
+        # Rate from server numbers when present, else derived
+        rate = (tokens / (ms_total / 1000.0)) if ms_total > 0 else 0.0
+        out[name] = {
+            "calls": len(ms),
+            "avg_ms": ms_total / len(ms),
+            "avg_tok_s": rate,
+            "avg_tokens": tokens / len(ms),
+            "tokens": tokens,
+        }
+    return out
+
+
+def summarize_repeats(entries: list[dict]) -> dict:
+    """Per-scenario pass rate across repeats + the flaky list.
+
+    `entries` are the runner's per-run entry dicts (each with `scenario`, `overall`
+    where overall is True/False/None). A scenario is FLAKY when some repeats pass
+    and some fail — the signal single-sample runs cannot give.
+    """
+    by_id: dict[str, dict] = {}
+    for e in entries:
+        if "skipped" in e or "error" in e:
+            continue
+        sid = e["scenario"]["id"]
+        rec = by_id.setdefault(sid, {"cat": e["scenario"].get("category", "?"), "results": []})
+        if e.get("overall") is not None:
+            rec["results"].append(bool(e["overall"]))
+
+    rates: dict[str, dict] = {}
+    flaky: list[dict] = []
+    for sid, rec in by_id.items():
+        n = len(rec["results"])
+        if n == 0:
+            continue
+        passed = sum(1 for r in rec["results"] if r)
+        rate = passed / n
+        rates[sid] = {"cat": rec["cat"], "passed": passed, "n": n, "rate": rate}
+        if 0 < rate < 1:
+            flaky.append({"id": sid, "cat": rec["cat"], "passed": passed, "n": n, "rate": rate})
+    return {"rates": rates, "flaky": sorted(flaky, key=lambda f: f["rate"])}
