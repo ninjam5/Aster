@@ -30,6 +30,9 @@ import webrtc_bridge
 @pytest.fixture(autouse=True)
 def _no_logging(monkeypatch):
     monkeypatch.setattr(config, "RELIABILITY_LOG_ENABLED", False, raising=False)
+    # The moment gate is memoized for a few seconds (QA round 3 cost fix), so clear it
+    # between tests or a cached verdict leaks into the next one.
+    awareness._MOMENT_CACHE.update(at=0.0, ok=True)
 
 
 # ── ID 19: addressed to Aster? ────────────────────────────────────────────────
@@ -289,9 +292,10 @@ class TestQAFollowUps:
         delivered = []
         monkeypatch.setattr(intervention, "_send_telegram_intervention",
                             lambda t: delivered.append(t), raising=False)
-        monkeypatch.setattr(intervention, "process_user_input",
-                            MagicMock(side_effect=AssertionError("must not speak")),
-                            raising=False)
+        # QA round 3: _trigger_intervention does `from core.brain import process_user_input`
+        # locally, so patching intervention.* was a silent no-op (the round-2 bug class).
+        monkeypatch.setattr(brain, "process_user_input",
+                            MagicMock(side_effect=AssertionError("must not speak")))
         intervention._trigger_intervention("youtube", "some window")
         assert delivered == []
 

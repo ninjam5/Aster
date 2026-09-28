@@ -6,6 +6,7 @@ run_engine_test.py does.
 """
 import json
 import os
+import pytest
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -336,3 +337,12 @@ def test_summarize_repeats_ignores_manual_and_errors():
     out = harness.summarize_repeats(entries)
     assert out["flaky"] == []
     assert out["rates"] == {}
+
+
+@pytest.fixture(autouse=True)
+def _isolate_reliability_log(tmp_path, monkeypatch):
+    """QA round 3: these files exercise process_user_input/LoopGuard without isolating
+    the reliability log, so a test run appended to the real Aster_Vault/reliability_log."""
+    import config
+    monkeypatch.setattr(config, "RELIABILITY_LOG_PATH",
+                        str(tmp_path / "rel.jsonl"), raising=False)

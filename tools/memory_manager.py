@@ -121,6 +121,8 @@ def _laya_select_facts(facts: list, query: str) -> list:
             "How relevant is this stored fact to the incoming message?",
             {f"f{i}": f for i, f in enumerate(facts)},
             state={"message": str(query)[:400]},
+            min_margin=0.5,   # QA round 3: this gate DROPS facts — use the strict
+                              # threshold the other information-safety gates use
         )
     except Exception:
         return facts

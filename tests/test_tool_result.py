@@ -124,3 +124,12 @@ def test_media_not_installed_is_now_a_failure():
     import tools.media as media
     assert media._NOT_INSTALLED.ok is False
     assert media._NOT_INSTALLED.text == "spotipy not installed"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_reliability_log(tmp_path, monkeypatch):
+    """QA round 3: these files exercise process_user_input/LoopGuard without isolating
+    the reliability log, so a test run appended to the real Aster_Vault/reliability_log."""
+    import config
+    monkeypatch.setattr(config, "RELIABILITY_LOG_PATH",
+                        str(tmp_path / "rel.jsonl"), raising=False)

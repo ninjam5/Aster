@@ -156,11 +156,16 @@ def _predict(state: dict, questions: dict):
 
 
 def reset_model():
-    """Testing/diagnostics: drop the cached model and refcount."""
+    """Testing/diagnostics: drop the cached model and refcount.
+
+    QA round 3: takes `_PREDICT_LOCK` first, so it can never pull the model out from
+    under an in-flight `agent.predict` (the lock order matches `_predict`).
+    """
     global _REFCOUNT
-    with _LOCK:
-        _REFCOUNT = 0
-        _free_model_memory()
+    with _PREDICT_LOCK:
+        with _LOCK:
+            _REFCOUNT = 0
+            _free_model_memory()
 
 
 # ---------------------------------------------------------------------------
@@ -430,7 +435,7 @@ def choose(question: str, criteria, key: str = "choice", state: dict = None,
 
 
 def score_candidates(levels, instruction: str, candidates, state: dict = None,
-                     min_confidence: float = 0.5) -> dict:
+                     min_confidence: float = 0.5, min_margin: float = None) -> dict:
     """Ordinal-score candidates on a caller-defined ordered scale (Laya `score`).
 
     IMPORTANT — Laya's `score` is NOT a per-candidate probability. Its answer is the
@@ -455,6 +460,10 @@ def score_candidates(levels, instruction: str, candidates, state: dict = None,
     if not cands:
         return _verdict("score", instruction, None, None, None, True, "empty candidates", **base)
     scale = max(1, len(lv) - 1)
+    # QA round 3: record/apply the EFFECTIVE threshold. A single candidate is gated on
+    # min_confidence, but the log used to claim the global margin threshold either way,
+    # which corrupts the calibration curve.
+    effective = _margin_threshold() if min_margin is None else float(min_margin)
     state_payload = {"question": instruction, "levels": lv}
     if state:
         state_payload.update(state)
@@ -497,7 +506,7 @@ def score_candidates(levels, instruction: str, candidates, state: dict = None,
     escalate, reason = False, ""
     if len(order) > 1:
         margin = normalized[best] - normalized[order[1]]
-        if _gate_escalates(margin):
+        if _gate_escalates(margin, effective):
             escalate, reason = True, "low or unavailable margin"
     else:
         c = conf.get(best)
@@ -506,30 +515,35 @@ def score_candidates(levels, instruction: str, candidates, state: dict = None,
             reason = f"low answer confidence ({c:.2f} < {min_confidence})"
     return _verdict("score", instruction, best, margin, None, escalate, reason,
                     scores=scores, normalized=normalized, best=best, levels=lv,
-                    answer_confidence=conf, keys=list(cands))
+                    answer_confidence=conf, keys=list(cands), threshold=effective)
 
 
 def answer_margin(answer: dict) -> float | None:
     """top1-top2 margin of a RAW answer dict (choice/score probabilities).
 
     For callers that batch independent questions through `ask_batch` and must gate
-    each answer themselves — batched answers do not go through `_verdict`, so the
-    caller needs the margin to apply its own (often stricter) threshold. Returns
-    None when the distribution is missing or degenerate.
+    each answer themselves. QA round 3: measures against the CHOSEN key (like
+    `_extract_choice`) — the old top-two form could borrow another key's margin.
     """
     if not isinstance(answer, dict):
         return None
     probs = answer.get("probabilities") or {}
-    if not isinstance(probs, dict):
+    if not isinstance(probs, dict) or len(probs) < 2:
         return None
+    choice = answer.get("choice")
     try:
-        vals = sorted((float(v) for v in probs.values()), reverse=True)
+        if choice is not None:
+            if choice not in probs:
+                return None
+            chosen = float(probs[choice])
+            others = [float(v) for k, v in probs.items() if k != choice]
+            margin = chosen - max(others) if others else None
+        else:
+            vals = sorted((float(v) for v in probs.values()), reverse=True)
+            margin = vals[0] - vals[1]
     except (TypeError, ValueError):
         return None
-    if len(vals) < 2:
-        return None
-    margin = vals[0] - vals[1]
-    return margin if math.isfinite(margin) else None
+    return margin if margin is not None and math.isfinite(margin) else None
 
 
 def ask_batch(questions: dict, state: dict = None) -> dict:

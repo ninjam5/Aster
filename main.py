@@ -720,6 +720,24 @@ try:
 except Exception as e:
     print(f"[Aster Core] Warning: Engine warmup failed: {e}")
 
+# Prewarm the Laya System-1 kernel in the background (QA round 3): it loads lazily on
+# first use, so without this the FIRST kernel-touching action after every restart pays
+# the ~35 s cold load (a GUI click, a Discord message, or a spoken utterance).
+try:
+    if getattr(config, "USE_LAYA_KERNEL", False):
+        def _prewarm_laya():
+            try:
+                import core.system1 as _s1
+                _s1.acquire()
+                _s1.release()
+                print("[Aster Core] Laya kernel prewarmed.")
+            except Exception as _e:
+                print(f"[Aster Core] Laya prewarm skipped: {_e}")
+        import threading as _threading
+        _threading.Thread(target=_prewarm_laya, name="laya-prewarm", daemon=True).start()
+except Exception as e:
+    print(f"[Aster Core] Laya prewarm setup skipped: {e}")
+
 # ============================================================================
 # MAIN BOOTSTRAP
 # ============================================================================

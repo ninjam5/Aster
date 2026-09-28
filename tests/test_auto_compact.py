@@ -133,3 +133,12 @@ def test_manual_compact_command_uses_shared_helper(_isolated_messages):
     assert "Compaction complete" in result
     assert len(brain.messages) == 2
     assert brain.messages[1]["content"].startswith("[System Memory Restored:")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_reliability_log(tmp_path, monkeypatch):
+    """QA round 3: these files exercise process_user_input/LoopGuard without isolating
+    the reliability log, so a test run appended to the real Aster_Vault/reliability_log."""
+    import config
+    monkeypatch.setattr(config, "RELIABILITY_LOG_PATH",
+                        str(tmp_path / "rel.jsonl"), raising=False)

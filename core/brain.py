@@ -1823,6 +1823,10 @@ def _execute_tool_impl(tool_name, arguments):
     elif tool_name == "send_discord_message":
         target_name = arguments.get("target_name", "")
         confirm = bool(arguments.get("confirm", False))
+        # QA round 3: CRITICAL — the brain sets `assume_guess` on a non-exact relay, but
+        # this branch never forwarded it, so the tool saw a canonical key, resolved it,
+        # and sent WITHOUT confirmation. Forward it.
+        assume_guess = bool(arguments.get("assume_guess", False))
         raw_message = arguments.get("message", "").strip()
         if not raw_message:
             return (
@@ -1831,7 +1835,8 @@ def _execute_tool_impl(tool_name, arguments):
                 "and call send_discord_message again."
             )
         outbound_message = _enforce_discord_honorific(target_name, raw_message)
-        result = send_discord_message(target_name, outbound_message, confirm=confirm)
+        result = send_discord_message(target_name, outbound_message, confirm=confirm,
+                                      assume_guess=assume_guess)
         # Mirror into the session ONLY when it was actually delivered — a CONFIRM
         # REQUIRED note (fuzzy target) means nothing was sent.
         if isinstance(result, str) and result.startswith("[System Note: Message delivered"):
@@ -2043,6 +2048,21 @@ def _execute_tool_impl(tool_name, arguments):
         if not loc:
             return tool_fail(f'FAILED — could not locate "{goal}" on screen. Nothing was clicked. '
                              f'Try a more specific or differently-worded description, or use look_at_screen first.')
+        # ID 17 (QA round 3): the send/destructive gate now covers the NATIVE path too.
+        # It was enforced only inside the web DOM path, so a native app's Delete / Send /
+        # Buy control was clicked silently. Same policy and same `confirm_send` escape
+        # hatch as the web path.
+        try:
+            from tools.dom import _send_policy, is_send_like
+            if _send_policy() == "confirm" and not arguments.get("confirm_send"):
+                if is_send_like({"role": loc.get("source", ""),
+                                 "name": loc.get("text", ""), "text": loc.get("text", "")}):
+                    return tool_fail(
+                        f'BLOCKED — "{goal}" looks like a send/destructive action. '
+                        f'Nothing was clicked. Confirm with the owner, then re-call '
+                        f'smart_click with confirm_send=true.')
+        except Exception as e:
+            print(f"[DOM] native send-gate skipped ({e})")
         coords = (loc["x"], loc["y"])
         pre_frame = capture_screen_small_gray()
         pyautogui.click(coords[0], coords[1])
@@ -2268,12 +2288,17 @@ def _extract_discord_message_intent(user_text: str) -> dict | None:
         # The captured token is not a contact — ask Laya about the WHOLE request,
         # because the regex tokenises phrasings badly ("text my brother saying hi"
         # captures "my" as the name).
-        pick = laya_pick_contact(text)
-        if pick.get("name"):
-            # The regex tokenised the name badly, so its payload is unreliable too —
-            # hand the model the whole request and let it compose from that.
-            return {"target": pick["name"], "payload": text, "exact": pick.get("exact", False),
-                    "via": f"regex+laya ({pick.get('reason', '')})"}
+        # QA round 3: only spend a Laya pass when the text could plausibly name a
+        # contact (or mentions Discord). "tell me a joke" was costing one here.
+        _maybe_contact = ("discord" in text.lower()
+                          or any(str(n).lower() in text.lower() for n in contact_names()))
+        if _maybe_contact:
+            pick = laya_pick_contact(text)
+            if pick.get("name"):
+                # The regex tokenised the name badly, so its payload is unreliable too —
+                # hand the model the whole request and let it compose from that.
+                return {"target": pick["name"], "payload": text, "exact": pick.get("exact", False),
+                        "via": f"regex+laya ({pick.get('reason', '')})"}
         if "discord" in payload_lower or "discord" in text.lower():
             # Explicitly about Discord but no known contact — keep the raw phrasing so
             # send_discord_message can report it honestly.
@@ -2707,9 +2732,10 @@ def evaluate_and_memorize(reason, force: bool = False):
             fact = tool_args.get("fact", "").strip()
             if fact:
                 _res = execute_tool("memorize_fact", {"fact": fact})
-                # QA round 2: only a REAL write counts against the cap — a gate skip
-                # (duplicate) must not consume the budget and starve a new fact.
-                if not (isinstance(_res, str) and "NOT saved" in _res):
+                # QA round 2/3: only a REAL write counts against the cap. A gate skip
+                # ("NOT saved"), an is_fact_already_known duplicate, or an offline
+                # return must not consume the budget and starve a new fact.
+                if isinstance(_res, str) and "Successfully committed" in _res:
                     _saved += 1
     except Exception as e:
         print(f"[Aster Internal: Memory consolidation failed: {e}]")
@@ -2984,10 +3010,13 @@ def process_discord_chat(sender_name: str, user_message: str) -> str:
 
     # ID 13: make sure we know how to address this person. Stored -> one Laya guess ->
     # if still unknown, ask them ONCE (recorded so we never nag).
+    # QA round 3: read the friend's facts ONCE and reuse for both the identity guess and
+    # the system prompt (it was read twice, the second time inside the brain lock).
+    _friend_facts = get_user_facts(sender)
     _pronoun_note = ""
     try:
         from tools.people import resolve_identity
-        _identity = resolve_identity(sender, get_user_facts(sender))
+        _identity = resolve_identity(sender, _friend_facts)
         honorific = _identity.get("honorific") or honorific
         if _identity.get("needs_ask"):
             _pronoun_note = (
@@ -3009,7 +3038,7 @@ def process_discord_chat(sender_name: str, user_message: str) -> str:
         # Facts are now the STABLE no-query list, and it is only rewritten when it
         # actually changes. (The per-message relevance selection is gone from this path;
         # the saving was a few hundred chars against a full re-prefill.)
-        _facts = get_user_facts(sender)
+        _facts = _friend_facts
         if history and history[0].get("role") == "system":
             _stable_prompt = DISCORD_CHAT_SYSTEM_PROMPT.format(
                 sender_name=sender,
@@ -3458,7 +3487,11 @@ def process_user_input(user_text, status_callback=None):
                 # each round so the model always sees the current time/mood.
                 _aware_block = awareness.render_context_block()
                 if _aware_block:
-                    eval_msgs.insert(1, {"role": "system", "content": _aware_block})
+                    # CACHE (QA round 3): APPEND, never insert at index 1. The block
+                    # carries the wall clock and session duration, so inserting it
+                    # before the history invalidated the whole history prefix every
+                    # turn. At the tail it is free.
+                    eval_msgs.append({"role": "system", "content": _aware_block})
                 # For Discord relay on the first round, supply a concrete formatting directive
                 # with the live target/payload so the model can't get the format wrong.
                 # ID 8: overlapping-tool hint, round 0 only. Appended at the END of the
@@ -3821,7 +3854,9 @@ def process_user_input(user_text, status_callback=None):
                     }
                     messages.append(prod_msg)
 
-                    response_msg = _execute_llm_completion(messages=messages, temperature=config.LLM_TEMPERATURE)
+                    response_msg = _execute_llm_completion(messages=messages,
+                                                           temperature=config.LLM_TEMPERATURE,
+                                                           tools=ADMIN_TOOLS)
                     response_text = (response_msg.get("content") or "").strip()
 
                     # Append the final response, then wipe the ghost prod from history
@@ -3842,7 +3877,9 @@ def process_user_input(user_text, status_callback=None):
                 # force the LLM to summarize what it has so far
                 print(f"[Aster Internal: Hit max tool rounds ({MAX_TOOL_ROUNDS}). Forcing final response...]")
                 _turn_outcome = "max_rounds"
-                final_response = (_execute_llm_completion(messages=messages, temperature=config.LLM_TEMPERATURE).get("content") or "")
+                final_response = (_execute_llm_completion(messages=messages,
+                                                          temperature=config.LLM_TEMPERATURE,
+                                                          tools=ADMIN_TOOLS).get("content") or "")
                 print(f"Aster: {final_response}")
                 messages.append({"role": "assistant", "content": final_response})
                 messages = trim_memory(messages)

@@ -367,10 +367,17 @@ def start_screen_watcher(target_text: str) -> str:
 
                     # --- MEMORY INJECTION ---
                     try:
-                        import datetime
-                        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        with open("Aster_Vault/memory.md", "a", encoding="utf-8") as f:
-                            f.write(f"\n- **[{timestamp}]** SYSTEM EVENT: The Screen Watcher daemon successfully detected '{target_text}' on the screen and sent a Telegram alert to {config.OWNER_NAME}.\n")
+                        # QA round 3: route through the single write choke point. This
+                        # used to append straight to memory.md, bypassing the Phase-2
+                        # gate and the ChromaDB dual-write (so BM25 saw lines that
+                        # dense recall did not). The gate classifies this action log as
+                        # junk and skips it — which is the intended filtering.
+                        from core.memory import memorize_fact
+                        memorize_fact(
+                            f"SYSTEM EVENT: The Screen Watcher daemon detected "
+                            f"'{target_text}' on the screen and alerted {config.OWNER_NAME}.",
+                            source="vision",
+                        )
                     except Exception as mem_e:
                         print(f"[Aster Sentry] Memory injection failed: {mem_e}")
                     # ------------------------

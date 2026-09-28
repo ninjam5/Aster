@@ -332,6 +332,10 @@ def release_brain() -> None:
 
 
 # ── proactive nudges (A5, A6) ─────────────────────────────────────────────────
+_MOMENT_CACHE = {"at": 0.0, "ok": True}
+_MOMENT_CACHE_SECONDS = 5.0
+
+
 def _good_moment_to_speak() -> bool:
     """Is now a reasonable moment for an unprompted nudge? (ID 20 of laya-integration.md)
 
@@ -341,7 +345,19 @@ def _good_moment_to_speak() -> bool:
     One deterministic hard stop (never interrupt the brain mid-turn), then a
     conservative Laya judgement over the live signals, which is where the fuzzy part
     lives. FAIL-OPEN on kernel doubt: speak, i.e. today's behaviour.
+
+    QA round 3: the verdict is MEMOIZED for a few seconds. Five triggers plus
+    `_push_nudge` all ask within one poll, and each used to cost a full Laya pass.
     """
+    now = time.time()
+    if now - _MOMENT_CACHE["at"] < _MOMENT_CACHE_SECONDS:
+        return _MOMENT_CACHE["ok"]
+    result = _good_moment_to_speak_uncached()
+    _MOMENT_CACHE.update(at=now, ok=result)
+    return result
+
+
+def _good_moment_to_speak_uncached() -> bool:
     if _brain_busy.is_set():
         return False
     try:
@@ -724,6 +740,10 @@ def _update_state(scene: dict) -> tuple[str, str | None]:
                 current_context["presence"] = "away"
             else:
                 current_context["presence"] = "present"
+                # QA round 3: clear the absence marker on return. It was never cleared,
+                # so _good_moment_to_speak kept reporting "he has been away for Ns"
+                # forever after the first absence — a false signal to the moment gate.
+                current_context["absence_since"] = None
 
         # Diff new observations (for context-anchored questions #2).
         observations: list[str] = list(current_context.get("new_observations", []))

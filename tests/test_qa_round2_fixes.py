@@ -38,6 +38,16 @@ def _no_logging(monkeypatch, tmp_path):
 
 class TestDiscordPromptStability:
     def test_system_prompt_is_byte_stable_across_messages(self, monkeypatch):
+        # QA round 3: the first version could not fail — with no staged facts and the
+        # kernel forced off, a query-dependent get_user_facts returns the SAME string.
+        # So assert the CALL SHAPE (no query may be passed) AND byte-stability.
+        seen_queries = []
+
+        def spy_facts(name, query=None):
+            seen_queries.append(query)
+            return "farah plays guitar"
+
+        monkeypatch.setattr(brain, "get_user_facts", spy_facts)
         monkeypatch.setattr(brain, "_execute_llm_completion",
                             lambda **k: {"role": "assistant", "content": "Very good."})
         monkeypatch.setattr(brain, "_laya_relay_intent", lambda text: False)
@@ -47,6 +57,9 @@ class TestDiscordPromptStability:
         brain.process_discord_chat("george", "a completely different second message")
         second = brain.discord_chat_histories["george"][0]["content"]
         assert first == second, "the Discord system prompt must not vary per message"
+        assert all(q is None for q in seen_queries), \
+            f"the Discord path must not use a per-message fact query: {seen_queries}"
+        assert "farah plays guitar" in first
         brain.discord_chat_histories.clear()
 
 
@@ -94,16 +107,22 @@ class TestSentryRoute2:
         ok, buf = cv2.imencode(".jpg", frame)
         assert ok
         import base64 as _b64
-        img_b64 = "data:image/jpeg;base64," + _b64.b64encode(buf.tobytes()).decode()
+        # Raw base64, exactly like the real capture_frame_base64 (no data: prefix).
+        img_b64 = _b64.b64encode(buf.tobytes()).decode()
 
         monkeypatch.setattr(sentry, "capture_frame_base64", lambda: img_b64, raising=False)
         monkeypatch.setattr(sentry, "_classify_frame_from_faces", lambda b64: None, raising=False)
         monkeypatch.setattr(sentry, "_analyze_frame_with_llm", lambda b64: None, raising=False)
-        monkeypatch.setattr(sentry.face_recognition, "face_locations", lambda rgb: [], raising=False)
+        ran = []
+        monkeypatch.setattr(sentry.face_recognition, "face_locations",
+                            lambda rgb: ran.append(1) or [], raising=False)
+        # A leaked WAITING_FOR_ID=True from an earlier test early-returns the sweep.
+        monkeypatch.setattr(sentry, "WAITING_FOR_ID", False, raising=False)
         bot = MagicMock()
         monkeypatch.setattr(sentry, "telegram_bot", bot, raising=False)
         monkeypatch.setattr(sentry, "chat_id", 1, raising=False)
         sentry.execute_sentry_sweep()          # must not raise
+        assert ran == [1], "Route 2 (face_recognition) must actually run"
         bot.send_message.assert_not_called()   # no faces -> nothing to report
 
 
@@ -111,18 +130,39 @@ class TestSentryRoute2:
 
 class TestAwarenessTriggerLatching:
     def test_env_nudge_does_not_advance_its_cooldown_when_deferred(self, monkeypatch):
-        # The gate is now the FIRST statement in the trigger, so nothing else needs
-        # stubbing: a bad moment must return before any latch/cooldown is touched.
+        # QA round 3: the first version was vacuous — lighting was never "dim", so the
+        # trigger returned at the cheap guard whether or not the gate existed. Set up
+        # the state so the trigger WOULD fire, then assert the gate stops it first.
         monkeypatch.setattr(awareness, "_good_moment_to_speak", lambda: False)
-        before = getattr(awareness, "_last_env_nudge", None)
+        monkeypatch.setattr(awareness, "_initiative_settings",
+                            lambda: {"env_nudges": True}, raising=False)
+        monkeypatch.setattr(awareness, "_last_env_nudge", 0.0, raising=False)
+        awareness.current_context["lighting"] = "dim"
         awareness._maybe_trigger_env_nudge("normal")
-        assert getattr(awareness, "_last_env_nudge", None) == before
+        assert awareness._last_env_nudge == 0.0   # latch NOT advanced
+        awareness.current_context["lighting"] = None
 
-    def test_reauth_reminder_does_not_latch_when_deferred(self, monkeypatch):
-        monkeypatch.setattr(awareness, "_good_moment_to_speak", lambda: False)
-        monkeypatch.setattr(awareness, "_reauth_reminder_sent", False, raising=False)
-        awareness._maybe_trigger_reauth_reminder()
-        assert awareness._reauth_reminder_sent is False
+    def test_env_nudge_latches_when_the_moment_is_good(self, monkeypatch):
+        # positive control: with the gate open the same setup DOES latch.
+        monkeypatch.setattr(awareness, "_good_moment_to_speak", lambda: True)
+        monkeypatch.setattr(awareness, "_initiative_settings",
+                            lambda: {"env_nudges": True}, raising=False)
+        monkeypatch.setattr(awareness, "_last_env_nudge", 0.0, raising=False)
+        monkeypatch.setattr(awareness, "_push_nudge", lambda nudge: None, raising=False)
+        awareness.current_context["lighting"] = "dim"
+        awareness._maybe_trigger_env_nudge("normal")
+        assert awareness._last_env_nudge > 0.0
+        awareness.current_context["lighting"] = None
+
+    def test_moment_gate_is_memoized_per_tick(self, monkeypatch):
+        # QA round 3 cost fix: five triggers + _push_nudge all ask within one poll.
+        calls = []
+        monkeypatch.setattr(awareness, "_good_moment_to_speak_uncached",
+                            lambda: calls.append(1) or True, raising=False)
+        awareness._MOMENT_CACHE.update(at=0.0, ok=True)
+        for _ in range(5):
+            awareness._good_moment_to_speak()
+        assert len(calls) == 1
 
 
 # ── a chosen key with no probability must escalate ────────────────────────────
