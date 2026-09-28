@@ -32,7 +32,8 @@ from tools.vision import (
 from tools.uia import get_foreground_window_title, focused_control_type, EDITABLE_CONTROL_TYPES
 from tools.assist import highlight_regions
 from tools.discord_api import (
-    contact_names, laya_pick_contact, resolve_contact, send_discord_message,
+    contact_names, laya_pick_contact, looks_like_contact, resolve_contact,
+    send_discord_message,
 )
 from tools.memory_manager import (
     get_user_facts,
@@ -2343,8 +2344,7 @@ def _extract_discord_message_intent(user_text: str) -> dict | None:
         # captures "my" as the name).
         # QA round 3: only spend a Laya pass when the text could plausibly name a
         # contact (or mentions Discord). "tell me a joke" was costing one here.
-        _maybe_contact = ("discord" in text.lower()
-                          or any(str(n).lower() in text.lower() for n in contact_names()))
+        _maybe_contact = ("discord" in text.lower() or looks_like_contact(text))
         if _maybe_contact:
             pick = laya_pick_contact(text)
             if pick.get("name"):
@@ -2366,10 +2366,9 @@ def _extract_discord_message_intent(user_text: str) -> dict | None:
     return None
 
 
-_RELAY_HINT_RE = re.compile(
-    r"\b(?:tell|ask|text|message|dm|send|relay|forward|let\s+\w+\s+know|ping|notify|inform)\b",
-    re.IGNORECASE,
-)
+_RELAY_HINT_RE = None   # removed in QA round 5: the send-verb-only prefilter matched
+                        # ordinary narration; `_laya_relay_intent` now requires a contact
+                        # name or an explicit "discord" mention.
 
 
 def _laya_relay_intent(text: str) -> bool:
@@ -2387,8 +2386,7 @@ def _laya_relay_intent(text: str) -> bool:
     # QA round 6: this DOES narrow ID 15 — "tell my brother I'll be late" is no longer
     # detected as a relay even though Laya could resolve a nickname. The direction is
     # safe (a missed relay, never a wrong send); use a real contact name or "discord".
-    if not ("discord" in lowered
-            or any(str(n).lower() in lowered for n in contact_names())):
+    if not ("discord" in lowered or looks_like_contact(text)):
         return False
     try:
         import core.system1 as system1
@@ -3335,7 +3333,10 @@ def _compact_context_locked(trigger: str = "manual") -> str:
         "content": "[SYSTEM OVERRIDE] Write a highly dense, factual summary of our entire conversation. You MUST preserve any '[Image Memory: ...]' transcriptions exactly as they were written. Do not use conversational filler."
     })
 
-    summary = (_execute_llm_completion(messages=compact_prompt, temperature=0.3).get("content") or "")
+    # CACHE (QA round 6): send ADMIN_TOOLS even though the reply is only text, so this
+    # call shares the admin prefix instead of dropping the ~12.8k-token tool block.
+    summary = (_execute_llm_completion(messages=compact_prompt, temperature=0.3,
+                                       tools=ADMIN_TOOLS).get("content") or "")
 
     # Restore state, setting summary as assistant memory
     messages = [messages[0], {"role": "assistant", "content": f"[System Memory Restored: I compacted my timeline to save VRAM. Here is everything I remember, including visual data: {summary}]"}]
@@ -3545,10 +3546,10 @@ def process_user_input(user_text, status_callback=None):
                     break
 
                 eval_msgs = list(messages)
-                # Inject ambient + time-aware context as an ephemeral system
-                # message at position 1 (right after the persistent system
-                # prompt). Never persisted to `messages` — re-rendered fresh
-                # each round so the model always sees the current time/mood.
+                # Ambient + time-aware context is an ephemeral system message that is
+                # APPENDED at the tail (never inserted at index 1 — that broke the
+                # prompt prefix cache every turn) and never persisted to `messages`, so
+                # it is re-rendered fresh each round.
                 _aware_block = awareness.render_context_block()
                 if _aware_block:
                     # CACHE (QA round 3): APPEND, never insert at index 1. The block

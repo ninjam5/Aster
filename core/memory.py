@@ -18,6 +18,7 @@ from config import MEMORY_AVAILABLE, MD_FILE, memory_collection
 # the duplicate pairs (memory.md:9/11, :10/12) and ~78 "Aster sent an email reply"
 # lines got in. It now runs HERE, at the single choke point every writer goes through.
 _GATE_MARGIN = 0.5  # stricter than the DOM motor's 0.25: a wrong "skip" loses a fact
+_WRITE_LOCK = threading.RLock()   # QA round 6: serialize read-gate-append across threads
 _NONE_KEY = "Z"
 _NONE_OPTION = "none of these — this is new information"
 
@@ -136,12 +137,22 @@ def memorize_fact(fact, source: str = "agent", skip_gate: bool = False):
     Runs the Laya write gate first (Phase 2) unless `skip_gate` is set. The gate can
     SKIP a write (confident duplicate or junk) and reports a detected conflict — it
     never deletes or rewrites existing facts.
+
+    QA round 6: the whole read-gate-append-index sequence runs under `_WRITE_LOCK`.
+    Writers now come from several threads (the brain, the Discord sync, the face
+    server, Gmail, vision), and the gate reads memory.md before appending — unlocked,
+    two concurrent writes could both pass the duplicate check and double-append.
     """
     if not MEMORY_AVAILABLE: return "Error: Memory system offline."
     fact = str(fact or "").strip()
     if not fact:
         return "Error: empty fact."
 
+    with _WRITE_LOCK:
+        return _memorize_fact_locked(fact, source=source, skip_gate=skip_gate)
+
+
+def _memorize_fact_locked(fact: str, source: str, skip_gate: bool):
     decision = {"skip": False, "reason": "", "category": "", "conflict": "", "supersedes": None}
     if not skip_gate:
         decision = _gate_fact(fact, source=source)

@@ -1,0 +1,96 @@
+"""Brain-level tests for the Discord relay gates (QA round 6 gaps).
+
+Rounds 3-5 added: the brain forces `confirm=False` + `assume_guess=True` on a non-exact
+relay turn, and blocks the input tools on a relay turn. Only the TOOL-level behaviour
+was tested, so a regression in the brain wiring would have gone unnoticed.
+"""
+import os
+import sys
+
+import pytest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+import config
+import core.brain as brain
+
+
+def _tool_call(name, args_json):
+    return {"role": "assistant", "content": "",
+            "tool_calls": [{"id": "1", "function": {"name": name,
+                                                    "arguments": args_json}}]}
+
+
+@pytest.fixture
+def relay_env(monkeypatch):
+    """A minimal admin turn: no compaction, no mood, no ambient block, no real sends."""
+    monkeypatch.setattr(config, "AUTO_COMPACT_ENABLED", False, raising=False)
+    monkeypatch.setattr(config, "RELIABILITY_LOG_ENABLED", False, raising=False)
+    monkeypatch.setattr(brain, "_log_turn_mood", lambda t: None, raising=False)
+    monkeypatch.setattr(brain.awareness, "render_context_block", lambda: None, raising=False)
+    monkeypatch.setattr(brain, "trim_memory", lambda m: m, raising=False)
+    monkeypatch.setattr(brain, "publish_terminal", lambda *a, **k: None, raising=False)
+    saved = list(brain.messages)
+    yield
+    brain.messages[:] = saved
+
+
+class TestRelayConfirmForcing:
+    def test_a_non_exact_relay_forces_confirm_off(self, monkeypatch, relay_env):
+        """The model self-asserting confirm=true must NOT approve a guessed target."""
+        sent = {}
+
+        def fake_send(target, msg, confirm=False, assume_guess=False):
+            sent.update(target=target, confirm=confirm, assume_guess=assume_guess)
+            return "FAILED — [CONFIRM REQUIRED: nothing was sent]"
+
+        monkeypatch.setattr(brain, "send_discord_message", fake_send)
+        monkeypatch.setattr(
+            brain, "_execute_llm_completion",
+            lambda **k: _tool_call("send_discord_message",
+                                   '{"target_name": "george", "message": "Hi", "confirm": true}'),
+            raising=False)
+
+        brain.messages[:] = [brain.messages[0]]
+        brain.process_user_input("tell geroge I'll be late", None)
+
+        assert sent, "send_discord_message was never called"
+        assert sent["confirm"] is False, "the model must not self-confirm a guessed target"
+        assert sent["assume_guess"] is True
+
+    def test_an_exact_relay_is_not_forced(self, monkeypatch, relay_env):
+        sent = {}
+
+        def fake_send(target, msg, confirm=False, assume_guess=False):
+            sent.update(confirm=confirm, assume_guess=assume_guess)
+            return "[System Note: Message delivered to george on Discord.]"
+
+        monkeypatch.setattr(brain, "send_discord_message", fake_send)
+        monkeypatch.setattr(
+            brain, "_execute_llm_completion",
+            lambda **k: _tool_call("send_discord_message",
+                                   '{"target_name": "george", "message": "Hi"}'),
+            raising=False)
+
+        brain.messages[:] = [brain.messages[0]]
+        brain.process_user_input("tell george I'll be late", None)
+
+        assert sent.get("assume_guess") is False   # exact name -> no guess flag
+
+
+class TestRelayToolBlocklist:
+    def test_input_tools_are_refused_on_a_relay_turn(self, monkeypatch, relay_env):
+        clicked = []
+        monkeypatch.setattr(brain.pyautogui, "click", lambda *a: clicked.append(1),
+                            raising=False)
+        monkeypatch.setattr(brain, "locate_ui_element_ex",
+                            lambda goal: {"x": 1, "y": 2, "source": "uia",
+                                          "text": "Send", "score": 0.9}, raising=False)
+        monkeypatch.setattr(
+            brain, "_execute_llm_completion",
+            lambda **k: _tool_call("smart_click", '{"goal": "Send"}'), raising=False)
+
+        brain.messages[:] = [brain.messages[0]]
+        brain.process_user_input("tell george I'll be late", None)
+
+        assert clicked == [], "a relay turn must not drive the desktop"

@@ -83,6 +83,19 @@ def _fuzzy_token_match(text: str):
     return None
 
 
+def looks_like_contact(text: str) -> bool:
+    """Cheap deterministic gate: could this text name a known contact? (no model)
+
+    QA round 6: the relay prefilter used a bare substring test, so a TYPO'd name
+    ("geroge") matched nothing and the typo resolution never ran. This adds the
+    difflib near-match, which is free.
+    """
+    lowered = str(text or "").lower()
+    if any(str(n).lower() in lowered for n in contact_names()):
+        return True
+    return bool(_fuzzy_token_match(text))
+
+
 def laya_pick_contact(request_text: str) -> dict:
     """Laya: which known contact does this request address? (ID 15 / Part B)
 

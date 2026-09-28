@@ -567,7 +567,7 @@ def ask_batch(questions: dict, state: dict = None) -> dict:
     if not isinstance(result, dict) or not isinstance(result.get("answers"), dict):
         return {"ok": False, "answers": {}, "error": "no answers in model response"}
     _log({"kind": "batch", "goal": "", "choice": None, "margin": None,
-          "distribution": None, "escalate": False, "reason": "",
+          "distribution": None, "escalate": None, "reason": "",
           "threshold": _margin_threshold(), "questions": list(questions),
           "answered": sorted(result["answers"])})
     return {"ok": True, "answers": result["answers"], "error": ""}
