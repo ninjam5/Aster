@@ -28,11 +28,22 @@ def _tmp_store(tmp_path, monkeypatch):
 
 class TestStrikes:
     def test_three_strikes_then_mute(self):
-        assert conv.record_strike("ninja", "a")["strikes"] == 1
+        r1 = conv.record_strike("ninja", "a")
+        assert r1["action"] == "none" and r1["strikes"] == 1
         r2 = conv.record_strike("ninja", "b")
-        assert r2["strikes"] == 2 and r2["should_warn"] and not r2["should_mute"]
+        assert r2["action"] == "warn" and r2["strikes"] == 2
         r3 = conv.record_strike("ninja", "c")
-        assert r3["strikes"] == 3 and r3["should_mute"]
+        assert r3["action"] == "mute" and r3["mute_count"] == 1
+        assert conv.get_state("ninja")["strikes"] == 0   # the mute resets the cycle
+
+    def test_strikes_to_mute_two(self, monkeypatch):
+        monkeypatch.setattr(config, "DISCORD_STRIKES_TO_MUTE", 2, raising=False)
+        assert conv.record_strike("ninja", "a")["action"] == "warn"
+        assert conv.record_strike("ninja", "b")["action"] == "mute"
+
+    def test_strikes_to_mute_one_mutes_immediately(self, monkeypatch):
+        monkeypatch.setattr(config, "DISCORD_STRIKES_TO_MUTE", 1, raising=False)
+        assert conv.record_strike("ninja", "a")["action"] == "mute"
 
     def test_strikes_decay_after_the_window(self):
         conv.record_strike("ninja", "a")
@@ -42,11 +53,14 @@ class TestStrikes:
         conv._save(data)
         assert conv.record_strike("ninja", "c")["strikes"] == 1
 
-    def test_mute_resets_the_strike_cycle(self):
-        for msg in ("a", "b", "c"):
-            conv.record_strike("ninja", msg)
-        conv.register_mute("ninja")
-        assert conv.get_state("ninja")["strikes"] == 0
+    def test_a_zero_window_means_never_decay(self, monkeypatch):
+        monkeypatch.setattr(config, "DISCORD_STRIKE_WINDOW_MINUTES", 0, raising=False)
+        conv.record_strike("ninja", "a")
+        conv.record_strike("ninja", "b")
+        data = conv._load()
+        data["ninja"]["last_strike_ts"] = time.time() - 10 ** 9
+        conv._save(data)
+        assert conv.record_strike("ninja", "c")["strikes"] == 3
 
     def test_empty_name_is_safe(self):
         assert conv.record_strike("", "x")["strikes"] == 0
@@ -99,6 +113,12 @@ class TestRecord:
         assert conv.get_state("ninja")["strikes"] == 0
         assert os.path.exists(conv._PATH + ".corrupt")
 
+    def test_valid_json_but_not_an_object_is_backed_up(self):
+        with open(conv._PATH, "w", encoding="utf-8") as f:
+            f.write("[1, 2, 3]")
+        assert conv.get_state("ninja")["strikes"] == 0
+        assert os.path.exists(conv._PATH + ".corrupt")
+
     def test_while_muted_messages_are_logged(self):
         conv.register_mute("ninja")
         conv.log_while_muted("ninja", "still mad")
@@ -118,3 +138,18 @@ class TestMessages:
         assert "for the" not in conv.render_final(1)
         assert "second time" in conv.render_final(2)
         assert "third time" in conv.render_final(3)
+
+
+class TestOwnerUnmute:
+    def test_unknown_name(self):
+        assert "No record" in conv.unmute("nobody")
+
+    def test_no_name(self):
+        assert "Usage" in conv.unmute("")
+
+    def test_clears_the_mute_but_keeps_the_count(self):
+        conv.register_mute("ninja")
+        out = conv.unmute("ninja")
+        assert "may speak" in out and "1 time" in out
+        assert conv.check_mute("ninja")[0] is False
+        assert conv.get_state("ninja")["mute_count"] == 1

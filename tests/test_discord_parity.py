@@ -7,6 +7,7 @@ import pytest
 
 import config
 import core.brain as brain
+import tools.conversations as conversations
 
 
 @pytest.fixture(autouse=True)
@@ -14,6 +15,9 @@ def _setup(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "LOOP_GUARD_ENABLED", True)
     monkeypatch.setattr(config, "RELIABILITY_LOG_ENABLED", True)
     monkeypatch.setattr(config, "RELIABILITY_LOG_PATH", str(tmp_path / "rel.jsonl"))
+    # QA 2026-09-29: process_discord_chat now consults the conversation-ending store —
+    # keep it off the owner's real Aster_Vault/conversation_state.json.
+    monkeypatch.setattr(conversations, "_PATH", str(tmp_path / "conv.json"), raising=False)
     # Fresh per-friend history each test
     brain.discord_chat_histories.pop("tester", None)
     yield

@@ -116,12 +116,19 @@ atomic write, corrupt-file → `.corrupt` copy).
 ```
 
 API (never raises):
-- `record_strike(name, message, margin) -> {strikes, warned, should_mute}`
+- `record_strike(name, message, margin) -> {action, strikes, mute_count, should_warn, should_mute}`
+  — **atomic**: one locked read-modify-write that records the strike and, if it is the
+  `strikes_to_mute`-th, applies the mute in the same step (`action` = `"none"`/`"warn"`/`"mute"`).
+  A separate mute call had let a concurrent burst inflate `mute_count` (QA 2026-09-29).
 - `check_mute(name) -> (muted: bool, minutes_left: int)` — auto-clears an expired mute
-- `register_mute(name, minutes, message) -> {mute_count}`
-- `clear_mute(name)` — owner `/unmute`; keeps `mute_count` + incidents, resets strikes
+- `register_mute(name, minutes, message) -> {mute_count}` — low-level/manual mute
+- `clear_mute(name)` · `unmute(name) -> str` — owner override (returns the reply text)
 - `get_state(name) -> dict`
-- `incidents(name=None) -> str` — human-readable permanent record for recall
+- `incidents(name=None) -> str` — human-readable permanent record for recall (bounded)
+- `log_while_muted(name, message)` — record an inbound that arrived while muted
+
+`strike_window_minutes <= 0` means **never decay** (strikes persist until a mute); the
+counter resets on every mute, so the next cycle needs a fresh run.
 
 ---
 
@@ -178,7 +185,7 @@ discord_conversation:
 - **Never mutes the owner** — Discord DMs are whitelisted friends only; the owner is not a
   contact.
 - **Reversible** — `/unmute <name>`; auto-expiry.
-- **No silent loss** — every inbound while muted is stored in the record.
+- **No silent loss** — every inbound while muted (that carries text) is stored in the record.
 - **Cache discipline** — the hostility gate returns before any history/prompt work, so it
   cannot perturb the Discord prompt prefix; the countdown path touches no LLM.
 
@@ -204,3 +211,18 @@ discord_conversation:
 - Per-contact "never mute" allowlist — not needed today (the owner override covers it).
 - LLM-generated final line — deliberately canned for determinism; revisit if the tone
   reads flat.
+
+---
+
+## 12. QA review (2026-09-29) — findings and fixes
+
+Two independent review agents (correctness; test integrity) audited the shipped code.
+
+| Severity | Finding | Fix |
+|---|---|---|
+| Med | `record_strike` + `register_mute` were separate locked steps, so a concurrent hostile burst could each fire a mute and inflate `mute_count` (a wrong ordinal in the FINAL line). | `record_strike` is now one atomic step that also applies the mute; the brain no longer calls `register_mute` itself. |
+| Med | `strike_window_minutes: 0` made the decay check always true → the feature went silently inert. | `<= 0` now means **never decay** (documented). |
+| Low | The mute branch was inside the fail-open `try`, so a raise could fall through to the LLM. | The mute gate is enforced outside the ladder's `try`; only the ladder is fail-open. |
+| Low | `incidents()` echoed a friend's message into the admin LLM uncapped; a valid-JSON non-object store was not backed up. | Output is bounded (4000 chars, ≤20 contacts); a non-object store is backed up to `.corrupt` too. |
+| Tests | `test_kernel_off_fails_open` passed even if the kernel guard ran; the 0.75 margin was unprotected; `test_disabled_is_unchanged` could not see a kill-switch leak; the ladder test could not observe the strike reset; `test_discord_parity.py`/`test_qa_round2_fixes.py` touched the real store; the recall tool + `/unmute`/`/discordlog` were untested. | All six closed — the kernel-off test asserts the short-circuit, a spy asserts `min_margin`, the kill-switch test pre-mutes, the ladder asserts the store reset, both files patch `conversations._PATH`, and the recall tool + `unmute()` are covered. |
+

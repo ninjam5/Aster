@@ -23,6 +23,7 @@ import config
 import core.brain as brain
 import core.system1 as system1
 import tools.awareness as awareness
+import tools.conversations as conversations
 import tools.discord_api as discord_api
 import tools.people as people
 import tools.sentry as sentry
@@ -32,6 +33,8 @@ import tools.sentry as sentry
 def _no_logging(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "RELIABILITY_LOG_ENABLED", False, raising=False)
     monkeypatch.setattr(people, "_PATH", str(tmp_path / "people.json"), raising=False)
+    # QA 2026-09-29: process_discord_chat now consults the conversation-ending store.
+    monkeypatch.setattr(conversations, "_PATH", str(tmp_path / "conv.json"), raising=False)
 
 
 # ── CACHE: Discord prompt stability ───────────────────────────────────────────

@@ -86,6 +86,13 @@ class TestLadder:
         assert any(i["kind"] == "while_muted"
                    for i in conv.get_state("ninja")["incidents"])
 
+    def test_mute_resets_the_strike_cycle(self, monkeypatch):
+        _hostility(monkeypatch)
+        for i in range(3):
+            brain.process_discord_chat("ninja", f"x{i}")
+        assert conv.get_state("ninja")["strikes"] == 0
+        assert conv.get_state("ninja")["mute_count"] == 1
+
     def test_second_cycle_mentions_second_time(self, monkeypatch):
         _hostility(monkeypatch)
         for i in range(3):
@@ -104,12 +111,14 @@ class TestLadder:
         assert out == "Very good, Sir."
         assert conv.get_state("ninja")["strikes"] == 0
 
-    def test_disabled_is_unchanged(self, monkeypatch):
+    def test_disabled_does_not_reply_with_the_countdown(self, monkeypatch):
+        conv.register_mute("ninja")                         # a pre-existing mute
         monkeypatch.setattr(config, "DISCORD_CONVERSATION_ENABLED", False, raising=False)
         _hostility(monkeypatch)
         out = brain.process_discord_chat("ninja", "fuck u aster")
-        assert out == "Very good, Sir."
-        assert conv.get_state("ninja")["strikes"] == 0
+        assert out == "Very good, Sir."                     # today's path, not the countdown
+        assert "not accepting responses" not in out
+        assert conv.get_state("ninja")["mute_count"] == 1   # no store mutation
 
 
 class TestHostilityGate:
@@ -131,6 +140,35 @@ class TestHostilityGate:
                             lambda *a, **k: {"answer": True, "escalate": True, "margin": 0.2})
         assert brain._discord_hostility("meh")["strike"] is False
 
-    def test_kernel_off_fails_open(self, monkeypatch):
+    def test_kernel_off_fails_open_without_calling_the_model(self, monkeypatch):
         monkeypatch.setattr(system1, "kernel_enabled", lambda: False)
+        calls = []
+        monkeypatch.setattr(system1, "check_state",
+                            lambda *a, **k: calls.append(1) or {"answer": True, "escalate": False})
         assert brain._discord_hostility("fuck u aster")["strike"] is False
+        assert calls == [], "the model must not be consulted with the kernel off"
+
+    def test_the_gate_uses_the_benchmarked_margin(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(system1, "kernel_enabled", lambda: True)
+
+        def spy(*a, **k):
+            captured.update(k)
+            return {"answer": True, "escalate": False, "margin": 0.9}
+
+        monkeypatch.setattr(system1, "check_state", spy)
+        brain._discord_hostility("fuck u aster")
+        assert captured.get("min_margin") == config.DISCORD_HOSTILITY_MARGIN
+        assert "fuck u aster" in captured.get("state_text", "")
+
+
+class TestRecallTool:
+    def test_get_discord_incidents_for_a_name(self):
+        conv.record_strike("ninja", "fuck u aster", 0.84)
+        out = brain.execute_tool("get_discord_incidents", {"name": "ninja"})
+        assert "ninja" in out and "strike" in out
+
+    def test_get_discord_incidents_lists_all(self):
+        conv.record_strike("george", "x")
+        out = brain.execute_tool("get_discord_incidents", {})
+        assert "george" in out

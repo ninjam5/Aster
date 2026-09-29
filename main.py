@@ -557,23 +557,12 @@ if config.bot:
             config.bot.reply_to(message, "Unauthorized user. Access denied.")
             return
         parts = message.text.split(None, 1)
-        if len(parts) < 2 or not parts[1].strip():
-            config.bot.reply_to(message, "[Aster: Usage: /unmute <name>]")
-            return
-        name = parts[1].strip()
+        name = parts[1].strip() if len(parts) > 1 else ""
         try:
             import tools.conversations as _conv
-            record = _conv.get_state(name)
-            if not record.get("mute_count") and not record.get("strikes"):
-                config.bot.reply_to(message, f"[Aster: No record for '{name}'.]")
-                return
-            _conv.clear_mute(name)
-            config.bot.reply_to(message, (
-                f"[Aster: '{name}' may speak to me again. "
-                f"(They have been silenced {record.get('mute_count', 0)} time(s) before.)]"
-            ))
+            config.bot.reply_to(message, f"[Aster: {_conv.unmute(name)}]")
         except Exception as e:
-            config.bot.reply_to(message, f"[Aster: Could not unmute '{name}' — {e}]")
+            config.bot.reply_to(message, f"[Aster: Could not unmute — {e}]")
 
     @config.bot.message_handler(commands=['discordlog'])
     def handle_discordlog_command(message):

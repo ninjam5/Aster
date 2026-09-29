@@ -83,7 +83,13 @@ def _strikes_to_mute() -> int:
 
 
 def _strike_window_seconds() -> float:
-    return max(0.0, _cfg("DISCORD_STRIKE_WINDOW_MINUTES", float, 720.0) * 60.0)
+    # A window <= 0 means "never decay" (strikes persist until a mute). This is the
+    # intuitive reading of 0 and avoids the old degenerate "always decay" that made the
+    # feature silently inert (QA 2026-09-29).
+    minutes = _cfg("DISCORD_STRIKE_WINDOW_MINUTES", float, 720.0)
+    if minutes <= 0:
+        return float("inf")
+    return minutes * 60.0
 
 
 def _mute_minutes() -> float:
@@ -103,6 +109,8 @@ def _load() -> dict:
                 data = json.load(f)
             if isinstance(data, dict):
                 return {str(k): v for k, v in data.items() if isinstance(v, dict)}
+            # Valid JSON but not an object — treat it as corrupt too (QA 2026-09-29).
+            raise ValueError("top-level JSON is not an object")
     except Exception as e:
         print(f"[Conversations] WARNING: could not read {_PATH} ({e}). Treating as empty.")
         try:
@@ -172,15 +180,23 @@ def get_state(name) -> dict:
 
 
 def record_strike(name, message: str = "", margin=None) -> dict:
-    """Register a hostility strike. Returns {strikes, should_warn, should_mute}.
+    """Register a hostility strike AND apply its consequence — one atomic step.
 
-    Strikes decay: if the last strike is older than `strike_window_minutes`, the
-    counter resets first (a rude message months ago must not accumulate).
+    A single locked read-modify-write, so concurrent hostile messages cannot each fire a
+    mute (which used to inflate the permanent `mute_count`). Returns:
+
+        {"action": "none"|"warn"|"mute", "strikes": <the count that fired>,
+         "mute_count": int, "should_warn": bool, "should_mute": bool}
+
+    Strikes decay after `strike_window_minutes` (<= 0 disables decay); the counter resets
+    on a mute so the next cycle needs a fresh run.
     """
     key = _key(name)
     warn_at = _strikes_to_mute() - 1
+    empty = {"action": "none", "strikes": 0, "mute_count": 0,
+             "should_warn": False, "should_mute": False}
     if not key:
-        return {"strikes": 0, "should_warn": False, "should_mute": False}
+        return empty
     now = time.time()
     with _LOCK:
         data = _load()
@@ -191,15 +207,25 @@ def record_strike(name, message: str = "", margin=None) -> dict:
             record["warned"] = False
         record["strikes"] = int(record.get("strikes") or 0) + 1
         record["last_strike_ts"] = round(now, 3)
-        if record["strikes"] >= warn_at:
-            record["warned"] = True
+        strikes = record["strikes"]
         _append(record, "strike", message, margin=margin)
+        action = "none"
+        if strikes >= _strikes_to_mute():
+            record["mute_count"] = int(record.get("mute_count") or 0) + 1
+            record["muted_until"] = round(now + _mute_minutes() * 60.0, 3)
+            _append(record, "mute", message, minutes=_mute_minutes())
+            record["strikes"] = 0
+            record["warned"] = False
+            record["last_strike_ts"] = 0.0
+            action = "mute"
+        elif strikes == warn_at:
+            record["warned"] = True
+            action = "warn"
         data[stored] = record
         _save(data)
-    strikes = record["strikes"]
-    return {"strikes": strikes,
-            "should_warn": strikes == warn_at,
-            "should_mute": strikes >= _strikes_to_mute()}
+        mute_count = int(record.get("mute_count") or 0)
+    return {"action": action, "strikes": strikes, "mute_count": mute_count,
+            "should_warn": action == "warn", "should_mute": action == "mute"}
 
 
 def register_mute(name, minutes=None, message: str = "") -> dict:
@@ -263,6 +289,19 @@ def clear_mute(name) -> dict:
     return {"mute_count": record["mute_count"]}
 
 
+def unmute(name) -> str:
+    """Owner `/unmute <name>`: clear the mute and return the reply text."""
+    key = _key(name)
+    if not key:
+        return "Usage: /unmute <name>"
+    record = get_state(key)
+    if not record.get("mute_count") and not record.get("strikes"):
+        return f"No record for '{key}'."
+    clear_mute(key)
+    return (f"'{key}' may speak to me again. "
+            f"(They have been silenced {record.get('mute_count', 0)} time(s) before.)")
+
+
 def log_while_muted(name, message: str = "") -> None:
     """Record an inbound message that arrived while muted (no reply from the LLM)."""
     key = _key(name)
@@ -303,7 +342,7 @@ def incidents(name=None) -> str:
         names = [(stored, _normalize(rec)) for stored, rec in data.items()]
 
     lines = []
-    for stored, rec in sorted(names, key=lambda kv: kv[0].lower()):
+    for stored, rec in sorted(names, key=lambda kv: kv[0].lower())[:20]:
         muted_note = ""
         until = float(rec.get("muted_until") or 0.0)
         if until > time.time():
@@ -315,4 +354,6 @@ def incidents(name=None) -> str:
             msg = str(inc.get("message", "")).strip().replace("\n", " ")
             extra = f" — \"{msg[:90]}\"" if msg else ""
             lines.append(f"    {_fmt_ts(inc.get('ts'))}  {kind}{extra}")
-    return "\n".join(lines) if lines else "No Discord incidents on record."
+    text = "\n".join(lines) if lines else "No Discord incidents on record."
+    # Bound the output: this can re-enter the admin LLM as a tool result.
+    return text[:4000]

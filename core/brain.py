@@ -35,6 +35,7 @@ from tools.discord_api import (
     contact_names, laya_pick_contact, looks_like_contact, resolve_contact,
     resolve_typo, send_discord_message,
 )
+import tools.conversations as conversations
 from tools.memory_manager import (
     get_user_facts,
     save_fact as save_discord_fact,
@@ -3250,31 +3251,40 @@ def process_discord_chat(sender_name: str, user_message: str) -> str:
 
     # ── Conversation-ending (spec: conversation-ending.md) ────────────────────
     # Mute gate + strike ladder. Runs BEFORE any history/pronoun/LLM work so the
-    # countdown path is code-only (no LLM), and so it cannot perturb the cached
-    # Discord prompt prefix. FAIL-OPEN on any error.
+    # countdown path is code-only (no LLM) and cannot perturb the cached Discord prompt
+    # prefix. The MUTE branch is enforced outside the fail-open try (a muted sender must
+    # never fall through to the LLM); only the hostility ladder is fail-open on error.
     try:
-        import tools.conversations as conv
-        if conv.is_enabled():
-            _muted, _minutes_left = conv.check_mute(sender)
-            if _muted:
-                conv.log_while_muted(sender, incoming)
-                publish_terminal(f"[SYS] Discord DM from {sender} ignored (muted)")
-                return conv.render_countdown(_minutes_left)
+        _conv_enabled = conversations.is_enabled()
+    except Exception:
+        _conv_enabled = False
+    if _conv_enabled:
+        try:
+            _muted, _minutes_left = conversations.check_mute(sender)
+        except Exception:
+            _muted, _minutes_left = False, 0
+        if _muted:
+            try:
+                conversations.log_while_muted(sender, incoming)
+            except Exception:
+                pass
+            publish_terminal(f"[SYS] Discord DM from {sender} ignored (muted)")
+            return conversations.render_countdown(_minutes_left)
+        try:
             _hostile = _discord_hostility(incoming)
             if _hostile.get("strike"):
-                _strike = conv.record_strike(sender, incoming, _hostile.get("margin"))
+                _res = conversations.record_strike(sender, incoming, _hostile.get("margin"))
                 publish_terminal(
-                    f"[SYS] Discord hostility strike {_strike['strikes']} from {sender} "
-                    f"(margin {_hostile.get('margin')})"
+                    f"[SYS] Discord hostility strike {_res.get('strikes')} from {sender} "
+                    f"-> {_res.get('action')} (margin {_hostile.get('margin')})"
                 )
-                if _strike.get("should_mute"):
-                    _mc = conv.register_mute(sender, message=incoming)
-                    return conv.render_final(_mc.get("mute_count", 1))
-                if _strike.get("should_warn"):
-                    return conv.WARNING_LINE
-                # strike 1: fall through to a normal (cool) reply
-    except Exception as e:
-        print(f"[Aster Internal: conversation-ending gate skipped ({e})]")
+                if _res.get("action") == "mute":
+                    return conversations.render_final(_res.get("mute_count", 1))
+                if _res.get("action") == "warn":
+                    return conversations.WARNING_LINE
+                # strike 1 ("none"): fall through to a normal (cool) reply
+        except Exception as e:
+            print(f"[Aster Internal: conversation-ending gate skipped ({e})]")
 
     # ID 13: make sure we know how to address this person. Stored -> one Laya guess ->
     # if still unknown, ask them ONCE (recorded so we never nag).
