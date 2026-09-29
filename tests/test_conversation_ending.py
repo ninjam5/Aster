@@ -156,6 +156,8 @@ class TestHostilityGate:
         assert brain._discord_hostility("meh")["strike"] is False
 
     def test_kernel_off_fails_open_without_calling_the_model(self, monkeypatch):
+        # premise: this input really is a lexicon hit, so the ordering is load-bearing
+        assert conv.lexicon_hostility("fuck u aster") is not None
         monkeypatch.setattr(system1, "kernel_enabled", lambda: False)
         calls = []
         monkeypatch.setattr(system1, "check_state",

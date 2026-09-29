@@ -202,18 +202,27 @@ class TestOwnerUnmute:
 
 
 class TestOwnerForget:
-    def test_erases_the_record(self):
+    def test_erases_only_the_named_record(self):
         conv.record_strike("ninja", "x")
         conv.register_mute("ninja")
+        conv.record_strike("george", "y")
         assert "Erased" in conv.forget("ninja")
+        assert "ninja" not in conv._load()
         assert conv.get_state("ninja")["mute_count"] == 0
         assert conv.get_state("ninja")["incidents"] == []
+        assert conv.get_state("george")["strikes"] == 1   # untouched
+
+    def test_case_insensitive(self):
+        conv.record_strike("Ninja", "x")
+        assert "Erased" in conv.forget("ninja")
+        assert "Ninja" not in conv._load()
 
     def test_unknown_name(self):
         assert "No record" in conv.forget("nobody")
 
     def test_no_name(self):
         assert "Usage" in conv.forget("")
+        assert "Usage" in conv.forget("   ")
 
 
 class TestHostileLexicon:
@@ -226,16 +235,51 @@ class TestHostileLexicon:
                      "fuck u",
                      "stfu moron",
                      "you're a fucking idiot",
-                     "fuck off"]:
+                     "you are a stupid fucking machine",
+                     "fuck off",
+                     "go fuck yourself",
+                     "screw you"]:
             assert conv.lexicon_hostility(text), text
 
-    def test_does_not_fire_on_banter_or_third_parties(self):
-        for text in ["haha you're such a goofball",
+    def test_does_not_fire_on_banter(self):
+        for text in ["haha you're a dumbass lol",
+                     "shut up lol that's hilarious",
+                     "omg shut up you're so funny",
+                     "screw you man, haha",
                      "you little nerd lol",
-                     "my boss is a fucking idiot",
+                     "haha you're such a goofball",
+                     "stop being so formal lol"]:
+            assert conv.lexicon_hostility(text) is None, text
+
+    def test_does_not_fire_on_quotes_or_retells(self):
+        for text in ["he told me 'fuck you' yesterday",
+                     "my ex said 'shut up' to me",
+                     "that guy kept saying shut the fuck up to everyone"]:
+            assert conv.lexicon_hostility(text) is None, text
+
+    def test_does_not_fire_on_third_party_venting(self):
+        for text in ["my boss is a fucking idiot",
+                     "my boss is a fucking idiot, he told you to file it",
+                     "this shit is broken, can you fix it?",
+                     "I had a shit day, how about you?",
                      "my brother is such an idiot",
-                     "traffic was shit today",
-                     "hey aster, can you tell Mohamed I'll be late?",
+                     "my roommate is an asshole",
+                     "this game is absolute garbage"]:
+            assert conv.lexicon_hostility(text) is None, text
+
+    def test_does_not_fire_on_innocent_homographs(self):
+        for text in ["a chink in the armor",
+                     "she keeps the kitchen spic and span",
+                     "he's niggardly with his praise",
+                     "my transmission (tranny) is slipping, can you look it up?",
+                     "you should try the shitake mushrooms"]:
+            assert conv.lexicon_hostility(text) is None, text
+
+    def test_does_not_fire_on_neutral_chat(self):
+        for text in ["hey aster, can you tell Mohamed I'll be late?",
                      "good evening, how are you?",
-                     "thanks man, appreciate it"]:
+                     "thanks man, appreciate it",
+                     "u ok?",
+                     "you're the best",
+                     "I'll fucking kill this deadline"]:
             assert conv.lexicon_hostility(text) is None, text

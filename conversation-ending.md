@@ -77,11 +77,18 @@ single 35B judge call — but that leaves "Laya-bound", so it is not the default
 **Deterministic OR-net for misses (2026-09-29, live test):** a live run showed Laya
 under-scoring explicit abuse ("to my majesty fagoot", "shut the fuck up and listen to ur
 elders" produced no strike). `conversations.lexicon_hostility(text)` now runs **first** and
-ORs in — a strike if the message has a severe slur, a bare imperative insult
-("shut up"/"stfu"/"fuck off"), or profanity **addressed at Aster** (second person). It is
-deliberately conservative: profanity about a third party ("my boss is a fucking idiot")
-does **not** fire, because it requires a second-person/`aster` marker. A hit short-circuits
-Laya with `reason="lexicon: …"`.
+ORs in. It is tuned for **precision** (a wrong strike is what mutes a friend):
+- a **narrow** severe-slur list (`fag\w*`, `nigg(er|a|ah)s?`, `retard(ed)?`, `cunt`, `kike`,
+  `wetback`) — deliberately excludes homographs (`chink`, `spic`, `niggardly`, `tranny`);
+- a **bare imperative at the start** of the message ("shut up"/"stfu"/"fuck off") — a
+  quoted/retold imperative ("he said 'fuck you'") does not count;
+- a **targeted insult**: a second-person/`aster` marker within ~3 words of a profanity
+  ("you little shit", "u are an asshole"); "fuck you" only at the start;
+- a **playful-tone veto** (`lol`/`haha`/`jk`/`😂`…) suppresses the softer nets.
+A hit short-circuits Laya with `reason="lexicon: …"`. Verified corpus: 15/15 clear-abuse
+positives caught; 28/28 negatives (banter, quotes, third-party venting, homographs,
+neutral) clean. The whole gate stays Laya-bound — kernel off means no strike, lexicon
+included.
 
 ---
 

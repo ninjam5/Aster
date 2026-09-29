@@ -29,34 +29,49 @@ _LOCK = threading.RLock()
 
 # ── deterministic high-recall hostility signal (spec §3) ──────────────────────
 # The Laya gate under-scores some explicit abuse ("shut the fuck up", a slur), so a
-# small deterministic net runs FIRST and ORs in. Deliberately conservative: profanity
-# only counts when it ADDRESSES Aster (second person), so venting about a third party
-# ("my boss is a fucking idiot") does not fire; slurs and bare imperatives count alone.
+# small deterministic net runs FIRST and ORs in. It is tuned for PRECISION (a wrong
+# strike is what mutes a friend): a narrow slur list, imperatives only at the start of
+# the message, targeted insults only next to a second-person/`aster`, and a playful-tone
+# veto ("lol"/"haha") that suppresses the softer nets. Venting about a third party and
+# quotes/retells do not fire.
 _SEVERE_SLURS = re.compile(
-    r"\b(fag\w*|nigg\w+|retard(?:ed)?|cunt|kike|spic|chink|tranny|wetback|coon)\b",
-    re.IGNORECASE)
+    r"\b(fag\w*|nigg(?:er|a|ah)s?|retard(?:ed)?|cunt|kike|wetback)\b", re.IGNORECASE)
+# Only at the start of the message — a quoted/retold imperative does not count.
 _IMPERATIVE_INSULTS = re.compile(
-    r"\b(shut (?:the (?:fuck|hell) )?up|stfu|fuck off|piss off|screw you|fuck you|"
-    r"go fuck yourself|fuck urself)\b", re.IGNORECASE)
-_PROFANITY = re.compile(
-    r"\b(fuck\w*|shit\w*|asshole|arsehole|bastard|dickhead|prick|moron|idiot|imbecile|"
-    r"dumbass|dipshit|jackass|bitch)\b", re.IGNORECASE)
-_SECOND_PERSON = re.compile(
-    r"\b(you|your|yours|youre|you're|ur|u|aster)\b", re.IGNORECASE)
+    r"^\s*(?:please\s+)?(shut (?:the (?:fuck|hell) )?up|stfu|fuck off|piss off|screw you|"
+    r"fuck you|fuck urself|go fuck yourself)\b", re.IGNORECASE)
+_SECOND_PERSON = r"\b(you|your|yours|youre|you're|ur|u|aster)\b"
+# A pronoun close before a profanity: "you little shit", "u are an asshole".
+_TARGETED = re.compile(
+    _SECOND_PERSON + r"(?:\s+\w+){0,3}\s+\b(fuck|fucked|fucking|shit|shitty|shithead|"
+    r"asshole|arsehole|bastard|dickhead|dick|prick|moron|idiot|imbecile|dumbass|dipshit|"
+    r"jackass|bitch|stupid)\b", re.IGNORECASE)
+# Only at the start: "fuck you", "screw u" — not a quote ("he said 'fuck you'").
+_PROFANITY_THEN_YOU = re.compile(
+    r"^\W*(fuck|screw|piss)\s+(you|u|your|yours|ur)\b", re.IGNORECASE)
+_BANTER = re.compile(
+    r"\b(lol|lmao|lmfao|haha+|hehe+|jk|j/k|kidding|joking|funny|ily)\b|😂|🤣|😹|😭|xd\b|:\)",
+    re.IGNORECASE)
 
 
 def lexicon_hostility(text) -> str | None:
     """Deterministic explicit-abuse signal. Returns a short reason or None.
 
-    High recall for clear abuse the Laya gate misses; conservative enough not to fire
-    on friendly teasing or venting about a third party.
+    High recall for clear abuse the Laya gate misses, tuned for precision so it does not
+    mute a friend over banter, a third-party vent, or a quote.
     """
     t = str(text or "")
+    if not t.strip():
+        return None
     if _SEVERE_SLURS.search(t):
         return "severe slur"
+    if _BANTER.search(t):
+        return None   # playful tone suppresses the softer nets
     if _IMPERATIVE_INSULTS.search(t):
         return "imperative insult"
-    if _PROFANITY.search(t) and _SECOND_PERSON.search(t):
+    if _TARGETED.search(t):
+        return "insult aimed at you"
+    if _PROFANITY_THEN_YOU.search(t):
         return "profanity aimed at you"
     return None
 
