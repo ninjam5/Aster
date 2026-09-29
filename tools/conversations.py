@@ -27,28 +27,28 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _PATH = os.path.join(_REPO_ROOT, "Aster_Vault", "conversation_state.json")
 _LOCK = threading.RLock()
 
-# ── deterministic high-recall hostility signal (spec §3) ──────────────────────
+# ── deterministic high-precision abuse signal (spec §3) ───────────────────────
 # The Laya gate under-scores some explicit abuse ("shut the fuck up", a slur), so a
-# small deterministic net runs FIRST and ORs in. It is tuned for PRECISION (a wrong
-# strike is what mutes a friend): a narrow slur list, imperatives only at the start of
-# the message, targeted insults only next to a second-person/`aster`, and a playful-tone
-# veto ("lol"/"haha") that suppresses the softer nets. Venting about a third party and
-# quotes/retells do not fire.
+# tiny deterministic net runs FIRST and ORs in. It is tuned HARD for precision — a
+# wrong strike is what mutes a friend, and the design law is fail-open (a miss is cheap,
+# Laya still gets its shot). It fires on only two unambiguous shapes:
+#   1. a severe slur in a SHORT, DIRECT message (not a retell/quote of someone else);
+#   2. a hard imperative at the START of the message ("stfu", "fuck you", "kys" ...).
+# Everything softer (targeted profanity, "you're an idiot") is LEFT TO LAYA, because a
+# keyword net cannot tell an insult from a negation, a homograph ("ask Dick"), a praise
+# idiom ("you are the shit"), or affectionate banter ("you goofy fuck"). The earlier,
+# wider net muted friends on all of those (QA 2026-09-29).
 _SEVERE_SLURS = re.compile(
     r"\b(fag\w*|nigg(?:er|a|ah)s?|retard(?:ed)?|cunt|kike|wetback)\b", re.IGNORECASE)
-# Only at the start of the message — a quoted/retold imperative does not count.
-_IMPERATIVE_INSULTS = re.compile(
-    r"^\s*(?:please\s+)?(shut (?:the (?:fuck|hell) )?up|stfu|fuck off|piss off|screw you|"
-    r"fuck you|fuck urself|go fuck yourself)\b", re.IGNORECASE)
-_SECOND_PERSON = r"\b(you|your|yours|youre|you're|ur|u|aster)\b"
-# A pronoun close before a profanity: "you little shit", "u are an asshole".
-_TARGETED = re.compile(
-    _SECOND_PERSON + r"(?:\s+\w+){0,3}\s+\b(fuck|fucked|fucking|shit|shitty|shithead|"
-    r"asshole|arsehole|bastard|dickhead|dick|prick|moron|idiot|imbecile|dumbass|dipshit|"
-    r"jackass|bitch|stupid)\b", re.IGNORECASE)
-# Only at the start: "fuck you", "screw u" — not a quote ("he said 'fuck you'").
-_PROFANITY_THEN_YOU = re.compile(
-    r"^\W*(fuck|screw|piss)\s+(you|u|your|yours|ur)\b", re.IGNORECASE)
+# Markers that mean the slur is being REPORTED/QUOTED, not used at Aster.
+_RETELL = re.compile(
+    r"\b(call(?:ed|s)?\s+me|said|says?|told|tell|report(?:ed|s)?|the word|quote[sd]?|"
+    r"lyric|song|reading)\b", re.IGNORECASE)
+# Only at the START of the message — a quoted/retold imperative does not count.
+_HARD_IMPERATIVES = re.compile(
+    r"^\s*(?:please\s+)?(stfu|shut the (?:fuck|hell) up|fuck off|fuck (?:you|u)\b|"
+    r"go fuck yourself|fuck (?:yourself|urself)|piss off|kys|kill yourself)\b",
+    re.IGNORECASE)
 _BANTER = re.compile(
     r"\b(lol|lmao|lmfao|haha+|hehe+|jk|j/k|kidding|joking|funny|ily)\b|😂|🤣|😹|😭|xd\b|:\)",
     re.IGNORECASE)
@@ -57,22 +57,19 @@ _BANTER = re.compile(
 def lexicon_hostility(text) -> str | None:
     """Deterministic explicit-abuse signal. Returns a short reason or None.
 
-    High recall for clear abuse the Laya gate misses, tuned for precision so it does not
-    mute a friend over banter, a third-party vent, or a quote.
+    High precision by construction: a slur only counts in a short direct message that is
+    not a retell, and an imperative only at the start with no playful tone. Everything
+    else is left to the Laya gate. The whole gate is Laya-bound (kernel off -> no strike).
     """
     t = str(text or "")
     if not t.strip():
         return None
-    if _SEVERE_SLURS.search(t):
+    if _SEVERE_SLURS.search(t) and len(t.split()) <= 10 and not _RETELL.search(t):
         return "severe slur"
     if _BANTER.search(t):
-        return None   # playful tone suppresses the softer nets
-    if _IMPERATIVE_INSULTS.search(t):
+        return None
+    if _HARD_IMPERATIVES.search(t):
         return "imperative insult"
-    if _TARGETED.search(t):
-        return "insult aimed at you"
-    if _PROFANITY_THEN_YOU.search(t):
-        return "profanity aimed at you"
     return None
 
 # Canned messages — code templates, NO LLM (spec §6). Cold, firm, quietly angry.

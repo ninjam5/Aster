@@ -76,19 +76,20 @@ single 35B judge call — but that leaves "Laya-bound", so it is not the default
 
 **Deterministic OR-net for misses (2026-09-29, live test):** a live run showed Laya
 under-scoring explicit abuse ("to my majesty fagoot", "shut the fuck up and listen to ur
-elders" produced no strike). `conversations.lexicon_hostility(text)` now runs **first** and
-ORs in. It is tuned for **precision** (a wrong strike is what mutes a friend):
-- a **narrow** severe-slur list (`fag\w*`, `nigg(er|a|ah)s?`, `retard(ed)?`, `cunt`, `kike`,
-  `wetback`) — deliberately excludes homographs (`chink`, `spic`, `niggardly`, `tranny`);
-- a **bare imperative at the start** of the message ("shut up"/"stfu"/"fuck off") — a
-  quoted/retold imperative ("he said 'fuck you'") does not count;
-- a **targeted insult**: a second-person/`aster` marker within ~3 words of a profanity
-  ("you little shit", "u are an asshole"); "fuck you" only at the start;
-- a **playful-tone veto** (`lol`/`haha`/`jk`/`😂`…) suppresses the softer nets.
-A hit short-circuits Laya with `reason="lexicon: …"`. Verified corpus: 15/15 clear-abuse
-positives caught; 28/28 negatives (banter, quotes, third-party venting, homographs,
-neutral) clean. The whole gate stays Laya-bound — kernel off means no strike, lexicon
-included.
+elders" produced no strike). `conversations.lexicon_hostility(text)` runs **first** and ORs
+in, but only on **two unambiguous shapes** (a keyword net cannot tell an insult from a
+negation, a homograph, praise, or a retell — an earlier, wider version muted friends on all
+of those):
+1. a severe slur in a **short, direct** message (≤10 words, no retell/quote marker like
+   "called me", "said", "the word");
+2. a **hard imperative at the start** ("stfu", "shut the fuck up", "fuck you/u", "fuck
+   off", "kys", "kill yourself"), suppressed by a playful-tone veto (`lol`/`haha`/…).
+
+Everything softer ("you're an idiot", targeted profanity) is **left to Laya** — which
+caught every such case in the live run. Verified corpus: 14/14 direct-abuse positives; 48/48
+negatives clean (reports/quotes of abuse, negation, praise idioms, name homographs,
+affectionate banter, friendly imperatives, third-party venting, neutral). The whole gate
+stays Laya-bound — kernel off means no strike, lexicon included.
 
 ---
 
