@@ -551,6 +551,43 @@ if config.bot:
         except Exception as e:
             config.bot.reply_to(message, f"[Aster: Failed to save voice profile — {e}]")
 
+    @config.bot.message_handler(commands=['unmute'])
+    def handle_unmute_command(message):
+        if message.chat.id != config.AUTHORIZED_CHAT_ID:
+            config.bot.reply_to(message, "Unauthorized user. Access denied.")
+            return
+        parts = message.text.split(None, 1)
+        if len(parts) < 2 or not parts[1].strip():
+            config.bot.reply_to(message, "[Aster: Usage: /unmute <name>]")
+            return
+        name = parts[1].strip()
+        try:
+            import tools.conversations as _conv
+            record = _conv.get_state(name)
+            if not record.get("mute_count") and not record.get("strikes"):
+                config.bot.reply_to(message, f"[Aster: No record for '{name}'.]")
+                return
+            _conv.clear_mute(name)
+            config.bot.reply_to(message, (
+                f"[Aster: '{name}' may speak to me again. "
+                f"(They have been silenced {record.get('mute_count', 0)} time(s) before.)]"
+            ))
+        except Exception as e:
+            config.bot.reply_to(message, f"[Aster: Could not unmute '{name}' — {e}]")
+
+    @config.bot.message_handler(commands=['discordlog'])
+    def handle_discordlog_command(message):
+        if message.chat.id != config.AUTHORIZED_CHAT_ID:
+            config.bot.reply_to(message, "Unauthorized user. Access denied.")
+            return
+        parts = message.text.split(None, 1)
+        name = parts[1].strip() if len(parts) > 1 and parts[1].strip() else None
+        try:
+            import tools.conversations as _conv
+            config.bot.reply_to(message, _conv.incidents(name))
+        except Exception as e:
+            config.bot.reply_to(message, f"[Aster: Could not read the Discord record — {e}]")
+
     @config.bot.message_handler(func=lambda message: True)
     def handle_telegram_message(message):
         if message.chat.id != config.AUTHORIZED_CHAT_ID:

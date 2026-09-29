@@ -986,6 +986,20 @@ ADMIN_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "get_discord_incidents",
+            "description": "Looks up the permanent record of Discord friends who were hostile or disrespectful to you — how many times you had to end a conversation (mute) and what was said. Use when the owner asks what happened with someone on Discord, or whether a friend has been rude before.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "The friend's name. Leave empty to list everyone with a record."}
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_my_status",
             "description": "Returns Aster's current LIVE runtime state — uptime, which daemons are actually active right now, VRAM/RAM usage, integration availability, personality mode, current initiative level. Use when the user asks how you are doing, what is running, or what your current state is.",
             "parameters": {"type": "object", "properties": {}, "required": []}
@@ -1977,6 +1991,9 @@ def _execute_tool_impl(tool_name, arguments):
         return list_my_contacts(arguments.get("platform", "all"))
     elif tool_name == "list_my_capabilities":
         return list_my_capabilities()
+    elif tool_name == "get_discord_incidents":
+        import tools.conversations as _conv
+        return _conv.incidents(arguments.get("name") or None)
     elif tool_name == "get_my_status":
         return get_my_status()
     elif tool_name == "get_my_memory_stats":
@@ -3188,6 +3205,40 @@ def forward_to_owner(sender_name: str, message: str) -> str:
     return f"[System Note: Discord relay delivered to {config.OWNER_NAME} on Telegram.]"
 
 
+def _discord_hostility(text: str) -> dict:
+    """Laya-bound hostility gate (spec: conversation-ending.md §3).
+
+    Returns {"strike": bool, "margin", "reason", "escalate"}. FAIL-OPEN — kernel off,
+    error, low margin or an unrecognised verdict all mean **no strike**: a missed strike
+    is cheap, a wrong mute is not. The question and 0.75 margin were benchmarked on a
+    30-message labelled set (see the spec); do not lower it blind.
+    """
+    result = {"strike": False, "margin": None, "reason": "unavailable", "escalate": True}
+    snippet = str(text or "").strip()
+    if not snippet:
+        return result
+    try:
+        import core.system1 as system1
+        if not system1.kernel_enabled():
+            return {**result, "reason": "kernel disabled"}
+        verdict = system1.check_state(
+            "You are Aster, a butler assistant. Did this Discord friend just insult YOU "
+            "(Aster) personally — a genuine attack — rather than chat, joke, or talk about others?",
+            yes_description="yes — the message insults or attacks me, Aster, directly",
+            no_description="no — it is about someone else, a situation, friendly teasing, or neutral",
+            state_text=f"message: {snippet[:400]}",
+            min_margin=config.DISCORD_HOSTILITY_MARGIN,
+        )
+    except Exception as e:
+        return {**result, "reason": f"kernel error ({e.__class__.__name__})"}
+    if verdict.get("escalate"):
+        return {**result, "margin": verdict.get("margin"),
+                "reason": verdict.get("reason") or "low or unavailable margin"}
+    strike = verdict.get("answer") is True
+    return {"strike": strike, "margin": verdict.get("margin"),
+            "reason": "" if strike else "not hostile", "escalate": False}
+
+
 def process_discord_chat(sender_name: str, user_message: str) -> str:
     """Text-only Discord route: separate context, no voice, no GUI tools."""
     sender = str(sender_name or "friend").strip() or "friend"
@@ -3196,6 +3247,34 @@ def process_discord_chat(sender_name: str, user_message: str) -> str:
 
     if not incoming:
         return f"I beg your pardon, {honorific}, but I could not read your message."
+
+    # ── Conversation-ending (spec: conversation-ending.md) ────────────────────
+    # Mute gate + strike ladder. Runs BEFORE any history/pronoun/LLM work so the
+    # countdown path is code-only (no LLM), and so it cannot perturb the cached
+    # Discord prompt prefix. FAIL-OPEN on any error.
+    try:
+        import tools.conversations as conv
+        if conv.is_enabled():
+            _muted, _minutes_left = conv.check_mute(sender)
+            if _muted:
+                conv.log_while_muted(sender, incoming)
+                publish_terminal(f"[SYS] Discord DM from {sender} ignored (muted)")
+                return conv.render_countdown(_minutes_left)
+            _hostile = _discord_hostility(incoming)
+            if _hostile.get("strike"):
+                _strike = conv.record_strike(sender, incoming, _hostile.get("margin"))
+                publish_terminal(
+                    f"[SYS] Discord hostility strike {_strike['strikes']} from {sender} "
+                    f"(margin {_hostile.get('margin')})"
+                )
+                if _strike.get("should_mute"):
+                    _mc = conv.register_mute(sender, message=incoming)
+                    return conv.render_final(_mc.get("mute_count", 1))
+                if _strike.get("should_warn"):
+                    return conv.WARNING_LINE
+                # strike 1: fall through to a normal (cool) reply
+    except Exception as e:
+        print(f"[Aster Internal: conversation-ending gate skipped ({e})]")
 
     # ID 13: make sure we know how to address this person. Stored -> one Laya guess ->
     # if still unknown, ask them ONCE (recorded so we never nag).

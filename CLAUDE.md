@@ -179,7 +179,7 @@ The model can return an empty string after successfully executing tools (Gemma-4
 
 ### Separate Conversation Contexts
 
-- **Admin brain** — `process_user_input()`, uses `ADMIN_TOOLS` (69 tools), full conversation history, 15-round loop.
+- **Admin brain** — `process_user_input()`, uses `ADMIN_TOOLS` (71 tools), full conversation history, 15-round loop.
 - **Discord brain** — `process_discord_chat()`, per-friend history in `discord_chat_histories` (keyed by lowercase name), separate `DISCORD_CHAT_SYSTEM_PROMPT`, only 3 tools (`forward_to_owner`, `save_personal_fact`, `get_current_track`), 4-round loop.
 
 These histories are fully independent. Discord replies pass through `_enforce_discord_honorific()`, which rewrites "Sir" → "Ma'am" / "Mr." → "Ms." for friends listed in `config.DISCORD_FEMALE_NAMES` (sourced from `self_config.yaml → contacts.female_names`, empty by default — per-install data, not hardcoded). This regex is fragile (can mangle words like "Sirius").
@@ -192,7 +192,7 @@ These histories are fully independent. Discord replies pass through `_enforce_di
 
 - **CLI** — input loop on the main thread (`main.py`), headless mode.
 - **Telegram C2 bridge** — hardcoded `AUTHORIZED_CHAT_ID`; handles `/status`, `/compact`, `/sentry on|off`, `/stop`, `/diagnostics on|off`, `/screenshot`, `/peek [N]`, `/gpu`, `/gesture on|off`, `/intervention on|off`, `/note <text>`, `/find <thing>` (Assist Mode highlight), voice (Faster-Whisper STT), photos, text. `_dispatch_telegram_response()` intercepts `[NATIVE_AUDIO_PAYLOAD:path]` tags and sends voice notes.
-- **Discord** — two subsystems: `tools/discord_listener.py` (discord.py DM listener, 9-contact whitelist) for inbound, `tools/discord_api.py` (raw Discord REST v10) for outbound. Outbound relay (`_extract_discord_message_intent` → `send_discord_message`) sends immediately for an exact contact name **or a typo in the addressee position** (`resolve_typo`: `geroge`→george — owner decision 2026-09-29, a clear misspelling must just send); anything fuzzy/semantic, or a name only mentioned in the message body, returns `[CONFIRM REQUIRED]` and sends nothing until `confirm=true` on a later turn.
+- **Discord** — two subsystems: `tools/discord_listener.py` (discord.py DM listener, 9-contact whitelist) for inbound, `tools/discord_api.py` (raw Discord REST v10) for outbound. Outbound relay (`_extract_discord_message_intent` → `send_discord_message`) sends immediately for an exact contact name **or a typo in the addressee position** (`resolve_typo`: `geroge`→george — owner decision 2026-09-29, a clear misspelling must just send); anything fuzzy/semantic, or a name only mentioned in the message body, returns `[CONFIRM REQUIRED]` and sends nothing until `confirm=true` on a later turn. **Conversation-ending ("Aster's self-respect", 2026-09-29)** — spec: [`conversation-ending.md`](conversation-ending.md); policy in `tools/conversations.py` (`Aster_Vault/conversation_state.json`). A Laya-bound gate (`core.brain._discord_hostility`, one `check_state` at margin 0.75, fail-open) counts strikes from a hostile DM; at **3 strikes** (decaying after `strike_window_minutes`) Aster **ends the conversation** — a canned cold FINAL line, then a temporary mute (`mute_minutes`, default 60). While muted an inbound DM gets a **code-only countdown** (no LLM) and is logged to a **permanent record** (never forwarded). Re-mutes mention "for the {n}th time". Owner override `/unmute <name>`; record recall via `/discordlog [name]` and the `get_discord_incidents` admin tool. Kill switch `discord_conversation.enabled`.
 - **WebRTC voice bridge** (`webrtc_bridge.py`) — LiveKit Agents SDK. Pipeline: AudioStream → Silero VAD → Faster-Whisper STT → brain → Kokoro TTS. Supports barge-in and epoch-based stale-response cancellation. **Chunk-streaming TTS** (`runtime.tts_chunk_streaming`, default on): `local_tts.py` pushes each Kokoro segment's audio into the call as it is synthesized (first-chunk latency logged as `[Aster Perf] First audio chunk in Xms`) instead of concatenating the whole reply first; a stop-event halts synthesis at the next segment on barge-in. STT and TTS are **shared process-wide**: one CUDA Faster-Whisper `medium.en` instance for calls (`local_stt.get_whisper_model()` — Telegram voice notes reuse it when a call is live, otherwise `local_stt.transcribe_file` uses a lazy **CPU** instance so voice notes cost zero VRAM) and one ref-counted Kokoro pipeline — no per-call duplicate model loads. Module-level `_active_bridge`/`_active_loop` expose `call_is_active()` and `speak_intervention(text)` so other threads can push an unprompted turn into a live call (used by Intervention Mode).
 
 ### Vision & UI Automation (`tools/vision.py`)
@@ -352,7 +352,7 @@ Partial and Autonomous request identical Google OAuth scopes (`gmail.modify` +
 
 ---
 
-## Tool Registry (69 admin tools registered at boot)
+## Tool Registry (71 admin tools registered at boot)
 
 Categories: System (7), File I/O (3), Spotify (9), Timers (2), Memory (3), Vision (4), GUI Automation (6), RAG (1), Notes (2), Awareness/Initiative (2), Intervention (3), Mood opt-in (4), Sentry/Gesture (2), Self-knowledge (6), Diagnostics (1), Discord/Voice (2), Gmail (7), Calendar (4).
 

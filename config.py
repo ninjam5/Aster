@@ -342,6 +342,17 @@ LAYA_KEEP_RESIDENT = bool(_cfg("automation", "laya_keep_resident", default=False
 LAYA_LOG_PATH = str(_cfg("automation", "laya_log_path", default=os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "Aster_Vault", "system1_log.jsonl")))
 
+# Discord conversation-ending ("Aster's self-respect") — spec: conversation-ending.md.
+# A Laya-bound hostility gate (core.brain._discord_hostility) counts strikes; at
+# `strikes_to_mute` Aster ends the conversation (temporary mute ~ `mute_minutes`), and
+# while muted an inbound DM gets a code-only countdown (no LLM). See tools/conversations.py.
+DISCORD_CONVERSATION_ENABLED = bool(_cfg("discord_conversation", "enabled", default=True))
+DISCORD_STRIKES_TO_MUTE = int(_cfg("discord_conversation", "strikes_to_mute", default=3))
+DISCORD_STRIKE_WINDOW_MINUTES = float(_cfg("discord_conversation", "strike_window_minutes", default=720))
+DISCORD_MUTE_MINUTES = float(_cfg("discord_conversation", "mute_minutes", default=60))
+# Laya margin required to count a strike (benchmark §3 in the spec — do not lower blind).
+DISCORD_HOSTILITY_MARGIN = float(_cfg("discord_conversation", "hostility_margin", default=0.75))
+
 # ============================================================================
 # EMOTION DETECTION
 # ============================================================================
