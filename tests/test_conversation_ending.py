@@ -54,6 +54,17 @@ class TestLadder:
         assert out == "Very good, Sir."          # a normal (cool) reply
         assert conv.get_state("ninja")["strikes"] == 1
 
+    def test_first_strike_actually_calls_the_llm(self, monkeypatch):
+        _hostility(monkeypatch)
+        calls = []
+        monkeypatch.setattr(
+            brain, "_execute_llm_completion",
+            lambda **k: calls.append(1) or {"role": "assistant",
+                                            "content": "Very good, Sir.", "tool_calls": None},
+            raising=False)
+        brain.process_discord_chat("ninja", "fuck u aster")
+        assert calls, "a strike-1 turn must still be answered by the LLM"
+
     def test_second_strike_warns(self, monkeypatch):
         _hostility(monkeypatch)
         brain.process_discord_chat("ninja", "fuck u")
@@ -122,6 +133,10 @@ class TestLadder:
 
 
 class TestHostilityGate:
+    def test_the_benchmarked_margin_is_0_75(self):
+        """Spec §3: the 0.75 margin was measured — do not let it drift silently."""
+        assert config.DISCORD_HOSTILITY_MARGIN == 0.75
+
     def test_confident_yes_strikes(self, monkeypatch):
         monkeypatch.setattr(system1, "kernel_enabled", lambda: True)
         monkeypatch.setattr(system1, "check_state",

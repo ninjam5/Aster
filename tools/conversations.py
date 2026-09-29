@@ -93,7 +93,9 @@ def _strike_window_seconds() -> float:
 
 
 def _mute_minutes() -> float:
-    return max(0.0, _cfg("DISCORD_MUTE_MINUTES", float, 60.0))
+    # Floor at 1 minute: a 0/negative value would send the FINAL line yet leave the
+    # friend unmuted immediately (an inconsistent, confusing state).
+    return max(1.0, _cfg("DISCORD_MUTE_MINUTES", float, 60.0))
 
 
 def _hostility_margin() -> float:
@@ -155,8 +157,15 @@ def _normalize(record) -> dict:
     blank = _blank()
     if isinstance(record, dict):
         blank.update(record)
+    # Coerce the counters so a hand-edited/corrupt store cannot raise later (QA 2026-09-29).
+    for field in ("strikes", "mute_count"):
+        try:
+            blank[field] = int(blank.get(field) or 0)
+        except (TypeError, ValueError):
+            blank[field] = 0
     if not isinstance(blank.get("incidents"), list):
         blank["incidents"] = []
+    blank["incidents"] = [i for i in blank["incidents"] if isinstance(i, dict)]
     return blank
 
 
@@ -250,6 +259,14 @@ def register_mute(name, minutes=None, message: str = "") -> dict:
     return {"mute_count": record["mute_count"]}
 
 
+def _safe_float(value, default=0.0) -> float:
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return default
+    return default if f != f else f   # reject NaN
+
+
 def check_mute(name):
     """(muted, minutes_left). Lazily clears an expired mute. Never raises."""
     key = _key(name)
@@ -260,7 +277,7 @@ def check_mute(name):
         data = _load()
         stored = _find_key(data, key)
         record = _normalize(data.get(stored))
-        until = float(record.get("muted_until") or 0.0)
+        until = _safe_float(record.get("muted_until"), 0.0)
         if until > now:
             return True, int(math.ceil((until - now) / 60.0))
         if until:
@@ -344,7 +361,7 @@ def incidents(name=None) -> str:
     lines = []
     for stored, rec in sorted(names, key=lambda kv: kv[0].lower())[:20]:
         muted_note = ""
-        until = float(rec.get("muted_until") or 0.0)
+        until = _safe_float(rec.get("muted_until"), 0.0)
         if until > time.time():
             muted_note = f", currently muted for ~{int(math.ceil((until - time.time()) / 60.0))} more min"
         lines.append(f"{stored}: {rec.get('mute_count', 0)} mute(s), "

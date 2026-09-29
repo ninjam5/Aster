@@ -62,6 +62,34 @@ class TestStrikes:
         conv._save(data)
         assert conv.record_strike("ninja", "c")["strikes"] == 3
 
+    def test_a_negative_window_also_never_decays(self, monkeypatch):
+        monkeypatch.setattr(config, "DISCORD_STRIKE_WINDOW_MINUTES", -1, raising=False)
+        conv.record_strike("ninja", "a")
+        conv.record_strike("ninja", "b")
+        data = conv._load()
+        data["ninja"]["last_strike_ts"] = time.time() - 10 ** 9
+        conv._save(data)
+        assert conv.record_strike("ninja", "c")["strikes"] == 3
+
+    def test_a_burst_cannot_inflate_mute_count(self, monkeypatch):
+        """The round-1 fix: record_strike is atomic, so N concurrent strikes produce
+        exactly N // strikes_to_mute mutes."""
+        import threading
+        monkeypatch.setattr(config, "DISCORD_STRIKES_TO_MUTE", 3, raising=False)
+        n = 30
+        barrier = threading.Barrier(n)
+
+        def worker():
+            barrier.wait()
+            conv.record_strike("ninja", "x")
+
+        threads = [threading.Thread(target=worker) for _ in range(n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert conv.get_state("ninja")["mute_count"] == n // 3
+
     def test_empty_name_is_safe(self):
         assert conv.record_strike("", "x")["strikes"] == 0
         assert conv.get_state("")["strikes"] == 0
@@ -118,6 +146,24 @@ class TestRecord:
             f.write("[1, 2, 3]")
         assert conv.get_state("ninja")["strikes"] == 0
         assert os.path.exists(conv._PATH + ".corrupt")
+
+    def test_a_bare_json_string_is_backed_up(self):
+        with open(conv._PATH, "w", encoding="utf-8") as f:
+            f.write('"hello"')
+        assert conv.get_state("ninja")["strikes"] == 0
+        assert os.path.exists(conv._PATH + ".corrupt")
+
+    def test_a_corrupt_counter_does_not_raise(self):
+        with open(conv._PATH, "w", encoding="utf-8") as f:
+            f.write('{"ninja": {"strikes": "lots", "mute_count": null, "incidents": "x"}}')
+        state = conv.get_state("ninja")
+        assert state["strikes"] == 0 and state["mute_count"] == 0
+        assert state["incidents"] == []
+
+    def test_incidents_output_is_bounded(self):
+        for i in range(40):
+            conv.record_strike(f"friend{i}", "x")
+        assert len(conv.incidents()) <= 4000
 
     def test_while_muted_messages_are_logged(self):
         conv.register_mute("ninja")

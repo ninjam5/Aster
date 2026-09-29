@@ -93,10 +93,12 @@ discord_conversation:
   # "Aster's self-respect" — spec: conversation-ending.md. A Laya-bound hostility gate
   # counts strikes from a Discord friend; at strikes_to_mute Aster ends the conversation
   # (temporary mute), and while muted an inbound DM gets a code-only countdown.
+  # NOTE: detection needs `automation.laya_kernel: true` — with the kernel off the gate
+  # fails open (no strikes), so the feature is inert.
   enabled: true
   strikes_to_mute: 3
-  strike_window_minutes: 720     # strikes decay after this much quiet
-  mute_minutes: 60               # auto-unmute delay
+  strike_window_minutes: 720     # strikes decay after this much quiet (<= 0 = never)
+  mute_minutes: 60               # auto-unmute delay (floored at 1)
   hostility_margin: 0.75         # Laya margin required to count a strike
 
 vision:

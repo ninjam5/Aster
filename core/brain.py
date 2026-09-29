@@ -3232,6 +3232,8 @@ def _discord_hostility(text: str) -> dict:
         )
     except Exception as e:
         return {**result, "reason": f"kernel error ({e.__class__.__name__})"}
+    if not isinstance(verdict, dict):
+        return {**result, "reason": "malformed verdict"}
     if verdict.get("escalate"):
         return {**result, "margin": verdict.get("margin"),
                 "reason": verdict.get("reason") or "low or unavailable margin"}
