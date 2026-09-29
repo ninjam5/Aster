@@ -226,16 +226,10 @@ class TestOwnerForget:
 
 
 class TestHostileLexicon:
-    def test_catches_direct_slurs_and_hard_imperatives(self):
-        for text in ["you're a faggot",
-                     "you retard",
-                     "you retards",
-                     "you are a fucking retard",
-                     "you dumb cunts",
-                     "you stupid kikes",
-                     "you wetbacks",
-                     "shut the fuck up",
+    def test_catches_hard_imperatives(self):
+        for text in ["shut the fuck up",
                      "shut the fuck up and listen to ur elders",
+                     "shut the hell up",
                      "stfu",
                      "STFU",
                      "stfu moron",
@@ -245,83 +239,54 @@ class TestHostileLexicon:
                      "fuck you aster",
                      "fuck yourself",
                      "go fuck yourself",
+                     "go fuck urself",
+                     "piss off",
                      "kys",
                      "kill yourself"]:
             assert conv.lexicon_hostility(text), text
 
-    def test_does_not_fire_on_negation(self):
-        for text in ["i would never call you a retard",
-                     "you're not a retard",
-                     "nobody here is a retard",
-                     "that's not retarded at all",
-                     "you're not an idiot, you're just tired",
-                     "you are no idiot, that's for sure",
-                     "you know I'd never call you a bitch"]:
+    def test_bare_slurs_are_left_to_laya(self):
+        """Documented: the net does NOT judge slurs — six QA rounds showed any keyword
+        rule leaks on negation, homographs, reclaimed/affectionate use, and quotes. These
+        rely on the Laya gate instead (fail-open)."""
+        for text in ["to my majesty fagoot",
+                     "you're a faggot",
+                     "you retard",
+                     "you're my nigga",
+                     "you want a fag",
+                     "you retard, that was awesome",
+                     "flame retard additives",
+                     "my ex called me a retard at school",
+                     "you're not a retard"]:
             assert conv.lexicon_hostility(text) is None, text
 
-    def test_does_not_fire_on_reports_quotes_or_discussion(self):
-        for text in ["my ex called me a retard at school",
-                     "he called me a fag in class today",
-                     "he called you a retard",
-                     "she called him a cunt",
-                     "she called me a cunt and I reported her",
-                     "someone was saying retard",
-                     "he wrote faggot in the chat",
-                     "she texted me retard",
-                     "look at this screenshot saying faggot",
-                     "that song drops the word faggot, wild",
-                     "he told me 'fuck you' yesterday",
-                     "my ex said 'shut up' to me",
-                     "the word 'retard' is offensive, don't use it",
-                     "the movie title is retard",
-                     "shut the fuck up is not a nice phrase",
-                     "stfu is what the cool kids say"]:
-            assert conv.lexicon_hostility(text) is None, text
-
-    def test_does_not_fire_on_homographs_or_reclaimed_use(self):
-        for text in ["the retard of the reaction is 5 seconds",
-                     "flame retard additives in the fabric",
-                     "it will retard the growth of the mold",
-                     "he smoked a fag on the corner",
-                     "she bought a fag at the shop",
-                     "the british call a cigarette a fag",
-                     "fagotto is the italian bassoon",
-                     "faggoting is an embroidery stitch",
-                     "we need a bundle of fagots for the fire",
-                     "what up my nigga",
-                     "my nigga you made it",
-                     "thats retarded",
-                     "this is fucking retarded",
-                     "bro this game is retarded lol",
-                     "he's niggardly with his praise",
-                     "a chink in the armor"]:
-            assert conv.lexicon_hostility(text) is None, text
-
-    def test_does_not_fire_on_banter_or_friendly_imperatives(self):
-        for text in ["haha you retard",
-                     "you retard lol",
-                     "you little nerd lol",
-                     "haha you're such a goofball",
-                     "you goofy fuck",
-                     "you lucky bastard",
-                     "you are the shit!",
-                     "shut up, that's amazing",
+    def test_does_not_fire_on_banter_or_discussion_of_the_phrase(self):
+        for text in ["shut the fuck up is not a nice phrase",
+                     "stfu is what the cool kids say",
+                     "shut the fuck up lol",
+                     "kys lol",
+                     "stfu haha",
+                     "fuck you 😂",
                      "shut up and take my money",
-                     "shut up and dance with me",
-                     "screw you man, haha"]:
+                     "shut up and dance with me"]:
             assert conv.lexicon_hostility(text) is None, text
 
-    def test_does_not_fire_on_third_party_venting_or_neutral(self):
-        for text in ["my boss is a fucking idiot",
-                     "my boss is a fucking idiot, he told you to file it",
-                     "this shit is broken, can you fix it?",
-                     "my brother is such an idiot",
-                     "my roommate is an asshole",
-                     "you know when you're having a shit day?",
-                     "you can ask Dick about it, he knows",
-                     "hey aster, can you tell Mohamed I'll be late?",
+    def test_does_not_fire_on_unanchored_imperatives(self):
+        """Only a START-of-message imperative counts (a miss is cheaper than a wrong mute)."""
+        for text in ["aster stfu",
+                     "well fuck you",
+                     "you should kill yourself",
+                     "honestly, fuck you",
+                     "shut up",
+                     "shut up, that's amazing"]:
+            assert conv.lexicon_hostility(text) is None, text
+
+    def test_does_not_fire_on_ordinary_chat(self):
+        for text in ["hey aster, can you tell Mohamed I'll be late?",
                      "good evening, how are you?",
                      "thanks man, appreciate it",
-                     "you're the best",
-                     "u ok?"]:
+                     "my boss is a fucking idiot",
+                     "my boss is a fucking idiot, he told you to file it",
+                     "you little nerd lol",
+                     "you're such a goofball"]:
             assert conv.lexicon_hostility(text) is None, text

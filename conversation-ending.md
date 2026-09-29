@@ -75,23 +75,20 @@ implementation commit). If Laya-only precision is ever unacceptable, the escape 
 single 35B judge call — but that leaves "Laya-bound", so it is not the default.
 
 **Deterministic OR-net for misses (2026-09-29, live test):** a live run showed Laya
-under-scoring explicit abuse ("shut the fuck up and listen to ur elders" produced no
-strike). `conversations.lexicon_hostility(text)` runs **first** and ORs in, but only on two
-shapes with strong structural cues — a keyword net cannot judge intent, and a wrong strike
-is what mutes a friend (three QA rounds found wider versions muting friends on negation,
-homographs, reclaimed language, quotes, and banter):
-1. a severe slur **directly addressing Aster** ("you're a faggot", "you retards");
-2. a **hard imperative at the start** ("stfu", "shut the fuck up", "fuck you/u", "fuck
-   off", "kys", "kill yourself").
-Any negation / retell / quote / discussion-of-the-word / playful tone (a `_VETO` +
-`_BANTER` guard) makes it stand down. Everything softer is **left to Laya** (which caught
-every such case in the live run). Corpus: 20/20 direct-abuse positives, 56/56 negatives
-clean (reports/quotes, negation, homographs, reclaimed use, banter, friendly imperatives,
-third-party venting, neutral). Known residual false positives of any keyword net:
-affectionate "you're a sick cunt mate", imperative "shut the fuck up and drive" — rare, and
-absorbed by the 3-strike ladder. A bare slur with no address ("to my majesty fagoot") is a
-**miss** by design (Laya backstop). The whole gate stays Laya-bound — kernel off means no
-strike, lexicon included.
+under-scoring the bare imperative ("shut the fuck up …" produced no strike).
+`conversations.lexicon_hostility(text)` runs **first** and ORs in — but on **one shape
+only**: a **hard imperative at the start** ("stfu", "shut the fuck up", "fuck you/u", "fuck
+off", "kys", "kill yourself"), and it stands down on any playful tone (`lol`/`haha`/emoji)
+or discussion of the phrase ("… is not a nice phrase").
+
+**Slurs are deliberately NOT handled here.** Six adversarial QA rounds (2026-09-29) proved
+that ANY slur keyword rule leaks on plausible friend messages — negation ("you're not a
+retard"), homographs ("flame retard additives", UK "fag"), reclaimed/affectionate use
+("you're my nigga", "you retard, you legend"), and reports/quotes ("my ex called me a
+retard"). A wrong strike mutes a friend, which is worse than a miss, so slurs are left to
+the Laya gate (fail-open). The bare-slur live miss ("to my majesty fagoot") is therefore a
+**known miss** — the ladder still fired on the surrounding messages. The whole gate is
+Laya-bound: kernel off means no strike, lexicon included.
 
 ---
 
