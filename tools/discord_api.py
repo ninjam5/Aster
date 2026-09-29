@@ -96,6 +96,18 @@ def looks_like_contact(text: str) -> bool:
     return bool(_fuzzy_token_match(text))
 
 
+def resolve_typo(name) -> str | None:
+    """Deterministic close-spelling resolution of a TARGET name (no model).
+
+    A misspelling of a contact in the ADDRESSEE position ("geroge" -> george,
+    "farrah" -> farah) is confident — the owner clearly meant that contact — so it may
+    send without a confirmation round-trip. Only ever called on the addressee token (or
+    the whole target the caller chose), never on a message body: a name-like token
+    inside the payload could belong to someone else.
+    """
+    return _fuzzy_token_match(name)
+
+
 def laya_pick_contact(request_text: str) -> dict:
     """Laya: which known contact does this request address? (ID 15 / Part B)
 
@@ -209,6 +221,12 @@ def send_discord_message(target_name, message, confirm=False, assume_guess=False
         )
 
     resolved = resolve_contact(original_name)
+    if not resolved and len(re.findall(r"[A-Za-z0-9_.@-]+", original_name)) <= 2:
+        # A typo in the TARGET is a confident address ("geroge" -> george): the owner
+        # clearly meant that contact, so send without a confirmation round-trip.
+        typo = resolve_typo(original_name)
+        if typo:
+            resolved = (typo, CONTACTS.get(typo))
     if resolved:
         canonical_name, recipient_id = resolved
     else:

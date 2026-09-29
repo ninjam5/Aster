@@ -246,3 +246,60 @@ class TestFuzzyTokenMatch:
         pick = discord_api.laya_pick_contact("tell geroge I will be late")
         assert pick["name"] == "george" and pick["exact"] is False
         assert called == []  # difflib handled it; no Laya call
+
+
+# ── typo in the ADDRESSEE position is confident (owner request 2026-09-29) ─────
+#
+# The owner: "I clearly meant george, so he should have sent a message to george …
+# I don't need to use the same exact name." A misspelling of a contact in the address
+# slot ("tell geroge I'm late") now sends without a confirmation round-trip — but a
+# typo in the MESSAGE BODY stays a guess, so a name mentioned in the payload can
+# never misdirect the send.
+
+class TestTypoInAddressee:
+    def test_resolve_typo(self):
+        assert discord_api.resolve_typo("geroge") == "george"
+        assert discord_api.resolve_typo("farrah") == "farah"
+        assert discord_api.resolve_typo("brother") is None
+        assert discord_api.resolve_typo("my brother") is None
+
+    def test_a_typo_in_the_address_position_is_exact(self):
+        intent = brain._extract_discord_message_intent("tell geroge I'll be late")
+        assert intent is not None
+        assert intent["target"] == "george"
+        assert intent["exact"] is True   # may send without confirmation
+
+    def test_an_exact_name_is_unchanged(self):
+        intent = brain._extract_discord_message_intent("tell george I'll be late")
+        assert intent["target"] == "george" and intent["exact"] is True
+
+    def test_a_typo_in_the_payload_stays_a_guess(self):
+        """'tell my brother to say hi to geroge' — the typo is in the BODY, not the
+        address, so it must NOT be treated as a confident send."""
+        intent = brain._extract_discord_message_intent("tell my brother to say hi to geroge")
+        assert not (intent and intent.get("exact")), intent
+
+    def test_a_target_typo_sends_without_a_confirmation(self, monkeypatch):
+        posts = []
+
+        class _Resp:
+            status_code = 200
+            text = ""
+            def json(self):
+                return {"id": "chan-1"}
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            posts.append(url)
+            return _Resp()
+
+        monkeypatch.setattr(discord_api.requests, "post", fake_post)
+        out = discord_api.send_discord_message("geroge", "I'll be late", confirm=False)
+        assert "delivered" in out.lower(), out
+        assert any("/messages" in u for u in posts)
+
+    def test_an_unknown_non_typo_target_is_still_refused(self, monkeypatch):
+        monkeypatch.setattr(
+            discord_api.requests, "post",
+            lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not send")))
+        out = discord_api.send_discord_message("brother", "hi", confirm=False)
+        assert "Unknown Discord contact" in out

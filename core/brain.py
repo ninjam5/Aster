@@ -33,7 +33,7 @@ from tools.uia import get_foreground_window_title, focused_control_type, EDITABL
 from tools.assist import highlight_regions
 from tools.discord_api import (
     contact_names, laya_pick_contact, looks_like_contact, resolve_contact,
-    send_discord_message,
+    resolve_typo, send_discord_message,
 )
 from tools.memory_manager import (
     get_user_facts,
@@ -2468,6 +2468,12 @@ def _extract_discord_message_intent(user_text: str) -> dict | None:
         resolved = resolve_contact(raw_name)
         if resolved:
             return {"target": resolved[0], "payload": payload, "exact": True, "via": "regex+exact"}
+        # A typo in the ADDRESSEE position ("tell geroge I'm late") is confident — the
+        # owner clearly meant that contact — so it may send without confirmation. Only
+        # the address token is checked; a typo in the payload stays a guess below.
+        typo = resolve_typo(raw_name)
+        if typo:
+            return {"target": typo, "payload": payload, "exact": True, "via": "regex+typo"}
         # The captured token is not a contact — ask Laya about the WHOLE request,
         # because the regex tokenises phrasings badly ("text my brother saying hi"
         # captures "my" as the name).
@@ -3707,7 +3713,9 @@ def process_user_input(user_text, status_callback=None):
                             f'For the "message" argument you MUST compose a formal butler message that '
                             f'attributes the following to "the Boss": {_relay_payload!r}. '
                             f'Begin with a polite greeting to {_relay_target.title()}. '
-                            f'Example: "Good evening, {_relay_target.title()}. The Boss has asked me to convey that {_relay_payload.lower()}."'
+                            f'Example: "Good evening, {_relay_target.title()}. The Boss has asked me to convey that {_relay_payload.lower()}." '
+                            f'You MUST invoke the send_discord_message tool NOW — do NOT write the '
+                            f'message as your own reply.'
                         )})
                     else:
                         # ID 15: a GUESSED target is never sent silently — confirm first.

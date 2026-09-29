@@ -59,7 +59,9 @@ class TestRelayConfirmForcing:
             raising=False)
 
         brain.messages[:] = [brain.messages[0]]
-        brain.process_user_input("tell geroge I'll be late", None)
+        # A name mentioned in the PAYLOAD (not the addressee) is a guess — unlike a
+        # typo in the address position, which is now confident (2026-09-29).
+        brain.process_user_input("tell my brother to say hi to george", None)
 
         assert sent, "send_discord_message was never called"
         assert sent["confirm"] is False, "the model must not self-confirm a guessed target"
