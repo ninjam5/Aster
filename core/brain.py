@@ -3222,6 +3222,15 @@ def _discord_hostility(text: str) -> dict:
         import core.system1 as system1
         if not system1.kernel_enabled():
             return {**result, "reason": "kernel disabled"}
+    except Exception as e:
+        return {**result, "reason": f"kernel error ({e.__class__.__name__})"}
+    # Deterministic explicit-abuse net (spec §3): catches slurs and profanity aimed at
+    # Aster that the Laya gate under-scores. Conservative — venting about a third party
+    # does not fire. Runs first; the whole gate stays Laya-bound (kernel off -> no strike).
+    _lex = conversations.lexicon_hostility(snippet)
+    if _lex:
+        return {"strike": True, "margin": None, "reason": f"lexicon: {_lex}", "escalate": False}
+    try:
         verdict = system1.check_state(
             "You are Aster, a butler assistant. Did this Discord friend just insult YOU "
             "(Aster) personally — a genuine attack — rather than chat, joke, or talk about others?",

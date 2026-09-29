@@ -18,6 +18,7 @@ deterministic policy only.
 import json
 import math
 import os
+import re
 import threading
 import time
 from datetime import datetime
@@ -25,6 +26,39 @@ from datetime import datetime
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _PATH = os.path.join(_REPO_ROOT, "Aster_Vault", "conversation_state.json")
 _LOCK = threading.RLock()
+
+# ── deterministic high-recall hostility signal (spec §3) ──────────────────────
+# The Laya gate under-scores some explicit abuse ("shut the fuck up", a slur), so a
+# small deterministic net runs FIRST and ORs in. Deliberately conservative: profanity
+# only counts when it ADDRESSES Aster (second person), so venting about a third party
+# ("my boss is a fucking idiot") does not fire; slurs and bare imperatives count alone.
+_SEVERE_SLURS = re.compile(
+    r"\b(fag\w*|nigg\w+|retard(?:ed)?|cunt|kike|spic|chink|tranny|wetback|coon)\b",
+    re.IGNORECASE)
+_IMPERATIVE_INSULTS = re.compile(
+    r"\b(shut (?:the (?:fuck|hell) )?up|stfu|fuck off|piss off|screw you|fuck you|"
+    r"go fuck yourself|fuck urself)\b", re.IGNORECASE)
+_PROFANITY = re.compile(
+    r"\b(fuck\w*|shit\w*|asshole|arsehole|bastard|dickhead|prick|moron|idiot|imbecile|"
+    r"dumbass|dipshit|jackass|bitch)\b", re.IGNORECASE)
+_SECOND_PERSON = re.compile(
+    r"\b(you|your|yours|youre|you're|ur|u|aster)\b", re.IGNORECASE)
+
+
+def lexicon_hostility(text) -> str | None:
+    """Deterministic explicit-abuse signal. Returns a short reason or None.
+
+    High recall for clear abuse the Laya gate misses; conservative enough not to fire
+    on friendly teasing or venting about a third party.
+    """
+    t = str(text or "")
+    if _SEVERE_SLURS.search(t):
+        return "severe slur"
+    if _IMPERATIVE_INSULTS.search(t):
+        return "imperative insult"
+    if _PROFANITY.search(t) and _SECOND_PERSON.search(t):
+        return "profanity aimed at you"
+    return None
 
 # Canned messages — code templates, NO LLM (spec §6). Cold, firm, quietly angry.
 COUNTDOWN_TEMPLATE = (
@@ -317,6 +351,22 @@ def unmute(name) -> str:
     clear_mute(key)
     return (f"'{key}' may speak to me again. "
             f"(They have been silenced {record.get('mute_count', 0)} time(s) before.)")
+
+
+def forget(name) -> str:
+    """Owner `/forget <name>`: erase the permanent record (mute count + incidents)."""
+    key = _key(name)
+    if not key:
+        return "Usage: /forget <name>"
+    with _LOCK:
+        data = _load()
+        stored = _find_key(data, key)
+        if stored not in data:
+            return f"No record for '{key}'."
+        removed = _normalize(data.pop(stored))
+        _save(data)
+    return (f"Erased {removed.get('mute_count', 0)} mute(s) and "
+            f"{len(removed.get('incidents', []))} incident(s) for '{key}'.")
 
 
 def log_while_muted(name, message: str = "") -> None:

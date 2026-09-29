@@ -74,6 +74,15 @@ threshold without re-running the benchmark (`engine_testing/` harness is recorde
 implementation commit). If Laya-only precision is ever unacceptable, the escape hatch is a
 single 35B judge call — but that leaves "Laya-bound", so it is not the default.
 
+**Deterministic OR-net for misses (2026-09-29, live test):** a live run showed Laya
+under-scoring explicit abuse ("to my majesty fagoot", "shut the fuck up and listen to ur
+elders" produced no strike). `conversations.lexicon_hostility(text)` now runs **first** and
+ORs in — a strike if the message has a severe slur, a bare imperative insult
+("shut up"/"stfu"/"fuck off"), or profanity **addressed at Aster** (second person). It is
+deliberately conservative: profanity about a third party ("my boss is a fucking idiot")
+does **not** fire, because it requires a second-person/`aster` marker. A hit short-circuits
+Laya with `reason="lexicon: …"`.
+
 ---
 
 ## 4. The strike ladder
@@ -153,7 +162,7 @@ Each is a module constant so tests can import it. Tone: cold, firm, quiet anger.
 | `core/brain.py::process_discord_chat` | **top**: mute gate (COUNTDOWN, record, return) → then the hostility gate + ladder before the LLM loop |
 | `core/brain.py` | `_discord_hostility(text)` gate; canned templates |
 | `core/brain.py` ADMIN_TOOLS + `_execute_tool_impl` | `get_discord_incidents(name)` recall tool |
-| `main.py` Telegram C2 | `/unmute <name>`, `/discordlog [name]` |
+| `main.py` Telegram C2 | `/unmute <name>`, `/forget <name>`, `/discordlog [name]` |
 | `config.py` + `self_config.yaml(.example)` | the flags in §8 |
 
 The inbound listener (`tools/discord_listener.py`) needs **no change** — it already sends

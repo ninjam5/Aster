@@ -577,6 +577,19 @@ if config.bot:
         except Exception as e:
             config.bot.reply_to(message, f"[Aster: Could not read the Discord record — {e}]")
 
+    @config.bot.message_handler(commands=['forget'])
+    def handle_forget_command(message):
+        if message.chat.id != config.AUTHORIZED_CHAT_ID:
+            config.bot.reply_to(message, "Unauthorized user. Access denied.")
+            return
+        parts = message.text.split(None, 1)
+        name = parts[1].strip() if len(parts) > 1 else ""
+        try:
+            import tools.conversations as _conv
+            config.bot.reply_to(message, f"[Aster: {_conv.forget(name)}]")
+        except Exception as e:
+            config.bot.reply_to(message, f"[Aster: Could not erase the record — {e}]")
+
     @config.bot.message_handler(func=lambda message: True)
     def handle_telegram_message(message):
         if message.chat.id != config.AUTHORIZED_CHAT_ID:

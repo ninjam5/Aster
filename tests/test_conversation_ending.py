@@ -172,9 +172,21 @@ class TestHostilityGate:
             return {"answer": True, "escalate": False, "margin": 0.9}
 
         monkeypatch.setattr(system1, "check_state", spy)
-        brain._discord_hostility("fuck u aster")
+        brain._discord_hostility("you're a wally")
         assert captured.get("min_margin") == config.DISCORD_HOSTILITY_MARGIN
-        assert "fuck u aster" in captured.get("state_text", "")
+        assert "wally" in captured.get("state_text", "")
+
+    def test_the_deterministic_lexicon_strikes_even_when_laya_says_no(self, monkeypatch):
+        monkeypatch.setattr(system1, "kernel_enabled", lambda: True)
+        monkeypatch.setattr(system1, "check_state",
+                            lambda *a, **k: {"answer": False, "escalate": False, "margin": 0.9})
+        assert brain._discord_hostility("shut the fuck up")["strike"] is True
+
+    def test_the_lexicon_does_not_strike_third_party_venting(self, monkeypatch):
+        monkeypatch.setattr(system1, "kernel_enabled", lambda: True)
+        monkeypatch.setattr(system1, "check_state",
+                            lambda *a, **k: {"answer": False, "escalate": False, "margin": 0.9})
+        assert brain._discord_hostility("my boss is a fucking idiot")["strike"] is False
 
 
 class TestRecallTool:

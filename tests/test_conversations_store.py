@@ -199,3 +199,43 @@ class TestOwnerUnmute:
         assert "may speak" in out and "1 time" in out
         assert conv.check_mute("ninja")[0] is False
         assert conv.get_state("ninja")["mute_count"] == 1
+
+
+class TestOwnerForget:
+    def test_erases_the_record(self):
+        conv.record_strike("ninja", "x")
+        conv.register_mute("ninja")
+        assert "Erased" in conv.forget("ninja")
+        assert conv.get_state("ninja")["mute_count"] == 0
+        assert conv.get_state("ninja")["incidents"] == []
+
+    def test_unknown_name(self):
+        assert "No record" in conv.forget("nobody")
+
+    def test_no_name(self):
+        assert "Usage" in conv.forget("")
+
+
+class TestHostileLexicon:
+    def test_catches_explicit_abuse(self):
+        for text in ["shut the fuck up",
+                     "shut the fuck up and listen to ur elders",
+                     "to my majesty fagoot",
+                     "you're a dumbass",
+                     "you little shit",
+                     "fuck u",
+                     "stfu moron",
+                     "you're a fucking idiot",
+                     "fuck off"]:
+            assert conv.lexicon_hostility(text), text
+
+    def test_does_not_fire_on_banter_or_third_parties(self):
+        for text in ["haha you're such a goofball",
+                     "you little nerd lol",
+                     "my boss is a fucking idiot",
+                     "my brother is such an idiot",
+                     "traffic was shit today",
+                     "hey aster, can you tell Mohamed I'll be late?",
+                     "good evening, how are you?",
+                     "thanks man, appreciate it"]:
+            assert conv.lexicon_hostility(text) is None, text
