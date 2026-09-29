@@ -28,27 +28,31 @@ _PATH = os.path.join(_REPO_ROOT, "Aster_Vault", "conversation_state.json")
 _LOCK = threading.RLock()
 
 # ── deterministic high-precision abuse signal (spec §3) ───────────────────────
-# The Laya gate under-scores some explicit abuse ("shut the fuck up", a slur), so a
-# tiny deterministic net runs FIRST and ORs in. It is tuned HARD for precision — a
-# wrong strike is what mutes a friend, and the design law is fail-open (a miss is cheap,
-# Laya still gets its shot). It fires on only two unambiguous shapes:
-#   1. a severe slur in a SHORT, DIRECT message (not a retell/quote of someone else);
-#   2. a hard imperative at the START of the message ("stfu", "fuck you", "kys" ...).
-# Everything softer (targeted profanity, "you're an idiot") is LEFT TO LAYA, because a
-# keyword net cannot tell an insult from a negation, a homograph ("ask Dick"), a praise
-# idiom ("you are the shit"), or affectionate banter ("you goofy fuck"). The earlier,
-# wider net muted friends on all of those (QA 2026-09-29).
-_SEVERE_SLURS = re.compile(
-    r"\b(fag\w*|nigg(?:er|a|ah)s?|retard(?:ed)?|cunt|kike|wetback)\b", re.IGNORECASE)
-# Markers that mean the slur is being REPORTED/QUOTED, not used at Aster.
-_RETELL = re.compile(
-    r"\b(call(?:ed|s)?\s+me|said|says?|told|tell|report(?:ed|s)?|the word|quote[sd]?|"
-    r"lyric|song|reading)\b", re.IGNORECASE)
-# Only at the START of the message — a quoted/retold imperative does not count.
+# The Laya gate under-scores some explicit abuse ("shut the fuck up", a slur aimed at
+# Aster), so a tiny deterministic net runs FIRST and ORs in. It is tuned HARD for
+# precision — a wrong strike is what mutes a friend, and the design law is fail-open (a
+# miss is cheap; Laya still gets its shot). A keyword net cannot judge intent, so it only
+# fires on two shapes with strong structural cues, and bails on any negation / retell /
+# quote / playful tone:
+#   1. a severe slur DIRECTLY addressing Aster ("you're a faggot", "you retards");
+#   2. a hard imperative at the START ("stfu", "shut the fuck up", "fuck you", "kys" ...).
+# Third-party vents, reports ("my ex called me a retard"), homographs ("flame retard"),
+# reclaimed/casual use ("what up my nigga"), and banter all return None (QA 2026-09-29).
+_SEVERE_SLURS = r"\b(fag\w*|nigg(?:er|a|ah)s?|retard(?:ed|s)?|cunts?|kikes?|wetbacks?)\b"
+_DIRECT_ADDRESS = r"\b(you|ur|u|youre|you're|aster)\b"
+# address, then up to 3 words, then the slur.
+_SLUR_AT_YOU = re.compile(_DIRECT_ADDRESS + r"\s+(?:\w+\s+){0,3}" + _SEVERE_SLURS,
+                          re.IGNORECASE)
 _HARD_IMPERATIVES = re.compile(
     r"^\s*(?:please\s+)?(stfu|shut the (?:fuck|hell) up|fuck off|fuck (?:you|u)\b|"
     r"go fuck yourself|fuck (?:yourself|urself)|piss off|kys|kill yourself)\b",
     re.IGNORECASE)
+# Negation, retell, quote, or discussion-of-the-word — a reason to stand down.
+_VETO = re.compile(
+    r"\b(not|never|nobody|no one|isn'?t|aren'?t|didn'?t|don'?t|without|"
+    r"call(?:ed|s)?\s+(?:me|you|him|her|us|them)|said|says?|say|saying|told|tell|"
+    r"report(?:ed|s)?|the word|quote[sd]?|lyric|song|reading|wrote|texted|title|"
+    r"screenshot|phrase)\b", re.IGNORECASE)
 _BANTER = re.compile(
     r"\b(lol|lmao|lmfao|haha+|hehe+|jk|j/k|kidding|joking|funny|ily)\b|😂|🤣|😹|😭|xd\b|:\)",
     re.IGNORECASE)
@@ -57,17 +61,16 @@ _BANTER = re.compile(
 def lexicon_hostility(text) -> str | None:
     """Deterministic explicit-abuse signal. Returns a short reason or None.
 
-    High precision by construction: a slur only counts in a short direct message that is
-    not a retell, and an imperative only at the start with no playful tone. Everything
-    else is left to the Laya gate. The whole gate is Laya-bound (kernel off -> no strike).
+    High precision by construction — see the block comment. Everything softer is left to
+    the Laya gate, and the whole gate is Laya-bound (kernel off -> no strike).
     """
     t = str(text or "")
     if not t.strip():
         return None
-    if _SEVERE_SLURS.search(t) and len(t.split()) <= 10 and not _RETELL.search(t):
-        return "severe slur"
-    if _BANTER.search(t):
+    if _BANTER.search(t) or _VETO.search(t):
         return None
+    if _SLUR_AT_YOU.search(t):
+        return "slur aimed at you"
     if _HARD_IMPERATIVES.search(t):
         return "imperative insult"
     return None

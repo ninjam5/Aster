@@ -227,61 +227,88 @@ class TestOwnerForget:
 
 class TestHostileLexicon:
     def test_catches_direct_slurs_and_hard_imperatives(self):
-        for text in ["to my majesty fagoot",
-                     "you're a faggot",
-                     "you are retarded",
+        for text in ["you're a faggot",
+                     "you retard",
+                     "you retards",
+                     "you are a fucking retard",
+                     "you dumb cunts",
+                     "you stupid kikes",
+                     "you wetbacks",
                      "shut the fuck up",
                      "shut the fuck up and listen to ur elders",
                      "stfu",
+                     "STFU",
                      "stfu moron",
+                     "please stfu",
                      "fuck off",
                      "fuck u",
                      "fuck you aster",
-                     "go fuck yourself",
                      "fuck yourself",
+                     "go fuck yourself",
                      "kys",
                      "kill yourself"]:
             assert conv.lexicon_hostility(text), text
 
-    def test_does_not_fire_on_reports_or_quotes_of_abuse(self):
-        for text in ["my ex called me a retard at school",
-                     "some kid called me a fag in class today",
-                     "he called me a fag and I laughed it off",
-                     "lmao he called me a retard",
-                     "that song drops the word faggot, wild",
-                     "she called me a cunt and I reported her",
-                     "the word 'retard' is offensive, don't use it",
-                     "he told me 'fuck you' yesterday",
-                     "my ex said 'shut up' to me",
-                     "that guy kept saying shut the fuck up to everyone"]:
-            assert conv.lexicon_hostility(text) is None, text
-
-    def test_does_not_fire_on_negation_praise_or_homographs(self):
-        for text in ["you know when you're having a shit day?",
-                     "if you're having a shit day I'm here",
-                     "you know I'd never call you a bitch",
-                     "you can ask Dick about it, he knows",
-                     "you should get your bitch spayed, she's due",
+    def test_does_not_fire_on_negation(self):
+        for text in ["i would never call you a retard",
+                     "you're not a retard",
+                     "nobody here is a retard",
+                     "that's not retarded at all",
                      "you're not an idiot, you're just tired",
                      "you are no idiot, that's for sure",
-                     "you are the shit!",
-                     "you lucky bastard",
-                     "you goofy fuck",
-                     "you're a silly bitch, love you",
-                     "a chink in the armor",
+                     "you know I'd never call you a bitch"]:
+            assert conv.lexicon_hostility(text) is None, text
+
+    def test_does_not_fire_on_reports_quotes_or_discussion(self):
+        for text in ["my ex called me a retard at school",
+                     "he called me a fag in class today",
+                     "he called you a retard",
+                     "she called him a cunt",
+                     "she called me a cunt and I reported her",
+                     "someone was saying retard",
+                     "he wrote faggot in the chat",
+                     "she texted me retard",
+                     "look at this screenshot saying faggot",
+                     "that song drops the word faggot, wild",
+                     "he told me 'fuck you' yesterday",
+                     "my ex said 'shut up' to me",
+                     "the word 'retard' is offensive, don't use it",
+                     "the movie title is retard",
+                     "shut the fuck up is not a nice phrase",
+                     "stfu is what the cool kids say"]:
+            assert conv.lexicon_hostility(text) is None, text
+
+    def test_does_not_fire_on_homographs_or_reclaimed_use(self):
+        for text in ["the retard of the reaction is 5 seconds",
+                     "flame retard additives in the fabric",
+                     "it will retard the growth of the mold",
+                     "he smoked a fag on the corner",
+                     "she bought a fag at the shop",
+                     "the british call a cigarette a fag",
+                     "fagotto is the italian bassoon",
+                     "faggoting is an embroidery stitch",
+                     "we need a bundle of fagots for the fire",
+                     "what up my nigga",
+                     "my nigga you made it",
+                     "thats retarded",
+                     "this is fucking retarded",
+                     "bro this game is retarded lol",
                      "he's niggardly with his praise",
-                     "you should try the shitake mushrooms"]:
+                     "a chink in the armor"]:
             assert conv.lexicon_hostility(text) is None, text
 
     def test_does_not_fire_on_banter_or_friendly_imperatives(self):
-        for text in ["haha you're a dumbass lol",
-                     "shut up lol that's hilarious",
-                     "omg shut up you're so funny",
-                     "screw you man, haha",
+        for text in ["haha you retard",
+                     "you retard lol",
                      "you little nerd lol",
+                     "haha you're such a goofball",
+                     "you goofy fuck",
+                     "you lucky bastard",
+                     "you are the shit!",
                      "shut up, that's amazing",
                      "shut up and take my money",
-                     "shut up and dance with me"]:
+                     "shut up and dance with me",
+                     "screw you man, haha"]:
             assert conv.lexicon_hostility(text) is None, text
 
     def test_does_not_fire_on_third_party_venting_or_neutral(self):
@@ -290,8 +317,11 @@ class TestHostileLexicon:
                      "this shit is broken, can you fix it?",
                      "my brother is such an idiot",
                      "my roommate is an asshole",
+                     "you know when you're having a shit day?",
+                     "you can ask Dick about it, he knows",
                      "hey aster, can you tell Mohamed I'll be late?",
                      "good evening, how are you?",
                      "thanks man, appreciate it",
-                     "you're the best"]:
+                     "you're the best",
+                     "u ok?"]:
             assert conv.lexicon_hostility(text) is None, text

@@ -75,21 +75,23 @@ implementation commit). If Laya-only precision is ever unacceptable, the escape 
 single 35B judge call — but that leaves "Laya-bound", so it is not the default.
 
 **Deterministic OR-net for misses (2026-09-29, live test):** a live run showed Laya
-under-scoring explicit abuse ("to my majesty fagoot", "shut the fuck up and listen to ur
-elders" produced no strike). `conversations.lexicon_hostility(text)` runs **first** and ORs
-in, but only on **two unambiguous shapes** (a keyword net cannot tell an insult from a
-negation, a homograph, praise, or a retell — an earlier, wider version muted friends on all
-of those):
-1. a severe slur in a **short, direct** message (≤10 words, no retell/quote marker like
-   "called me", "said", "the word");
+under-scoring explicit abuse ("shut the fuck up and listen to ur elders" produced no
+strike). `conversations.lexicon_hostility(text)` runs **first** and ORs in, but only on two
+shapes with strong structural cues — a keyword net cannot judge intent, and a wrong strike
+is what mutes a friend (three QA rounds found wider versions muting friends on negation,
+homographs, reclaimed language, quotes, and banter):
+1. a severe slur **directly addressing Aster** ("you're a faggot", "you retards");
 2. a **hard imperative at the start** ("stfu", "shut the fuck up", "fuck you/u", "fuck
-   off", "kys", "kill yourself"), suppressed by a playful-tone veto (`lol`/`haha`/…).
-
-Everything softer ("you're an idiot", targeted profanity) is **left to Laya** — which
-caught every such case in the live run. Verified corpus: 14/14 direct-abuse positives; 48/48
-negatives clean (reports/quotes of abuse, negation, praise idioms, name homographs,
-affectionate banter, friendly imperatives, third-party venting, neutral). The whole gate
-stays Laya-bound — kernel off means no strike, lexicon included.
+   off", "kys", "kill yourself").
+Any negation / retell / quote / discussion-of-the-word / playful tone (a `_VETO` +
+`_BANTER` guard) makes it stand down. Everything softer is **left to Laya** (which caught
+every such case in the live run). Corpus: 20/20 direct-abuse positives, 56/56 negatives
+clean (reports/quotes, negation, homographs, reclaimed use, banter, friendly imperatives,
+third-party venting, neutral). Known residual false positives of any keyword net:
+affectionate "you're a sick cunt mate", imperative "shut the fuck up and drive" — rare, and
+absorbed by the 3-strike ladder. A bare slur with no address ("to my majesty fagoot") is a
+**miss** by design (Laya backstop). The whole gate stays Laya-bound — kernel off means no
+strike, lexicon included.
 
 ---
 
