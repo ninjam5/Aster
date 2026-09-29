@@ -119,12 +119,13 @@ import core.brain as brain, core.memory as memory, core.system1 as system1, tool
 > and **relationship** guesses have **not** been run against the real model yet — the live
 > probe was interrupted. Run 13d/14a first when the E2E pass happens.
 
-> **ID 15 status: Layer A DONE, Layer B TODO.** Verified live (2026-09-28): `Adham` /
+> **ID 15 status: Layer A DONE, Layer B DONE (2026-09-29).** Verified live (2026-09-28): `Adham` /
 > `adham` / `ADHAM` all resolve to the `'Adham'` key; `geroge`→george and `farrah`→farah via
 > difflib; "ninja guy"→ninja via Laya (margin 0.62); "my brother" / "the plumber" correctly
-> guess nothing. The `[CONFIRM REQUIRED]` path and the relay directive were verified with
-> mocked sends — **the live send + confirmation round-trip (15a/15d) still needs a real
-> Discord run with a safe target.**
+> guess nothing. Live relay run 2026-09-29 (§10): exact sends, the typo now **sends**
+> (owner request — no confirmation when the addressee is a clear typo), and "my brother"
+> still asks. **The live `[CONFIRM REQUIRED]` round-trip (15d) is the only piece not
+> independently exercised.**
 
 ---
 
@@ -271,3 +272,47 @@ them, not by the phase authors. **Suite before: 692 · after the fixes: 706.**
 | ID 11 | verbatim duplicate / natural paraphrase | margin 0.72 / 0.65 → skip |
 | ID 10 | "Aster sent an email reply…" | skip (margin 0.55) |
 | ID 9 | contradiction | margins 0.00–0.28 → **inert (fenced)** |
+
+---
+
+## 10. Live E2E run — 2026-09-29 (post-QA-convergence)
+
+llama-server (Qwen3.6-35B-A3B, PID 28916) + `main.py` (current code) up; **P1–P6 all
+green**. Layer A scripted probes + Layer B relay turns (safe target: `ninja`).
+
+### Layer A — 13/18 outright; the rest triaged
+
+| Probe | Result |
+|-------|--------|
+| P0-1 choose · P0-3 ask_batch · P0-5 resident/load-once | ✅ |
+| ID17 send gate · ID2 text-enough · ID22a relevance · ID22b answerability | ✅ |
+| ID11 duplicate/junk · ID10 action-log · ID8d no-hint · ID20 moment · ID13d gender · ID14a relationship | ✅ |
+| P0-4 `min_margin` override | ✅ (`min_margin=0.99` → `escalate=True`, threshold 0.99) |
+| ID1 post-action screenshot | ✅ with real action names (`press_key` skips; `smart_click`/`smart_scroll`/`smart_type` attach; warning path attaches) |
+| ID19c word boundary | ✅ `\baster\b` rejects master/disaster/faster/plaster |
+| P0-2 batched score (3 candidates) | safe — near-tie margin 0.011 → `escalate=True` (the known batching degradation); single-candidate `_answerability` shape is what ships |
+| **ID8 tie-break hint (genuine finding)** | Laya picks the **correct** tool every time but read_web margins are **0.18–0.36 < 0.5** → the hint never fires (inert live); and `"remember that I hate mushrooms"` → `save_note` at margin **0.64** (expected `memorize_fact`) → a confident *wrong* hint. **Open.** |
+
+### Layer B — relay flow (safe target `ninja`)
+
+| ID | Input | Result |
+|----|-------|--------|
+| 15a | "text ninja and say I'll be late" (exact) | ✅ delivered |
+| 15b | "tell geroge I'm late" (typo) | ❌ → **fixed** (below): now resolves to george and **delivers** |
+| 15c | "tell my brother I'll be late" | ✅ asks who; no send |
+| 15e | "let the ninja guy know I'll be late" | ✅ (owner decision) sends to ninja — Part C misses the phrasing but the model resolves it; **keep** |
+| 15d | "yes, go ahead" | not exercised independently (15e had already sent) |
+
+**15b fix (2026-09-29):** a typo in the **addressee** position is now confident
+(`resolve_typo`: `geroge→george`, `maski→masky`, `farrah→farah`) → sends without
+confirmation. A typo in the **payload** stays a guess ("tell my brother to say hi to
+geroge" still asks), so a name in the body can never misdirect. Exact-relay directive also
+now insists the tool MUST be invoked (the model was echoing the example instead of calling
+it: 5/6 → 8/8 live). Live proof: `"tell ninjaa I'll be late"` → `[System Note: Message
+delivered to ninja on Discord.]`.
+
+### Not runnable in this harness (need live hardware)
+
+LiveKit 19a–d, nudges 20a–c, awareness 5a, sentry 4a/4b. 8a–8c covered by the ID8 probe
+above (currently inert).
+

@@ -417,17 +417,22 @@ the high-risk cache-sensitive change (tool shortlisting) plus the low-value micr
 - Laya *is* good at the semantic/verbatim case: "tell the ninja guy hello" → `ninja`,
   margin **0.62**.
 - Verified end-to-end: `Adham`/`adham`/`ADHAM` all resolve to the `'Adham'` key;
-  "tell geroge I will be late" → `george` (not exact → confirm); "tell my brother" and
-  "message the plumber" → **no guess** (escalate).
+  "tell george I will be late" → `george` (exact → send); a typo in the ADDRESSEE slot
+  ("tell geroge …" → `george`, `resolve_typo`) is also confident and **sends**;
+  "tell my brother" and "message the plumber" → **no guess** (escalate).
 
 **Confirmation gate:** `send_discord_message(target_name, message, confirm=False)` sends
-immediately only for an **exact** name; a fuzzy/typo/Laya pick returns
+immediately for an **exact** name or a **typo of a contact in the address position**; a
+fuzzy/semantic/Laya pick (or a name only mentioned in the message body) returns
 `[CONFIRM REQUIRED: … resolves to 'X' … re-call with confirm=true]` and sends **nothing**.
 The relay directive tells the model to ask the owner first when the target is a guess.
+(Owner decision 2026-09-29: a clear misspelling of the intended contact must just send —
+the owner should not have to spell the name exactly. Payload typos stay guesses so a name
+in the body can never misdirect the send.)
 (The tool-level check also covers model-initiated sends, not just the relay path.)
 
-- **Where:** `tools/discord_api.py:59-74` (`send_discord_message`), regex parser
-  `core/brain.py:2151-2188` (`:2181` membership test).
+- **Where:** `tools/discord_api.py` (`send_discord_message`, `resolve_typo`), regex parser
+  `core/brain.py:2424-2495` (`_extract_discord_message_intent`).
 - **What:** `choice` over the known contact names (nickname/typo/case tolerance).
 - **Why it is needed:** the lookup **lowercases** the target but `CONTACTS` preserves case —
   `discord_contacts.json` has `"Adham"`, so `CONTACTS.get("adham")` is `None` and **outbound
