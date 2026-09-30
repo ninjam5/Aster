@@ -182,6 +182,54 @@ VOICE_SPEED = float(_cfg("settings", "voice_speed", default=1.0))
 # clones take priority in local_tts.py only when this is set to the default.
 VOICE_NAME = str(_cfg("settings", "voice_name", default="af_bella"))
 
+# ============================================================================
+# VOICE PROVIDERS — which STT/TTS engine the LiveKit CALL path uses.
+#   local    = Faster-Whisper (medium.en) + Kokoro, fully on-device (default).
+#   deepgram = Deepgram Flux cloud (STT flux-general-en; TTS flux-<voice>-en).
+# Requires a Deepgram key in secrets.yaml; a missing key silently falls back to
+# local (fail-closed) so a half-configured install never crashes. This affects
+# LiveKit calls ONLY — Telegram voice notes and the CLI stay on local Whisper.
+# See deepgram_tts.py and webrtc_bridge.py. Spec: engine_testing/qa/voice-cloud-swap.md
+# ============================================================================
+def _resolve_voice_provider(requested, key) -> str:
+    """Fail-closed: 'deepgram' only when requested AND a non-blank key exists."""
+    if str(requested or "").strip().lower() == "deepgram" and str(key or "").strip():
+        return "deepgram"
+    return "local"
+
+
+def _normalize_keyterms(value) -> list:
+    """Coerce the yaml keyterms value to a clean list[str].
+
+    A blank/absent/non-list value must never crash ``import config``.
+    """
+    if value is None or not isinstance(value, (list, tuple, str)):
+        value = ["Aster"]
+    elif isinstance(value, str):
+        value = [value]
+    return [str(k) for k in value if str(k).strip()]
+
+
+VOICE_STT_PROVIDER = str(_cfg("voice", "stt_provider", default="local")).lower()
+VOICE_TTS_PROVIDER = str(_cfg("voice", "tts_provider", default="local")).lower()
+# Strip so a whitespace-only key counts as "not configured" (fail-closed).
+DEEPGRAM_API_KEY = str(_secret("deepgram", "api_key", default="") or "").strip()
+DEEPGRAM_AVAILABLE = bool(DEEPGRAM_API_KEY)
+# Flux STT model (v2 endpoint /v2/listen): flux-general-en (English) or -multi.
+DEEPGRAM_STT_MODEL = str(_cfg("voice", "deepgram_stt_model", default="flux-general-en"))
+# Keyterms bias recognition toward names/jargon (Deepgram Flux supports this).
+DEEPGRAM_STT_KEYTERMS = _normalize_keyterms(_cfg("voice", "deepgram_stt_keyterms", default=["Aster"]))
+# Flux TTS model string, format flux-{voice}-{language}; default = Colin (British).
+DEEPGRAM_TTS_MODEL = str(_cfg("voice", "deepgram_tts_model", default="flux-colin-en"))
+# Resolved providers — the ONLY values webrtc_bridge should read.
+STT_PROVIDER = _resolve_voice_provider(VOICE_STT_PROVIDER, DEEPGRAM_API_KEY)
+TTS_PROVIDER = _resolve_voice_provider(VOICE_TTS_PROVIDER, DEEPGRAM_API_KEY)
+if not DEEPGRAM_AVAILABLE and "deepgram" in (VOICE_STT_PROVIDER, VOICE_TTS_PROVIDER):
+    print(
+        "[Aster Voice] WARNING: voice provider set to 'deepgram' but no "
+        "deepgram.api_key in secrets.yaml — falling back to local STT/TTS."
+    )
+
 # LLM sampling parameters — defaults applied to all main-conversation completions.
 # Sub-task calls (screen description, webcam, compaction) override temperature only.
 LLM_TEMPERATURE = float(_cfg("settings", "llm_temperature", default=1.0))

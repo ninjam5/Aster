@@ -10,6 +10,7 @@
 # ----------------------------------------------------------------------------
 secrets.yaml
 secrets.*.yaml
+!secrets.example.yaml
 *.secret
 self_config.yaml
 discord_memories.json

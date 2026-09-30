@@ -55,6 +55,19 @@ runtime:
   auto_compact: true                 # auto-run the /compact summarize-and-replace when context crosses the threshold below
   auto_compact_threshold: 0.75       # fraction of context_window that triggers auto-compaction (0.75 × 60k ≈ 45k tokens)
 
+voice:
+  # Which STT/TTS engine the LiveKit CALL path uses. "local" = Faster-Whisper
+  # (medium.en) + Kokoro, fully on-device. "deepgram" = Deepgram Flux cloud
+  # (STT flux-general-en; TTS flux-{voice}-en) — audio leaves the machine, and
+  # on-call voice-ID/mood tags + the cloned voice are not available. Requires a
+  # Deepgram key in secrets.yaml; without one the providers silently stay local.
+  # Telegram voice notes and the CLI always use local Whisper regardless.
+  stt_provider: local            # local | deepgram
+  tts_provider: local            # local | deepgram
+  deepgram_stt_model: flux-general-en     # flux-general-en | flux-general-multi
+  deepgram_stt_keyterms: ["Aster"]        # bias recognition toward names/jargon
+  deepgram_tts_model: flux-colin-en       # flux-{voice}-{language}; Colin = British male
+
 automation:
   # Minimum free system RAM (GB) before Aster launches its own browser for
   # browse_web/research. Below this it refuses with a readable message instead

@@ -99,6 +99,7 @@ class TestNoHardcodedCredentialsInSource:
     SCANNED_FILES = [
         "config.py",
         "webrtc_bridge.py",
+        "deepgram_tts.py",
         os.path.join("tools", "discord_api.py"),
         os.path.join("tools", "face_server.py"),
         os.path.join("core", "brain.py"),
@@ -111,6 +112,7 @@ class TestNoHardcodedCredentialsInSource:
             config.SPOTIPY_CLIENT_ID,
             config.SPOTIPY_CLIENT_SECRET,
             config.TELEGRAM_BOT_TOKEN,
+            config.DEEPGRAM_API_KEY,
             discord_api.DISCORD_BOT_TOKEN,
         ]
         live_secrets = [s for s in live_secrets if s and len(s) >= 8]  # skip blanks/too-short-to-be-meaningful

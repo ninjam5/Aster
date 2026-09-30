@@ -45,17 +45,56 @@ _active_bridge: "ManualWebRTCBridge | None" = None
 _active_loop: asyncio.AbstractEventLoop | None = None
 
 
+def _build_stt():
+    """Pick the STT engine for a call. Returns (base_stt, vad, streaming_stt).
+
+    local    → Faster-Whisper + Silero VAD wrapped in a StreamAdapter.
+    deepgram → Deepgram Flux (v2 API) is streaming-only, so it is used directly
+               with no StreamAdapter/VAD.
+    Kept module-level so it can be exercised by tests without a JobContext.
+    """
+    if _config.STT_PROVIDER == "deepgram":
+        from livekit.plugins import deepgram
+
+        base = deepgram.STTv2(
+            model=_config.DEEPGRAM_STT_MODEL,
+            sample_rate=16000,
+            keyterm=list(_config.DEEPGRAM_STT_KEYTERMS),
+            api_key=_config.DEEPGRAM_API_KEY,
+        )
+        print(f"[Aster Ears] STT: Deepgram Flux ({_config.DEEPGRAM_STT_MODEL}).")
+        return base, None, base
+    base = LocalWhisperSTT()
+    vad = silero.VAD.load()
+    return base, vad, stt.StreamAdapter(stt=base, vad=vad)
+
+
+def _build_tts():
+    """Pick the TTS engine for a call (local Kokoro or Deepgram Flux TTS)."""
+    if _config.TTS_PROVIDER == "deepgram":
+        from deepgram_tts import DeepgramFluxTTS
+
+        return DeepgramFluxTTS(
+            model=_config.DEEPGRAM_TTS_MODEL,
+            api_key=_config.DEEPGRAM_API_KEY,
+        )
+    return LocalKokoroTTS()
+
+
 
 class ManualWebRTCBridge:
     def __init__(self, ctx: JobContext):
         self._ctx = ctx
         self._room = ctx.room
 
-        # Keep the existing local STT/TTS implementations unchanged.
-        self._base_stt = LocalWhisperSTT()
-        self._vad = silero.VAD.load()
-        self._streaming_stt = stt.StreamAdapter(stt=self._base_stt, vad=self._vad)
-        self._tts = LocalKokoroTTS()
+        # STT/TTS engine selection (config.STT_PROVIDER/TTS_PROVIDER, resolved
+        # fail-closed in config.py). "local" is byte-identical to the original
+        # Whisper+Kokoro path; "deepgram" uses Deepgram Flux in the cloud.
+        self._base_stt, self._vad, self._streaming_stt = _build_stt()
+        self._tts = _build_tts()
+        # Snapshot the STT engine so teardown releases the right resources even
+        # if config is mutated at runtime.
+        self._stt_is_local = _config.STT_PROVIDER == "local"
 
         self._audio_source = rtc.AudioSource(
             sample_rate=self._tts.sample_rate,
@@ -138,8 +177,10 @@ class ManualWebRTCBridge:
             await self._audio_source.aclose()
         with contextlib.suppress(Exception):
             await self._streaming_stt.aclose()
-        with contextlib.suppress(Exception):
-            await self._base_stt.aclose()
+        # On the cloud path _streaming_stt IS _base_stt — close it only once.
+        if self._base_stt is not self._streaming_stt:
+            with contextlib.suppress(Exception):
+                await self._base_stt.aclose()
         with contextlib.suppress(Exception):
             await self._tts.aclose()
 
@@ -151,7 +192,9 @@ class ManualWebRTCBridge:
         self._vad = None
         self._tts = None
 
-        release_whisper_model()
+        # Only the local Whisper path holds a CUDA model to unload.
+        if self._stt_is_local:
+            release_whisper_model()
 
         import gc
         gc.collect()
