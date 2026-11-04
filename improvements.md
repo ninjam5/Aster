@@ -98,7 +98,7 @@ dispatch branch without a schema.
 |---|---|---|
 | `llama-server-turboquant/` | 1.4 GB | Unused local llama.cpp bundle. |
 | `llama-server/` | 1.1 GB | Unused local bundle (active engine = `E:\Models\beellama-v0.4.7…`). |
-| `whisper-models/models--Systran--faster-distil-whisper-large-v3` | 1.4 GB | Documented unused (only `medium.en` loads). |
+| `whisper-models/models--Systran--faster-distil-whisper-large-v3` | 1.4 GB | Documented unused (`small.en` is the active model). |
 | `wav2vec2_checkpoints/models--facebook--wav2vec2-base` | 725 MB | Unreferenced. |
 | `piper_engine/` | 98 MB | Zero references. |
 | `pretrained_models/` | ~0 | 0-byte husk files (from the earlier dead-code list). |
