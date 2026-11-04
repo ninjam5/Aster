@@ -89,6 +89,30 @@ async def get_token() -> dict[str, str]:
     return {"token": token, "ws_url": ws_url, "room": ROOM_NAME}
 
 
+@app.get("/api/voice/info")
+async def get_voice_info() -> dict[str, object]:
+    """Return active voice call transport info (default: local_ws on /api/voice/ws)."""
+    return {
+        "transport": getattr(_cfg, "VOICE_TRANSPORT", "local_ws"),
+        "ws_path": "/api/voice/ws",
+        "livekit_enabled": bool(getattr(_cfg, "WEBRTC_BRIDGE_ENABLED", False)),
+        "stt_provider": getattr(_cfg, "STT_PROVIDER", "local"),
+        "tts_provider": getattr(_cfg, "TTS_PROVIDER", "local"),
+        "whisper_model": getattr(_cfg, "WHISPER_MODEL", "small.en"),
+    }
+
+
+@app.websocket("/api/voice/ws")
+async def voice_websocket(websocket: WebSocket) -> None:
+    """Direct local WebSocket bidirectional audio call endpoint (16kHz PCM in, 24kHz PCM out)."""
+    try:
+        await webrtc_bridge.handle_voice_websocket(websocket)
+    except WebSocketDisconnect:
+        pass
+    except Exception as exc:
+        print(f"[Aster Face Server] /api/voice/ws closed: {exc}")
+
+
 @app.websocket("/api/logs")
 async def logs_stream(websocket: WebSocket) -> None:
     await realtime_stream.register_stream_client(websocket)

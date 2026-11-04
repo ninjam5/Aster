@@ -38,7 +38,7 @@ runtime:
   tool_max_tokens: 4096          # max output tokens for one tool-loop round; large write_local_file payloads need headroom (was implicitly 1000)
   vision_enabled: true
   vision_model: Qwen3.6-35B-A3B (mmproj-F16)
-  audio_input: faster-whisper (medium.en)
+  audio_input: faster-whisper (small.en)
   audio_output: kokoro-tts (82M)
   wake_word_enabled: true
   wake_word_model: hey_jarvis
@@ -63,6 +63,8 @@ voice:
   # on-call voice-ID/mood tags + the cloned voice are not available. Requires a
   # Deepgram key in secrets.yaml; without one the providers silently stay local.
   # Telegram voice notes and the CLI always use local Whisper regardless.
+  transport: local_ws            # local_ws (direct local WebSocket on /api/voice/ws) | livekit (benched for future mobile app)
+  whisper_model: small.en        # Faster-Whisper model size (small.en | medium.en)
   stt_provider: local            # local | deepgram
   tts_provider: local            # local | deepgram
   deepgram_stt_model: flux-general-en     # flux-general-en | flux-general-multi
@@ -128,7 +130,7 @@ integrations:
   spotify: enabled
   discord: enabled
   telegram: enabled
-  livekit: enabled
+  livekit: disabled              # benched for future mobile app; mainstream is direct local WebSocket (/api/voice/ws)
   notification_hub: false        # Phase B — not yet implemented
   google:                        # Gmail + Calendar — see tools/google_auth.py
     access_tier: limited         # limited (read-only) | partial (ask before sending) | autonomous (sends immediately)
@@ -149,7 +151,7 @@ daemons:
   awareness_mode: true           # ambient context daemon boot state — this key IS honored now (config.AWARENESS_ACTIVE); set false to boot with awareness off
   health_watchdog: true          # ping llama-server /health every 30s; 3 consecutive failures → Telegram alert (tools/health_watchdog.py)
   health_watchdog_autorestart: true  # on failure, relaunch start.bat automatically (max 2 restarts per rolling hour); false = alert-only
-  webrtc_bridge: enabled         # always-on daemon thread
+  webrtc_bridge: disabled        # benched for future mobile app (direct WebSocket audio runs on face_server :8000)
   face_server: enabled           # always-on (FastAPI on :8000)
   discord_listener: enabled      # always-on inbound DM listener
   proactive_research_worker: false   # Phase C — not yet implemented

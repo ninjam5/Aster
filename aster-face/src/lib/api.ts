@@ -12,6 +12,17 @@ export const LOGS_WS_URL = (() => {
   }
 })();
 
+export const VOICE_WS_URL = (() => {
+  try {
+    const u = new URL(BACKEND_URL);
+    u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
+    u.pathname = "/api/voice/ws";
+    return u.toString();
+  } catch {
+    return "ws://127.0.0.1:8000/api/voice/ws";
+  }
+})();
+
 export type TokenResponse = {
   token: string;
   ws_url: string;

@@ -8,7 +8,7 @@ import AsterFace, {
 import CallControls from "./components/CallControls";
 import LogConsole from "./components/LogConsole";
 import AsterRoom from "./livekit/AsterRoom";
-import { fetchToken } from "./lib/api";
+import { fetchToken, VOICE_WS_URL } from "./lib/api";
 import { useWakeState } from "./lib/useWakeState";
 import { useSentiment } from "./lib/useSentiment";
 import {
@@ -198,14 +198,8 @@ function MainWindow() {
   const startCall = useCallback(async () => {
     setError(null);
     setCallState("connecting");
-    try {
-      const { token: t, ws_url } = await fetchToken();
-      setToken(t);
-      setServerUrl(ws_url);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not reach Aster.");
-      setCallState("idle");
-    }
+    setToken("local_ws");
+    setServerUrl(VOICE_WS_URL);
   }, []);
 
   const endCall = useCallback(() => {

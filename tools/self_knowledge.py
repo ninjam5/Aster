@@ -99,9 +99,9 @@ def list_my_capabilities() -> str:
             "screen_watcher": True,
         },
         "audio": {
-            "transcription": "Faster-Whisper medium.en (shared process-wide)",
+            "transcription": f"Faster-Whisper {getattr(config, 'WHISPER_MODEL', 'small.en')} (shared process-wide)",
             "synthesis": "Kokoro TTS 82M (ref-counted, VRAM-offloaded when idle)",
-            "live_call": "LiveKit Agents SDK + Silero VAD",
+            "live_call": "Direct Local WebSocket (/api/voice/ws) + Silero VAD (LiveKit benched for mobile)",
             "wake_word": _safe_get(cfg, "runtime", "wake_word_model", default="hey_jarvis"),
         },
         "memory": {

@@ -10,14 +10,24 @@ from livekit import rtc
 from livekit.agents.types import APIConnectOptions, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 from faster_whisper import WhisperModel
+import config as _config
 
-WHISPER_MODEL_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "whisper-models", "medium.en"
+WHISPER_MODELS_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "whisper-models"
 )
+WHISPER_MODEL_NAME = getattr(_config, "WHISPER_MODEL", "small.en") or "small.en"
+WHISPER_MODEL_PATH = os.path.join(WHISPER_MODELS_DIR, WHISPER_MODEL_NAME)
+
+
+def _resolve_whisper_model_source() -> str:
+    """Return local directory path if present, else the model name for auto-download into whisper-models/."""
+    if os.path.isdir(WHISPER_MODEL_PATH):
+        return WHISPER_MODEL_PATH
+    return WHISPER_MODEL_NAME
 
 # ── shared Whisper instance ───────────────────────────────────────────────────
-# A single medium.en model serves BOTH the Telegram voice handler and the
-# LiveKit call STT. Loading it twice wastes ~1 GB of VRAM during a call.
+# A single small.en model serves BOTH the Telegram voice handler and the
+# voice call STT. Loading it twice wastes VRAM during a call.
 _shared_whisper: WhisperModel | None = None
 _whisper_lock = threading.Lock()
 _dll_handles: list = []
@@ -91,12 +101,13 @@ def get_whisper_model() -> WhisperModel:
         return _shared_whisper
     with _whisper_lock:
         if _shared_whisper is None:
-            print("[Aster Ears] Booting shared Faster-Whisper (medium.en, 8-bit CUDA)...")
+            print(f"[Aster Ears] Booting shared Faster-Whisper ({WHISPER_MODEL_NAME}, 8-bit CUDA)...")
             _prepare_cuda_runtime_paths()
             _shared_whisper = WhisperModel(
-                WHISPER_MODEL_PATH,
+                _resolve_whisper_model_source(),
                 device="cuda",
                 compute_type="int8",
+                download_root=WHISPER_MODELS_DIR,
             )
     return _shared_whisper
 
@@ -134,11 +145,12 @@ def _get_cpu_whisper() -> WhisperModel:
     if _cpu_whisper is None:
         with _cpu_whisper_lock:
             if _cpu_whisper is None:
-                print("[Aster Ears] Booting CPU Faster-Whisper (medium.en, 8-bit) for voice notes...")
+                print(f"[Aster Ears] Booting CPU Faster-Whisper ({WHISPER_MODEL_NAME}, 8-bit) for voice notes...")
                 _cpu_whisper = WhisperModel(
-                    WHISPER_MODEL_PATH,
+                    _resolve_whisper_model_source(),
                     device="cpu",
                     compute_type="int8",
+                    download_root=WHISPER_MODELS_DIR,
                 )
     return _cpu_whisper
 
@@ -196,7 +208,7 @@ class LocalWhisperSTT(stt.STT):
 
     @property
     def model(self) -> str:
-        return "medium.en"
+        return WHISPER_MODEL_NAME
 
     @property
     def provider(self) -> str:

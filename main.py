@@ -695,7 +695,10 @@ def start_cli_loop():
 def start_background_services():
     threading.Thread(target=start_telegram_bot, daemon=True).start()
     threading.Thread(target=start_discord_bot_listener, daemon=True).start()
-    threading.Thread(target=start_webrtc_bridge, daemon=True).start()
+    if getattr(config, "WEBRTC_BRIDGE_ENABLED", False):
+        threading.Thread(target=start_webrtc_bridge, daemon=True).start()
+    else:
+        print("[Aster Network] LiveKit WebRTC bridge benched (using direct local WebSocket audio on /api/voice/ws).")
 
     # Start Sentry daemon
     sentry.telegram_bot = config.bot

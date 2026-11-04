@@ -774,12 +774,326 @@ def _addressed_to_aster(transcript: str) -> bool:
     return True
 
 
+class LocalWebSocketVoiceBridge(ManualWebRTCBridge):
+    """Direct local WebSocket voice call bridge (ws://127.0.0.1:8000/api/voice/ws).
+
+    Mainstream desktop call transport replacing LiveKit for local use (zero
+    subprocess fork, zero WebRTC cloud round-trip). Shares the exact STT/TTS
+    builders, Silero VAD, openWakeWord, Laya ID-19 addressed-gate, utterance
+    coalescing debounce, barge-in cancellation, and VRAM teardown as
+    ManualWebRTCBridge.
+
+    Wire protocol:
+      * Client -> Server binary: 16 kHz mono int16 little-endian PCM frames
+      * Client -> Server text  : JSON {"type": "mute", "muted": bool} | {"type": "ping"} | {"type": "hangup"}
+      * Server -> Client binary: 24 kHz mono int16 little-endian PCM frames (TTS output)
+      * Server -> Client text  : JSON {"type": "ready"|"clear_audio"|"speaking"|"pong", ...}
+    """
+
+    def __init__(self, websocket: Any):
+        import json as _json
+        self._json = _json
+        self._ws = websocket
+        self._ctx = None
+        self._room = None
+
+        self._base_stt, self._vad, self._streaming_stt = _build_stt()
+        self._tts = _build_tts()
+        self._stt_is_local = _config.STT_PROVIDER == "local"
+
+        self._audio_source = None
+        self._audio_track = None
+        self._audio_track_pub = None
+
+        self._stop_event = asyncio.Event()
+        self._closed = False
+        self._muted = False
+        self._playout_until = 0.0
+        self._ws_send_lock = asyncio.Lock()
+
+        self._response_lock = asyncio.Lock()
+        self._response_epoch = 0
+        self._response_task: asyncio.Task[None] | None = None
+        self._brain_task: asyncio.Task[str] | None = None
+        self._tts_task: asyncio.Task[None] | None = None
+        self._audio_lock = asyncio.Lock()
+
+        self._track_tasks: dict[str, asyncio.Task[None]] = {}
+        self._track_owner: dict[str, str] = {}
+        self._background_tasks: set[asyncio.Task[None]] = set()
+
+        self._pending_transcript: str = ""
+        self._debounce_task: asyncio.Task[None] | None = None
+
+        self._awake = not _config.WAKE_WORD_ENABLED
+        self._last_activity = time.monotonic()
+        self._stt_final_at = 0.0
+        self._wake_detector: Any = None
+
+    async def _send_json(self, payload: dict[str, Any]) -> None:
+        if self._closed or self._ws is None:
+            return
+        with contextlib.suppress(Exception):
+            async with self._ws_send_lock:
+                await self._ws.send_text(self._json.dumps(payload))
+
+    async def _send_bytes(self, data: bytes) -> None:
+        if self._closed or self._ws is None or not data:
+            return
+        with contextlib.suppress(Exception):
+            async with self._ws_send_lock:
+                await self._ws.send_bytes(data)
+
+    def _handle_control_message(self, raw_text: str) -> None:
+        try:
+            data = self._json.loads(raw_text)
+        except Exception:
+            return
+        if not isinstance(data, dict):
+            return
+        msg_type = data.get("type")
+        if msg_type == "mute":
+            self._muted = bool(data.get("muted", False))
+        elif msg_type == "ping":
+            self._spawn(self._send_json({"type": "pong"}), name="ws-pong")
+        elif msg_type == "hangup":
+            self._stop_event.set()
+
+    async def start(self) -> None:
+        print("\n[Aster Voice WS] Direct local WebSocket call connected.")
+        await self._send_json({
+            "type": "ready",
+            "sample_rate_in": 16000,
+            "sample_rate_out": getattr(self._tts, "sample_rate", 24000),
+            "channels": getattr(self._tts, "num_channels", 1),
+            "awake": self._awake,
+        })
+
+        if _config.WAKE_WORD_ENABLED:
+            self._wake_detector = self._create_wake_detector()
+            if self._wake_detector is None:
+                self._awake = True
+            else:
+                realtime_stream.publish_wake(False)
+                print(
+                    f"[Aster Wake] Asleep — listening for wake word "
+                    f"('{_config.WAKE_WORD_MODEL}')."
+                )
+                self._spawn(self._inactivity_watchdog(), name="wake-inactivity-watchdog")
+        else:
+            realtime_stream.publish_wake(True)
+
+        await self._run_ws_pipeline()
+
+    async def _run_ws_pipeline(self) -> None:
+        recognize_stream = self._streaming_stt.stream(conn_options=STT_CONN_OPTIONS)
+
+        async def _receive_ws_audio() -> None:
+            wake_leftover = np.empty(0, dtype=np.int16)
+            try:
+                while not self._stop_event.is_set() and not self._closed:
+                    msg = await self._ws.receive()
+                    if msg.get("type") == "websocket.disconnect":
+                        break
+                    raw_bytes = msg.get("bytes")
+                    if raw_bytes:
+                        if self._muted:
+                            continue
+                        if len(raw_bytes) % 2 != 0:
+                            raw_bytes = raw_bytes[:-1]
+                        if not raw_bytes:
+                            continue
+                        frame = rtc.AudioFrame(
+                            data=raw_bytes,
+                            sample_rate=16000,
+                            num_channels=1,
+                            samples_per_channel=len(raw_bytes) // 2,
+                        )
+                        if not self._awake and self._wake_detector is not None:
+                            wake_leftover = self._process_wake_audio(frame, wake_leftover)
+                        else:
+                            recognize_stream.push_frame(frame)
+                        continue
+                    text_data = msg.get("text")
+                    if text_data:
+                        self._handle_control_message(text_data)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+            finally:
+                with contextlib.suppress(Exception):
+                    recognize_stream.end_input()
+                self._stop_event.set()
+
+        async def _consume_stt_events() -> None:
+            try:
+                async for speech_event in recognize_stream:
+                    if speech_event.type == stt.SpeechEventType.START_OF_SPEECH:
+                        self._cancel_debounce()
+                        await self._cancel_active_response(reason="barge-in", clear_audio=True)
+                        continue
+
+                    if speech_event.type != stt.SpeechEventType.FINAL_TRANSCRIPT:
+                        continue
+                    if not speech_event.alternatives:
+                        continue
+
+                    transcript = speech_event.alternatives[0].text.strip()
+                    if not transcript:
+                        continue
+
+                    self._last_activity = time.monotonic()
+                    self._stt_final_at = self._last_activity
+
+                    self._pending_transcript = (
+                        (self._pending_transcript + " " + transcript).strip()
+                        if self._pending_transcript
+                        else transcript
+                    )
+                    print(f"[Aster Heard] (local-ws): {transcript}")
+                    self._restart_debounce()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if not self._closed:
+                    print(f"[Aster Voice WS] STT stream ended: {exc}")
+
+        rx_task = asyncio.create_task(_receive_ws_audio(), name="ws-audio-rx")
+        stt_task = asyncio.create_task(_consume_stt_events(), name="ws-stt-events")
+        stop_wait = asyncio.create_task(self._stop_event.wait(), name="ws-stop-wait")
+        try:
+            await asyncio.wait(
+                {rx_task, stt_task, stop_wait},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            for t in (rx_task, stt_task, stop_wait):
+                if not t.done():
+                    t.cancel()
+            await asyncio.gather(rx_task, stt_task, stop_wait, return_exceptions=True)
+            with contextlib.suppress(Exception):
+                await recognize_stream.aclose()
+
+    def _cancel_response_tasks_locked(self, *, clear_audio: bool) -> list[asyncio.Task[Any]]:
+        tasks_to_wait = super()._cancel_response_tasks_locked(clear_audio=False)
+        if clear_audio:
+            self._playout_until = 0.0
+            self._spawn(self._send_json({"type": "clear_audio"}), name="ws-clear-audio")
+        return tasks_to_wait
+
+    async def _speak(self, text: str, response_epoch: int) -> None:
+        _t_speak0 = time.monotonic()
+        synth_stream = self._tts.synthesize(text, conn_options=TTS_CONN_OPTIONS)
+        _first = True
+        try:
+            async with self._audio_lock:
+                await self._send_json({"type": "speaking", "speaking": True})
+                async for synthesized in synth_stream:
+                    if _first:
+                        _first = False
+                        print(f"[Aster Perf] TTS first frame: "
+                              f"{(time.monotonic() - _t_speak0) * 1000:.0f}ms")
+                    if response_epoch != self._response_epoch or self._closed:
+                        return
+                    pcm_bytes = synthesized.frame.data.tobytes()
+                    if not pcm_bytes:
+                        continue
+                    samples = synthesized.frame.samples_per_channel or (len(pcm_bytes) // 2)
+                    dur = samples / float(getattr(self._tts, "sample_rate", 24000) or 24000)
+                    now = time.monotonic()
+                    if self._playout_until < now:
+                        self._playout_until = now
+                    self._playout_until += dur
+                    await self._send_bytes(pcm_bytes)
+
+                if response_epoch == self._response_epoch and not self._closed:
+                    remaining = self._playout_until - time.monotonic()
+                    if remaining > 0:
+                        await asyncio.sleep(remaining)
+        except asyncio.CancelledError:
+            self._playout_until = 0.0
+            await self._send_json({"type": "clear_audio"})
+            raise
+        finally:
+            with contextlib.suppress(Exception):
+                await self._send_json({"type": "speaking", "speaking": False})
+            with contextlib.suppress(Exception):
+                await synth_stream.aclose()
+
+    async def aclose(self, *_: str) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._stop_event.set()
+
+        await self._cancel_active_response(reason="shutdown", clear_audio=False)
+
+        for task in list(self._background_tasks):
+            task.cancel()
+        if self._background_tasks:
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
+
+        with contextlib.suppress(Exception):
+            await self._streaming_stt.aclose()
+        if self._base_stt is not self._streaming_stt:
+            with contextlib.suppress(Exception):
+                await self._base_stt.aclose()
+        with contextlib.suppress(Exception):
+            await self._tts.aclose()
+
+        self._wake_detector = None
+        self._streaming_stt = None
+        self._base_stt = None
+        self._vad = None
+        self._tts = None
+
+        if self._stt_is_local:
+            release_whisper_model()
+
+        with contextlib.suppress(Exception):
+            await self._ws.close()
+        self._ws = None
+
+        import gc
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+
+        print("[Aster Voice WS] Session closed. VRAM released.")
+
+
+async def handle_voice_websocket(websocket: Any) -> None:
+    """FastAPI WebSocket handler for /api/voice/ws."""
+    global _active_bridge, _active_loop
+    await websocket.accept()
+    if _active_bridge is not None and not _active_bridge._closed:
+        with contextlib.suppress(Exception):
+            await _active_bridge.aclose()
+    bridge = LocalWebSocketVoiceBridge(websocket)
+    _active_bridge = bridge
+    _active_loop = asyncio.get_running_loop()
+    try:
+        await bridge.start()
+    finally:
+        if _active_bridge is bridge:
+            _active_bridge = None
+            _active_loop = None
+        await bridge.aclose()
+
+
 def call_is_active() -> bool:
     """True when a LiveKit call is live with a remote participant connected."""
     bridge = _active_bridge
     if bridge is None or bridge._closed:
         return False
     try:
+        if isinstance(bridge, LocalWebSocketVoiceBridge):
+            return True
         return bridge._room.isconnected() and bool(bridge._room.remote_participants)
     except Exception:
         return False
@@ -814,13 +1128,13 @@ def start_agent() -> None:
 def start_agent_background() -> None:
     """Start the agent server in a background thread (for main.py integration).
 
-    Uses server.run(devmode=True) directly instead of cli.run_app(),
+    Uses server.run(devmode=False) directly instead of cli.run_app() so it runs in-process without forking.
     since cli.run_app() is designed to be the main entrypoint.
     """
     if not LIVEKIT_CONFIGURED:
         print("[Aster Voice] LiveKit not configured (see secrets.yaml) — voice call disabled.")
         return
-    asyncio.run(server.run(devmode=True))
+    asyncio.run(server.run(devmode=False))
 
 
 if __name__ == "__main__":

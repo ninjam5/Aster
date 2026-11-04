@@ -426,3 +426,212 @@ def _direct_stream(tts_obj, text):
     stream._input_text = text
     stream._conn_options = DEFAULT_API_CONNECT_OPTIONS
     return stream
+
+
+class _FakeWebSocket:
+    def __init__(self, incoming=()):
+        self._incoming = list(incoming)
+        self.accepted = False
+        self.closed = False
+        self.sent_text = []
+        self.sent_bytes = []
+
+    async def accept(self):
+        self.accepted = True
+
+    async def send_text(self, text: str):
+        self.sent_text.append(text)
+
+    async def send_bytes(self, data: bytes):
+        self.sent_bytes.append(data)
+
+    async def receive(self):
+        if self._incoming:
+            item = self._incoming.pop(0)
+            if callable(item):
+                return await item()
+            return item
+        return {"type": "websocket.disconnect"}
+
+    async def close(self):
+        self.closed = True
+
+
+class _FakeRecognizeStream:
+    def __init__(self, events=()):
+        self._events = list(events)
+        self.pushed_frames = []
+        self.input_ended = False
+        self.closed = False
+
+    def push_frame(self, frame):
+        self.pushed_frames.append(frame)
+
+    def end_input(self):
+        self.input_ended = True
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self._events:
+            return self._events.pop(0)
+        await asyncio.sleep(0.05)
+        raise StopAsyncIteration
+
+    async def aclose(self):
+        self.closed = True
+
+
+class _FakeStreamingSTT(_FakeSttp):
+    def __init__(self, rec_stream):
+        super().__init__()
+        self._rec_stream = rec_stream
+
+    def stream(self, **kwargs):
+        return self._rec_stream
+
+
+class _FakeSynthesizedFrame:
+    def __init__(self, pcm: bytes, samples: int):
+        self.frame = types.SimpleNamespace(
+            data=memoryview(pcm),
+            samples_per_channel=samples,
+        )
+
+
+class _FakeSynthStream:
+    def __init__(self, frames):
+        self._frames = list(frames)
+        self.closed = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self._frames:
+            return self._frames.pop(0)
+        raise StopAsyncIteration
+
+    async def aclose(self):
+        self.closed = True
+
+
+class _FakeLocalTTS(_FakeSttp):
+    sample_rate = 24000
+    num_channels = 1
+
+    def __init__(self, pcm_chunks=(b"\x10\x00" * 24,)):
+        super().__init__()
+        self._pcm_chunks = pcm_chunks
+
+    def synthesize(self, text: str, **kwargs):
+        frames = [
+            _FakeSynthesizedFrame(c, len(c) // 2)
+            for c in self._pcm_chunks
+        ]
+        return _FakeSynthStream(frames)
+
+
+class TestOverhaulDevmodeSmallEnAndLocalWs:
+    def test_livekit_devmode_is_off(self, monkeypatch):
+        """Step 1: server.run must be called with devmode=False so it never forks."""
+        called = {}
+
+        async def _fake_run(*, devmode=True):
+            called["devmode"] = devmode
+
+        monkeypatch.setattr(webrtc_bridge, "LIVEKIT_CONFIGURED", True)
+        monkeypatch.setattr(webrtc_bridge.server, "run", _fake_run)
+        webrtc_bridge.start_agent_background()
+        assert called == {"devmode": False}
+
+    def test_whisper_model_defaults_to_small_en(self):
+        """Step 3: Faster-Whisper model defaults to small.en in config and local_stt."""
+        import local_stt
+
+        assert config.WHISPER_MODEL == "small.en"
+        assert local_stt.WHISPER_MODEL_NAME == "small.en"
+        stt_stub = object.__new__(local_stt.LocalWhisperSTT)
+        assert stt_stub.model == "small.en"
+
+    def test_livekit_benched_by_default_in_config(self):
+        """Step 2: LiveKit daemon is benched (disabled) by default; transport is local_ws."""
+        assert config.VOICE_TRANSPORT == "local_ws"
+        assert config.WEBRTC_BRIDGE_ENABLED is False
+
+    def test_local_ws_bridge_handshake_audio_mute_and_teardown(self, monkeypatch):
+        """Step 2: LocalWebSocketVoiceBridge handles binary 16kHz PCM, mute control, and VRAM teardown."""
+        import json
+
+        rec = _FakeRecognizeStream()
+        base_stt = _FakeSttp()
+        streaming_stt = _FakeStreamingSTT(rec)
+        fake_tts = _FakeLocalTTS()
+        released = []
+
+        monkeypatch.setattr(webrtc_bridge, "_build_stt", lambda: (base_stt, None, streaming_stt))
+        monkeypatch.setattr(webrtc_bridge, "_build_tts", lambda: fake_tts)
+        monkeypatch.setattr(webrtc_bridge, "release_whisper_model", lambda: released.append(1))
+        monkeypatch.setattr(config, "STT_PROVIDER", "local")
+        monkeypatch.setattr(config, "WAKE_WORD_ENABLED", False)
+
+        ws = _FakeWebSocket(
+            incoming=[
+                {"type": "websocket.receive", "bytes": b"\x01\x00" * 160},
+                {"type": "websocket.receive", "text": json.dumps({"type": "mute", "muted": True})},
+                {"type": "websocket.receive", "bytes": b"\x02\x00" * 160},  # dropped while muted
+                {"type": "websocket.receive", "text": json.dumps({"type": "mute", "muted": False})},
+                {"type": "websocket.receive", "bytes": b"\x03\x00" * 160},
+                {"type": "websocket.receive", "text": json.dumps({"type": "hangup"})},
+            ]
+        )
+
+        asyncio.run(webrtc_bridge.handle_voice_websocket(ws))
+
+        assert ws.accepted is True
+        assert ws.closed is True
+        assert len(rec.pushed_frames) == 2
+        assert rec.pushed_frames[0].samples_per_channel == 160
+        assert rec.pushed_frames[1].samples_per_channel == 160
+        ready_msg = json.loads(ws.sent_text[0])
+        assert ready_msg["type"] == "ready"
+        assert ready_msg["sample_rate_in"] == 16000
+        assert ready_msg["sample_rate_out"] == 24000
+        assert released == [1]
+        assert webrtc_bridge.call_is_active() is False
+
+    def test_local_ws_bridge_speak_and_barge_in_clear_audio(self, monkeypatch):
+        """_speak streams binary PCM frames and barge-in sends clear_audio JSON."""
+        import json
+
+        rec = _FakeRecognizeStream()
+        base_stt = _FakeSttp()
+        streaming_stt = _FakeStreamingSTT(rec)
+        fake_tts = _FakeLocalTTS(pcm_chunks=[b"\x05\x00" * 48, b"\x06\x00" * 48])
+
+        monkeypatch.setattr(webrtc_bridge, "_build_stt", lambda: (base_stt, None, streaming_stt))
+        monkeypatch.setattr(webrtc_bridge, "_build_tts", lambda: fake_tts)
+        monkeypatch.setattr(webrtc_bridge, "release_whisper_model", lambda: None)
+        monkeypatch.setattr(config, "STT_PROVIDER", "local")
+        monkeypatch.setattr(config, "WAKE_WORD_ENABLED", False)
+
+        ws = _FakeWebSocket()
+        bridge = webrtc_bridge.LocalWebSocketVoiceBridge(ws)
+
+        async def _exercise():
+            webrtc_bridge._active_bridge = bridge
+            assert webrtc_bridge.call_is_active() is True
+            await bridge._speak("Hello Sir.", bridge._response_epoch)
+            await bridge._cancel_active_response(reason="barge-in", clear_audio=True)
+            await asyncio.sleep(0.01)
+            await bridge.aclose()
+            webrtc_bridge._active_bridge = None
+
+        asyncio.run(_exercise())
+
+        assert len(ws.sent_bytes) == 2
+        types_sent = [json.loads(t)["type"] for t in ws.sent_text]
+        assert "speaking" in types_sent
+        assert "clear_audio" in types_sent
+        assert webrtc_bridge.call_is_active() is False

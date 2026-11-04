@@ -184,7 +184,7 @@ VOICE_NAME = str(_cfg("settings", "voice_name", default="af_bella"))
 
 # ============================================================================
 # VOICE PROVIDERS — which STT/TTS engine the LiveKit CALL path uses.
-#   local    = Faster-Whisper (medium.en) + Kokoro, fully on-device (default).
+#   local    = Faster-Whisper (small.en) + Kokoro, fully on-device (default).
 #   deepgram = Deepgram Flux cloud (STT flux-general-en; TTS flux-<voice>-en).
 # Requires a Deepgram key in secrets.yaml; a missing key silently falls back to
 # local (fail-closed) so a half-configured install never crashes. This affects
@@ -210,6 +210,18 @@ def _normalize_keyterms(value) -> list:
     return [str(k) for k in value if str(k).strip()]
 
 
+def _is_enabled(val, default: bool = False) -> bool:
+    """Coerce YAML bool or 'enabled'/'disabled' string to bool."""
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return val
+    return str(val).strip().lower() in ("true", "1", "yes", "on", "enabled")
+
+
+VOICE_TRANSPORT = str(_cfg("voice", "transport", default="local_ws")).strip().lower() or "local_ws"
+WHISPER_MODEL = str(_cfg("voice", "whisper_model", default="small.en")).strip() or "small.en"
+WEBRTC_BRIDGE_ENABLED = _is_enabled(_cfg("daemons", "webrtc_bridge", default=False), default=False)
 VOICE_STT_PROVIDER = str(_cfg("voice", "stt_provider", default="local")).lower()
 VOICE_TTS_PROVIDER = str(_cfg("voice", "tts_provider", default="local")).lower()
 # Strip so a whitespace-only key counts as "not configured" (fail-closed).
