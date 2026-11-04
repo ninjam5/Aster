@@ -71,17 +71,16 @@ class TestNeedsActionScreenshot:
 
 
 class TestAttachActionScreenshot:
-    def test_skip_returns_text_and_never_captures(self, monkeypatch):
-        monkeypatch.setattr(brain, "_needs_action_screenshot", lambda text, action: False)
-        captured = []
-        monkeypatch.setattr(brain, "capture_screen_base64", lambda: captured.append(1) or "B64")
+    def test_always_attaches_post_action_screenshot_when_capture_succeeds(self, monkeypatch):
+        """Step 2 of laya-backwards-integration.md: always attach post-action
+        screenshots so physical window occlusions are never hidden from the model."""
+        monkeypatch.setattr(brain, "capture_screen_base64", lambda: "B64")
         out = brain._attach_action_screenshot(CLEAN, "smart_type")
-        assert isinstance(out, str)
-        assert "Screenshot omitted" in out
-        assert captured == []
+        assert isinstance(out, dict)
+        assert out["ui_screenshot_b64"] == "B64"
+        assert out["text"] == CLEAN
 
     def test_attach_returns_multimodal_dict(self, monkeypatch):
-        monkeypatch.setattr(brain, "_needs_action_screenshot", lambda text, action: True)
         monkeypatch.setattr(brain, "capture_screen_base64", lambda: "B64")
         out = brain._attach_action_screenshot(WARN, "smart_click")
         assert isinstance(out, dict)
@@ -89,7 +88,6 @@ class TestAttachActionScreenshot:
         assert out["text"] == WARN
 
     def test_capture_failure_falls_back_to_text(self, monkeypatch):
-        monkeypatch.setattr(brain, "_needs_action_screenshot", lambda text, action: True)
         monkeypatch.setattr(brain, "capture_screen_base64", lambda: None)
         out = brain._attach_action_screenshot(CLEAN, "press_key")
         assert out == CLEAN

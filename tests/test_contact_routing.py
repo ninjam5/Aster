@@ -177,6 +177,27 @@ class TestIntentParser:
         assert brain._extract_discord_message_intent("what time is it") is None
         assert brain._extract_discord_message_intent("tell me a joke") is None
 
+    def test_media_payload_is_parsed_as_caption_not_base64(self, monkeypatch):
+        """A base64 blob can fuzzy-match a contact; only the caption is parsed.
+
+        Regression: the chips JPEG's base64 matched "Adham", so the image turn
+        became a forced Discord relay whose directive embedded the whole blob
+        (367k tokens) and PolyStrata rejected it with HTTP 400.
+        """
+        payload = ("[NATIVE_IMAGE_PAYLOAD:" + ("A" * 1000) + "/Adham/"
+                   + ("B" * 1000) + "] How many bags of chips are here")
+        monkeypatch.setattr(brain, "_laya_relay_intent", lambda text: "Adham" in text)
+        monkeypatch.setattr(brain, "laya_pick_contact",
+                            lambda text: {"name": "Adham", "exact": False,
+                                          "escalate": False, "reason": "fake"})
+        assert brain._extract_discord_message_intent(payload) is None
+
+        relay = payload.replace("How many bags of chips are here", "tell Adham I'm late")
+        d = brain._extract_discord_message_intent(relay)
+        assert d["target"] == "Adham"
+        assert d["payload"] == "I'm late"
+        assert "AAAA" not in d["payload"]
+
     def test_part_c_recognises_a_phrasing_without_the_verb_pattern(self, monkeypatch):
         monkeypatch.setattr(brain, "_laya_relay_intent", lambda text: True)
         monkeypatch.setattr(brain, "laya_pick_contact",

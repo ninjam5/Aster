@@ -36,6 +36,20 @@ DEFAULT_POLLING_TOOLS = frozenset({"watch_screen"})
 # LoopGuard escalates warnings for it but never blocks.
 DEFAULT_WARN_ONLY_TOOLS = frozenset({"smart_click"})
 
+# Search/lookup tools where models tend to permute query arguments ("project
+# proposal" -> "proposal" -> "this week") to bypass exact-argument hashing
+# when a target doesn't exist. Tracked both per-tool (regardless of args) and
+# across the whole search family per turn.
+DEFAULT_SEARCH_FAMILY_TOOLS = frozenset({
+    "research",
+    "search_emails",
+    "recall_memory",
+    "list_directory_tree",
+    "get_notes",
+    "list_my_contacts",
+    "summarize_unread_emails",
+})
+
 
 class Verdict(NamedTuple):
     action: str        # "allow" | "warn" | "block"
@@ -69,6 +83,11 @@ class LoopGuard:
         block_at: int = 4,
         polling_tools: frozenset[str] = DEFAULT_POLLING_TOOLS,
         warn_only_tools: frozenset[str] = DEFAULT_WARN_ONLY_TOOLS,
+        search_family_tools: frozenset[str] = DEFAULT_SEARCH_FAMILY_TOOLS,
+        search_tool_warn_at: int = 3,
+        search_tool_block_at: int = 4,
+        search_family_warn_at: int = 5,
+        search_family_block_at: int = 6,
         pingpong_window: int = 6,
     ):
         self.enforce = enforce
@@ -76,7 +95,14 @@ class LoopGuard:
         self.block_at = block_at
         self.polling_tools = polling_tools
         self.warn_only_tools = warn_only_tools
+        self.search_family_tools = search_family_tools
+        self.search_tool_warn_at = search_tool_warn_at
+        self.search_tool_block_at = search_tool_block_at
+        self.search_family_warn_at = search_family_warn_at
+        self.search_family_block_at = search_family_block_at
         self._counts: dict[str, int] = {}
+        self._tool_counts: dict[str, int] = {}
+        self._search_family_count: int = 0
         self._history: deque[str] = deque(maxlen=pingpong_window)
         self._pingpong_warned = False
         self._pingpong_logged = False
@@ -94,6 +120,10 @@ class LoopGuard:
         per tool invocation, before execute_tool()."""
         call_hash = _hash_call(tool_name, arguments)
         count = self._counts[call_hash] = self._counts.get(call_hash, 0) + 1
+        tool_count = self._tool_counts[tool_name] = self._tool_counts.get(tool_name, 0) + 1
+        is_search_family = tool_name in self.search_family_tools
+        if is_search_family:
+            self._search_family_count += 1
         self._history.append(call_hash)
         pingpong = self._detect_pingpong()
 
@@ -147,8 +177,24 @@ class LoopGuard:
             action = "block"
             message = (
                 f"[LoopGuard] BLOCKED: identical call #{count} to {tool_name} this turn. "
-                f"The result will not change. Choose a different approach, different "
-                f"arguments, or report your status to the user."
+                f"The result will not change. Stop calling tools and report your status "
+                f"or ask the user a clarifying question."
+            )
+        elif can_block and is_search_family and tool_count >= self.search_tool_block_at:
+            action = "block"
+            message = (
+                f"[LoopGuard] BLOCKED: search exhaustion (#{tool_count} calls to {tool_name} "
+                f"this turn). Do NOT try more query variations — stop calling search/lookup "
+                f"tools and respond directly to the user with what you found or ask ONE "
+                f"clarifying question."
+            )
+        elif can_block and is_search_family and self._search_family_count >= self.search_family_block_at:
+            action = "block"
+            message = (
+                f"[LoopGuard] BLOCKED: search budget exhausted ({self._search_family_count} "
+                f"lookup calls this turn). Do NOT call any more search/lookup tools — "
+                f"respond directly to the user and ask ONE clarifying question for any "
+                f"missing information."
             )
         elif count >= effective_warn_at:
             action = "warn"
@@ -156,6 +202,21 @@ class LoopGuard:
                 f"[LoopGuard] WARNING: attempt #{count} calling {tool_name} with the same "
                 f"arguments this turn. If this has not worked, STOP repeating it — try "
                 f"something else or tell the user what is blocking you."
+            )
+        elif is_search_family and tool_count >= self.search_tool_warn_at:
+            action = "warn"
+            message = (
+                f"[LoopGuard] WARNING: search attempt #{tool_count} calling {tool_name} this "
+                f"turn. If previous queries returned no results, do NOT keep trying query "
+                f"variations — stop searching and report your findings or ask the user ONE "
+                f"clarifying question."
+            )
+        elif is_search_family and self._search_family_count >= self.search_family_warn_at:
+            action = "warn"
+            message = (
+                f"[LoopGuard] WARNING: {self._search_family_count} lookup/search calls "
+                f"executed this turn. Stop searching and either answer with what you found "
+                f"or ask the user ONE clarifying question."
             )
 
         if action != "allow":

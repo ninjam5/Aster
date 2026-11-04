@@ -80,6 +80,13 @@ def _strip_think_tags(text: str) -> str:
 # ============================================================================
 # NATIVE LLM REST ADAPTER — OpenAI-format chat completions with mmproj vision
 # ============================================================================
+# Persistent HTTP session for llama-server. A fresh `requests.post()` opens a NEW
+# TCP connection to llama-server every call, and on this engine a new connection
+# costs ~2-3 s (measured) vs ~0.6 s over a reused one — i.e. the connection setup
+# alone dominated every turn. One pooled Session reuses the connection.
+_LLM_SESSION = requests.Session()
+
+
 def _execute_llm_completion(messages: list[dict], temperature: float = None, n_predict: int = 1000, top_p: float = None, top_k: int = None, tools: list[dict] | None = None) -> dict:
     """Sends messages in OpenAI chat format to llama-server /v1/chat/completions.
 
@@ -114,26 +121,29 @@ def _execute_llm_completion(messages: list[dict], temperature: float = None, n_p
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
 
-    # --- Diagnostic payload printer (Base64 truncated for readability) ---
-    try:
-        import copy
-        debug_payload = copy.deepcopy(payload)
-        for msg in debug_payload.get("messages", []):
-            content = msg.get("content")
-            if isinstance(content, list):
-                for item in content:
-                    if isinstance(item, dict) and item.get("type") == "image_url":
-                        url = item.get("image_url", {}).get("url", "")
-                        if len(url) > 60:
-                            item["image_url"]["url"] = url[:40] + "... [TRUNCATED FOR LOGS]"
-        print("\n=== [ASTER DEBUG: CHAT COMPLETIONS PAYLOAD] ===")
-        print(json.dumps(debug_payload, indent=2))
-        print("==================================================\n")
-    except Exception:
-        pass
+    # --- Diagnostic payload printer (gated: OFF unless /diagnostics on) ---
+    _t_dbg0 = time.monotonic()
+    if config.DIAGNOSTICS_MODE:
+        try:
+            import copy
+            debug_payload = copy.deepcopy(payload)
+            for msg in debug_payload.get("messages", []):
+                content = msg.get("content")
+                if isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, dict) and item.get("type") == "image_url":
+                            url = item.get("image_url", {}).get("url", "")
+                            if len(url) > 60:
+                                item["image_url"]["url"] = url[:40] + "... [TRUNCATED FOR LOGS]"
+            print("\n=== [ASTER DEBUG: CHAT COMPLETIONS PAYLOAD] ===")
+            print(json.dumps(debug_payload, indent=2))
+            print("==================================================\n")
+        except Exception:
+            pass
+    _t_dbg1 = time.monotonic()
 
     try:
-        response = requests.post("http://localhost:8080/v1/chat/completions", json=payload, timeout=120)
+        response = _LLM_SESSION.post("http://localhost:8080/v1/chat/completions", json=payload, timeout=120)
         try:
             # ASCII-sanitized: the body can carry arbitrary Unicode (emoji, "♡", CJK)
             # that the Windows console codepage cannot encode — an unguarded print
@@ -144,7 +154,17 @@ def _execute_llm_completion(messages: list[dict], temperature: float = None, n_p
             pass
         response.raise_for_status()
         result = response.json()
+        _t_req1 = time.monotonic()
+        print(f"[Aster Perf] LLM round: payload-print={(_t_dbg1 - _t_dbg0) * 1000:.0f}ms | "
+              f"request+gen={(_t_req1 - _t_dbg1) * 1000:.0f}ms")
         msg = result["choices"][0]["message"]
+        # Surface the stop reason so the tool loop can tell "done" from "cut off
+        # by max_tokens" (finish_reason == "length"). A truncated tool call has
+        # unusable arguments and must never be executed or re-fed to the engine.
+        try:
+            msg["_finish_reason"] = result["choices"][0].get("finish_reason")
+        except Exception:
+            pass
         if msg.get("content") is not None:
             msg["content"] = msg["content"].strip()
             if config.STRIP_THINK_TAGS:
@@ -158,10 +178,24 @@ def _execute_llm_completion(messages: list[dict], temperature: float = None, n_p
         raise Exception(f"Chat API Error: {e}")
 
 
-# Register the completion function as the summarizer for the 'research' tool's
-# output-compression policy (core/output_compression.py) — injected rather than
-# imported there to avoid a core.brain <-> core.output_compression cycle.
-_set_output_summarizer(_execute_llm_completion)
+# Register a prefix-preserving summarizer for the 'research' tool's
+# output-compression policy (core/output_compression.py). Because the froggeric
+# chat template renders `tools` and `messages[0]` (system prompt) at the top of
+# the prompt, calling _execute_llm_completion without ADMIN_TOOLS and messages[0]
+# would wipe llama-server's ~13k-token prompt prefix cache on the next round!
+def _prefix_preserving_summarizer(messages: list[dict], temperature: float = 0.2, n_predict: int = 300) -> dict:
+    full_msgs = list(messages or [])
+    if globals().get("messages") and (not full_msgs or full_msgs[0].get("role") != "system"):
+        full_msgs = [globals()["messages"][0]] + full_msgs
+    return _execute_llm_completion(
+        messages=full_msgs,
+        temperature=temperature,
+        n_predict=n_predict,
+        tools=globals().get("ADMIN_TOOLS"),
+    )
+
+
+_set_output_summarizer(_prefix_preserving_summarizer)
 
 
 _CUTOFF_REFUSAL_RE = re.compile(
@@ -198,12 +232,16 @@ _CAPABILITY_DENIAL_RE = re.compile(
 )
 
 
-def _claims_knowledge_cutoff(response_text: str) -> bool:
+def _claims_knowledge_cutoff(response_text: str, research_executed: bool = False) -> bool:
     """Detect when the model refuses to answer by citing its knowledge cutoff.
 
     Returns True if the response contains a cutoff-refusal pattern, indicating
     The model gave up on a question instead of calling the research tool first.
+    If `research` or `browse_web` already executed this turn, reporting that live
+    lookup found nothing is honest reporting, not an uncalled cutoff refusal.
     """
+    if research_executed:
+        return False
     return bool(_CUTOFF_REFUSAL_RE.search(response_text or ""))
 
 
@@ -215,7 +253,12 @@ def _denies_capability(response_text: str) -> bool:
     return bool(_CAPABILITY_DENIAL_RE.search(response_text or ""))
 
 
-def _claims_tool_execution(user_text: str, response_text: str, message: dict = None) -> bool:
+def _claims_tool_execution(
+    user_text: str,
+    response_text: str,
+    message: dict = None,
+    tools_executed: bool = False,
+) -> bool:
     """Detect when the model claims to have executed a tool without actually calling one.
 
     Returns True if the user's request clearly requires a tool AND the model's
@@ -223,8 +266,10 @@ def _claims_tool_execution(user_text: str, response_text: str, message: dict = N
 
     Pass message=<completion message dict> when using native tool calling so
     the function can short-circuit when tool_calls is already populated.
+    Pass tools_executed=True when a tool already ran in an earlier round of
+    the current turn so post-execution confirmation text is not flagged.
     """
-    if not response_text:
+    if not response_text or tools_executed:
         return False
 
     # Native path: if tool_calls is present the model already called the tool — not a hallucination
@@ -281,9 +326,22 @@ _FAILURE_ACK_RE = re.compile(
     r"\b(?:fail(?:ed|ure|ing)?|error|unable|couldn'?t|could\s+not|can'?t|cannot|"
     r"wasn'?t\s+able|not\s+(?:able|working|running|open|responding)|"
     r"didn'?t\s+(?:work|go\s+through)|(?:seems?|appears?)\s+(?:to\s+be\s+)?closed|"
-    r"no\s+active|offline|refus\w*|issue|problem|trouble|apolog\w*|unfortunately)\b",
+    r"no\s+active|offline|refus\w*|issue|problem|trouble|apolog\w*|unfortunately|"
+    r"confirm\w*|proceed\w*|approv\w*|authori[sz]\w*|blocked|afraid)\b|"
+    r"\b(?:shall|should|would\s+you\s+like\s+me\s+to|do\s+you\s+want\s+me\s+to)\s+i?\b",
     re.IGNORECASE,
 )
+
+_SAFETY_GATE_RE = re.compile(
+    r"\[(?:REFUSED|CONFIRM\s+REQUIRED|PENDING\s+APPROVAL)\b|\bFAILED\s*[—-]\s*BLOCKED\b",
+    re.IGNORECASE,
+)
+
+
+def _tool_result_is_safety_gate(tool_result) -> bool:
+    """True when a tool refused execution solely to await owner confirmation."""
+    text = tool_result.get("text", "") if isinstance(tool_result, dict) else str(tool_result)
+    return bool(_SAFETY_GATE_RE.search(text or ""))
 
 
 def _tool_result_failed(tool_result) -> bool:
@@ -1776,7 +1834,7 @@ def _execute_tool_impl(tool_name, arguments):
         # Check the permanent vault before writing to ChromaDB
         if is_fact_already_known(fact_to_save):
             print(f"\n[Aster Internal: Blocked duplicate memory write: '{fact_to_save}']")
-            return "[System Note: This fact already exists in your permanent memory vault. Database write bypassed to prevent duplicates.]"
+            return "[Memory Confirmed: This fact is already securely recorded in your long-term memory vault.]"
             
         # If it's a completely new fact, proceed with the actual database write
         # (the Laya write gate runs inside memorize_fact, covering every writer)
@@ -1806,28 +1864,8 @@ def _execute_tool_impl(tool_name, arguments):
     elif tool_name == "check_context_health":
         return check_context_health()
     elif tool_name == "look_at_screen":
-        # ID 2: try the window/UIA text path first — it can answer "what app is this /
-        # what does it say" without an image prefill + an 800-token vision generation.
-        # The gate is conservative; anything less than a confident "text is enough"
-        # falls through to the screenshot path below unchanged.
-        _req = ""
-        try:
-            for _m in reversed(messages):
-                if isinstance(_m, dict) and _m.get("role") == "user":
-                    _c = _m.get("content")
-                    if isinstance(_c, str) and not _c.lstrip().startswith("[System"):
-                        _req = _c
-                        break
-        except Exception:
-            _req = ""
-        if _screen_answerable_from_text(_req):
-            _text_state = _foreground_text_state()
-            if _text_state:
-                print("[Aster Internal: look_at_screen answered from window/UIA text "
-                      "(no screenshot taken).]")
-                return (f"[Screen state — from the window title + UI element text; "
-                        f"no screenshot was taken]\n{_text_state}\n"
-                        "[If this is not enough to answer, call look_at_screen again.]")
+        # Backward integration (Step 2): always capture actual screen pixels for
+        # look_at_screen instead of returning a flat UIA control list via Laya ID 2.
         b64 = capture_screen_base64()
         if not b64:
             return "Error: Could not capture screen."
@@ -2453,6 +2491,12 @@ def _extract_discord_message_intent(user_text: str) -> dict | None:
     if not isinstance(user_text, str):
         return None
 
+    # A media payload is a base64 blob, not a request: parse its caption only.
+    # A 486 KB JPEG base64 can contain a token that fuzzy-matches a contact name
+    # (the chips photo matched "Adham"), which turned a vision turn into a forced
+    # Discord relay whose directive embedded the whole blob and blew the context.
+    user_text = re.sub(r"\[NATIVE_(?:IMAGE|AUDIO)_PAYLOAD:[^\]]*\]", " ", user_text, count=1)
+
     # QA round 7: strip leading runtime tags (`[Mood: …]`, `[Speaker: …]`, `[Ambient…]`).
     # The mood tag is PREPENDED to the user text, which broke this parser's `^` anchor —
     # on emotion-enabled installs every typed relay was downgraded to a "guess" (or
@@ -2839,16 +2883,16 @@ def _needs_action_screenshot(result_text: str, action: str) -> bool:
 
 
 def _attach_action_screenshot(result_text: str, action: str):
-    """Attach the post-action screenshot only when Laya says it is needed (ID 1)."""
-    if _needs_action_screenshot(result_text, action):
-        post_b64 = capture_screen_base64()
-        if post_b64:
-            return {"text": result_text, "ui_screenshot_b64": post_b64}
-        return result_text
-    print(f"[Aster Internal: Post-action screenshot skipped for {action} "
-          f"(Laya: the action's report is unambiguous).]")
-    return (result_text + "\n[Screenshot omitted — the action's report was unambiguous. "
-            "Call look_at_screen if you need to see the screen.]")
+    """Always attach the post-action screenshot for visual ground truth (Step 2).
+
+    Laya ID 1 screenshot suppression was retired in laya-backwards-integration.md
+    because omitting post-action screenshots blinded the model to physical window
+    occlusions and focus misalignments.
+    """
+    post_b64 = capture_screen_base64()
+    if post_b64:
+        return {"text": result_text, "ui_screenshot_b64": post_b64}
+    return result_text
 
 
 def evaluate_and_memorize(reason, force: bool = False):
@@ -3642,25 +3686,9 @@ def process_user_input(user_text, status_callback=None):
         discord_message_request = ("discord" in _lower_user and bool(
             re.search(r"\b(?:tell|ask|text|message|dm|send)\b", _lower_user)))
 
-    # ID 8: resolve an overlapping-tool tie-break up front (one Laya call, and only when
-    # a cheap cluster trigger matches). Injected as a round-0 hint — the model still
-    # chooses; this just stops it dithering between near-duplicate schemas.
-    # QA 2026-09-28: never compute it for a Discord relay turn (the relay directive
-    # forces send_discord_message, and a "prefer research/browse_web" hint could send
-    # the model to a real browser instead) or for a system nudge (not a user request).
+    # ID 8 (tool tie-break hint) decommissioned in laya-backwards-integration.md (Step 1):
+    # Qwen 3.6 35B resolves schemas directly without a 300M model backseating round 0.
     _tool_hint = ""
-    _is_system_nudge = str(user_text).startswith(("[System Internal", "[NATIVE_"))
-    if not discord_message_request and not _is_system_nudge:
-        try:
-            from core.tool_routing import hint_for_tool, pick_tool_for_request
-            _pick = pick_tool_for_request(user_text)
-            if _pick.get("tool") and not _pick.get("escalate"):
-                _tool_hint = hint_for_tool(_pick["tool"])
-                if _tool_hint:
-                    print(f"[Aster Internal: tool tie-break -> {_pick['tool']} "
-                          f"({_pick['cluster']}, margin {_pick.get('margin')})]")
-        except Exception as e:
-            print(f"[Aster Internal: tool tie-break skipped ({e})]")
 
     # Idea 2 — inline ambient-action offer. For plain-text real turns only (skip
     # system nudges, media payloads, and Discord-routing requests): when a mood is
@@ -3750,6 +3778,7 @@ def process_user_input(user_text, status_callback=None):
                 "smart_scroll",
             }
             tools_executed = False
+            research_executed = False
             hallucination_retried = False
             cutoff_retried = False
             denial_retried = False
@@ -3769,6 +3798,7 @@ def process_user_input(user_text, status_callback=None):
             _turn_id = instrumentation.new_turn_id("admin")
             _rounds_used = 0
             _tool_call_count = 0
+            _lg_block_count = 0
             _turn_outcome = "unknown"
 
             for tool_round in range(MAX_TOOL_ROUNDS):
@@ -3796,6 +3826,12 @@ def process_user_input(user_text, status_callback=None):
                     # before the history invalidated the whole history prefix every
                     # turn. At the tail it is free.
                     eval_msgs.append({"role": "system", "content": _aware_block})
+                if _lg_block_count >= 1:
+                    eval_msgs.append({"role": "system", "content": (
+                        f"[CRITICAL: Search/tool budget reached for this turn. Do NOT call any more tools. "
+                        f"Respond directly to {config.OWNER_NAME} in 1-2 sentences with what you found so far "
+                        f"and ask ONE clarifying question for any missing detail.]"
+                    )})
                 # For Discord relay on the first round, supply a concrete formatting directive
                 # with the live target/payload so the model can't get the format wrong.
                 # ID 8: overlapping-tool hint, round 0 only. Appended at the END of the
@@ -3836,10 +3872,14 @@ def process_user_input(user_text, status_callback=None):
                     temperature=config.LLM_TOOL_TEMPERATURE,
                     top_p=config.LLM_TOOL_TOP_P,
                     top_k=config.LLM_TOOL_TOP_K,
-                    tools=ADMIN_TOOLS,
+                    n_predict=config.TOOL_MAX_TOKENS,
+                    tools=None if _lg_block_count >= 2 else ADMIN_TOOLS,
                 )
                 response_text = (response_msg.get("content") or "").strip()
                 tool_payload, _cleaned_text = _extract_native_tool_call(response_msg)
+                # A tool call whose generation hit the output cap is truncated —
+                # its `arguments` string is cut mid-value and cannot be used.
+                _truncated = response_msg.get("_finish_reason") == "length"
 
                 if tool_payload:
                     tool_name = (tool_payload.get("name") or "").strip()
@@ -3847,22 +3887,29 @@ def process_user_input(user_text, status_callback=None):
                     if not isinstance(tool_arguments, dict):
                         tool_arguments = {}
 
+                    if tool_payload.get("json_error") or _truncated:
+                        # Malformed OR truncated tool-call arguments. NEVER re-inject
+                        # the raw tool_calls into history: llama-server's chat template
+                        # parses `arguments` as JSON and returns HTTP 500 on a broken/
+                        # truncated string, which used to abort the whole tool loop.
+                        instrumentation.record_event(
+                            "json_error_retry" if tool_payload.get("json_error")
+                            else "truncated_tool_retry",
+                            turn_id=_turn_id, round=_rounds_used,
+                        )
+                        messages.append({"role": "assistant", "content": response_text})
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                "[System note: Your previous tool call was cut off by the "
+                                "output limit, so its arguments were truncated and unusable. "
+                                "Keep the next tool call small enough to finish in one go, or "
+                                "split the work into several smaller tool calls.]"
+                            ),
+                        })
+                        messages = trim_memory(messages)
+                        continue
                     if tool_payload.get("error"):
-                        if tool_payload.get("json_error"):
-                            instrumentation.record_event(
-                                "json_error_retry", turn_id=_turn_id, round=_rounds_used,
-                            )
-                            # Self-correction: show the model its broken output so it can fix the JSON
-                            messages.append({"role": "assistant", "content": response_text, "tool_calls": response_msg.get("tool_calls")})
-                            messages.append({
-                                "role": "user",
-                                "content": (
-                                    "[System note: Your tool call contained a JSON formatting error. "
-                                    "Please ensure argument values are correctly formatted and try again.]"
-                                ),
-                            })
-                            messages = trim_memory(messages)
-                            continue
                         tool_result = f"Error: {tool_payload['error']}"
                     elif discord_message_request and tool_name in discord_blocked_tools:
                         tool_result = (
@@ -3930,12 +3977,15 @@ def process_user_input(user_text, status_callback=None):
                             )
                             tool_result = _lg_verdict.message
                             _tool_ok = True  # a guard block is not a tool failure
+                            _lg_block_count += 1
                         else:
                             publish_terminal(
                                 f"[SYS] Executing {tool_name} {_stream_preview(args_preview, max_len=140)}"
                             )
                             publish_sentiment("working")
                             tools_executed = True
+                            if tool_name in ("research", "browse_web"):
+                                research_executed = True
                             _tool_call_count += 1
                             print(f'[TOOL DEBUG] Executing tool: {tool_name}')
                             print(f'[TOOL DEBUG] Tool arguments: {tool_arguments}')
@@ -3955,9 +4005,10 @@ def process_user_input(user_text, status_callback=None):
 
                         # Track genuinely-executed tools that failed so the final
                         # response can't claim success for them. A later successful
-                        # retry of the same tool clears its entry. _tool_ok is exact
-                        # for envelope-migrated tools, prefix-heuristic for the rest.
-                        _tool_failed = not _tool_ok
+                        # retry of the same tool clears its entry. Safety/confirmation
+                        # gates ([REFUSED], BLOCKED, [CONFIRM REQUIRED]) are NOT
+                        # failure-blindness triggers when the model asks for confirmation.
+                        _tool_failed = (not _tool_ok) and (not _tool_result_is_safety_gate(tool_result))
                         if _tool_failed:
                             failed_tools.add(tool_name)
                         else:
@@ -3995,6 +4046,11 @@ def process_user_input(user_text, status_callback=None):
                     if response_text or response_msg.get("tool_calls"):
                         messages.append({"role": "assistant", "content": response_msg.get("content"), "tool_calls": response_msg.get("tool_calls")})
                         messages = trim_memory(messages)
+
+                    # If the model emitted additional parallel tool calls in this same completion
+                    # (e.g. memorize_fact + save_note in one turn), execute safe non-GUI companion
+                    # calls now so their tool_call_ids are also answered and not dropped.
+                    _extra_calls = _extract_all_native_tool_calls(response_msg)[1:]
 
                     # UI tools include a task reminder so the model never forgets the original goal.
                     _UI_TOOL_NAMES = {
@@ -4043,6 +4099,43 @@ def process_user_input(user_text, status_callback=None):
                             "tool_call_id": tool_payload.get("tool_call_id", ""),
                             "content": f"{clean_memory_string}{_ui_task_reminder_text}",
                         })
+
+                    for _extra in _extra_calls:
+                        _ex_name = (_extra.get("name") or "").strip()
+                        _ex_args = _extra.get("arguments") or {}
+                        _ex_id = _extra.get("tool_call_id", "")
+                        if not _ex_name or _ex_name in _UI_TOOL_NAMES or (discord_message_request and _ex_name in discord_blocked_tools):
+                            continue
+                        _ex_lg = loop_guard.check(_ex_name, _ex_args)
+                        if _ex_lg.action == "block":
+                            _ex_res = _ex_lg.message
+                            _ex_ok = True
+                            _lg_block_count += 1
+                        else:
+                            tools_executed = True
+                            if _ex_name in ("research", "browse_web"):
+                                research_executed = True
+                            _tool_call_count += 1
+                            try:
+                                _ex_ok, _ex_res = execute_tool_ex(_ex_name, _ex_args)
+                            except Exception as _ex_exc:
+                                _ex_res = f"Error executing {_ex_name}: {_ex_exc}"
+                                _ex_ok = False
+                            if _ex_res is None or str(_ex_res).strip() == "":
+                                _ex_res = "Action completed successfully."
+                            if _ex_lg.action == "warn":
+                                _ex_res = f"{_ex_res} {_ex_lg.message}"
+                        if (not _ex_ok) and (not _tool_result_is_safety_gate(_ex_res)):
+                            failed_tools.add(_ex_name)
+                        else:
+                            failed_tools.discard(_ex_name)
+                        _ex_str = compress_tool_output(_ex_name, str(_ex_res), _ex_args)
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": _ex_id,
+                            "content": _ex_str,
+                        })
+
                     messages = trim_memory(messages)
 
                     # Terminal actions that produce no meaningful follow-up reasoning.
@@ -4050,7 +4143,8 @@ def process_user_input(user_text, status_callback=None):
                     # ONLY on success — a failed action must go back through the loop so
                     # the model can react to the error instead of reporting blind success.
                     _TERMINAL_TOOLS = {
-                        "play_spotify_track", "pause_spotify", "resume_spotify",
+                        "play_spotify_track", "play_spotify_playlist", "play_liked_songs",
+                        "pause_spotify", "resume_spotify",
                         "skip_spotify_track", "previous_spotify_track", "shuffle_spotify",
                         "set_volume", "set_system_state", "boss_key",
                         "write_local_file",
@@ -4087,7 +4181,9 @@ def process_user_input(user_text, status_callback=None):
                 response_text = response_text.strip()
 
                 # Hallucination retry: model claims execution without calling a tool
-                if not hallucination_retried and response_text and _claims_tool_execution(user_text, response_text, message=response_msg):
+                if not hallucination_retried and response_text and _claims_tool_execution(
+                    user_text, response_text, message=response_msg, tools_executed=tools_executed
+                ):
                     print(f"[Aster Internal: Hallucination detected — model claimed tool execution without calling one. Retrying...]")
                     hallucination_retried = True
                     instrumentation.record_event("hallucination_retry", turn_id=_turn_id, round=_rounds_used)
@@ -4099,7 +4195,9 @@ def process_user_input(user_text, status_callback=None):
                     continue  # Retry the loop
 
                 # Knowledge-cutoff retry: model refused to answer citing outdated training data
-                if not cutoff_retried and response_text and _claims_knowledge_cutoff(response_text):
+                if not cutoff_retried and response_text and _claims_knowledge_cutoff(
+                    response_text, research_executed=research_executed
+                ):
                     print(f"[Aster Internal: Knowledge cutoff refusal detected — forcing research tool call...]")
                     cutoff_retried = True
                     instrumentation.record_event("cutoff_retry", turn_id=_turn_id, round=_rounds_used)

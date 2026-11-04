@@ -119,6 +119,22 @@ class TestBuildSTT:
         assert vad is None            # Flux needs no local VAD
         assert streaming is base      # native streaming — no StreamAdapter
 
+    def test_deepgram_requested_but_plugin_missing_falls_back_local(self, monkeypatch):
+        monkeypatch.setattr(config, "STT_PROVIDER", "deepgram")
+        monkeypatch.setattr(webrtc_bridge, "deepgram", None)
+        sentinel_base = object()
+        fake_vad = object()
+        adapter = object()
+        monkeypatch.setattr(webrtc_bridge, "LocalWhisperSTT", lambda: sentinel_base)
+        monkeypatch.setattr(
+            webrtc_bridge.silero, "VAD", types.SimpleNamespace(load=lambda: fake_vad)
+        )
+        monkeypatch.setattr(webrtc_bridge.stt, "StreamAdapter", lambda *, stt, vad: adapter)
+
+        base, vad, streaming = webrtc_bridge._build_stt()
+
+        assert base is sentinel_base and vad is fake_vad and streaming is adapter
+
 
 class TestBuildTTS:
     def test_local_path_uses_kokoro(self, monkeypatch):

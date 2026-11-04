@@ -54,7 +54,7 @@ def _tool_call(name, args_json="{}", call_id="dc_1"):
 
 
 def test_final_text_turn_complete_event(tmp_path):
-    with patch("requests.post", return_value=_final("Good evening, Sir.")):
+    with patch("core.brain._LLM_SESSION.post", return_value=_final("Good evening, Sir.")):
         out = brain.process_discord_chat("tester", "hello")
     assert out
     events = _events(tmp_path)
@@ -69,7 +69,7 @@ def test_final_text_turn_complete_event(tmp_path):
 
 def test_tool_round_then_final_counts_tool_calls(tmp_path):
     responses = [_tool_call("get_current_track"), _final("Playing a song, Sir.")]
-    with patch("requests.post", side_effect=responses), \
+    with patch("core.brain._LLM_SESSION.post", side_effect=responses), \
          patch.object(brain, "execute_tool", return_value="Song X by Artist Y") as exec_mock:
         out = brain.process_discord_chat("tester", "what song is playing?")
     exec_mock.assert_called_once()
@@ -80,7 +80,7 @@ def test_tool_round_then_final_counts_tool_calls(tmp_path):
 
 def test_max_rounds_outcome(tmp_path):
     # 4 rounds of identical tool calls, never a final text.
-    with patch("requests.post", side_effect=[_tool_call("get_current_track")] * 4), \
+    with patch("core.brain._LLM_SESSION.post", side_effect=[_tool_call("get_current_track")] * 4), \
          patch.object(brain, "execute_tool", return_value="Song X"):
         out = brain.process_discord_chat("tester", "song?")
     assert "could not complete" in out
@@ -90,7 +90,7 @@ def test_max_rounds_outcome(tmp_path):
 
 def test_loop_guard_blocks_repeated_discord_tool(tmp_path):
     # Identical call every round: LoopGuard warns at 3, blocks at 4.
-    with patch("requests.post", side_effect=[_tool_call("get_current_track")] * 4), \
+    with patch("core.brain._LLM_SESSION.post", side_effect=[_tool_call("get_current_track")] * 4), \
          patch.object(brain, "execute_tool", return_value="Song X") as exec_mock:
         brain.process_discord_chat("tester", "song?")
     # 4 rounds but the 4th execution was blocked → only 3 real executions.
@@ -101,14 +101,14 @@ def test_loop_guard_blocks_repeated_discord_tool(tmp_path):
 
 def test_json_error_event_recorded(tmp_path):
     responses = [_tool_call("get_current_track", args_json="{bad json"), _final("Sorry, Sir.")]
-    with patch("requests.post", side_effect=responses):
+    with patch("core.brain._LLM_SESSION.post", side_effect=responses):
         brain.process_discord_chat("tester", "song?")
     events = _events(tmp_path)
     assert any(e["event"] == "json_error_retry" and "-discord-" in e["turn_id"] for e in events)
 
 
 def test_exception_outcome_error(tmp_path):
-    with patch("requests.post", side_effect=RuntimeError("connection exploded")):
+    with patch("core.brain._LLM_SESSION.post", side_effect=RuntimeError("connection exploded")):
         out = brain.process_discord_chat("tester", "hello")
     assert "internal error" in out
     e = [x for x in _events(tmp_path) if x["event"] == "turn_complete"][0]

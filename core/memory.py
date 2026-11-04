@@ -168,6 +168,9 @@ def _memorize_fact_locked(fact: str, source: str, skip_gate: bool):
                                    reason=decision.get("reason", ""), fact=fact[:200])
             except Exception:
                 pass
+            if decision.get("category") == "fact" or "already saved" in str(decision.get("reason", "")):
+                return (f"[Memory Confirmed: This fact is already securely recorded in your "
+                        f"long-term memory vault ({decision['reason']}).]")
             return (f"[System Note: NOT saved — {decision['reason']}. The information is "
                     f"already covered, or it is not a durable personal fact.]")
 

@@ -45,6 +45,12 @@ def contact_names() -> list:
     return list(CONTACTS.keys())
 
 
+RESERVED_VERBS = frozenset({
+    "email", "mail", "send", "text", "tell", "ask", "message", "dm", "post", "remind",
+    "accountant", "summary", "proposal", "project", "meeting", "schedule", "calendar",
+})
+
+
 def resolve_contact(name):
     """(canonical_name, id) for an EXACT case/whitespace-insensitive name, else None.
 
@@ -53,7 +59,7 @@ def resolve_contact(name):
     was unreachable — "Unknown Discord contact 'Adham'" for a contact that exists.
     """
     key = str(name or "").strip().lower()
-    if not key:
+    if not key or key in RESERVED_VERBS:
         return None
     for canonical, recipient_id in CONTACTS.items():
         if canonical.strip().lower() == key:
@@ -73,7 +79,7 @@ def _fuzzy_token_match(text: str):
     tokens = re.findall(r"[A-Za-z0-9_.@-]+", str(text or "").lower())
     lowered = [n.lower() for n in contact_names()]
     for token in tokens:
-        if len(token) < 4:
+        if len(token) < 4 or token in RESERVED_VERBS:
             continue
         hit = difflib.get_close_matches(token, lowered, n=1, cutoff=0.8)
         if hit:

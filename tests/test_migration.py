@@ -96,7 +96,7 @@ class TestExecuteLlmCompletion:
         from core.brain import _execute_llm_completion
 
         expected_msg = {"role": "assistant", "content": "It is 3pm."}
-        with patch("requests.post", return_value=_make_mock_response(expected_msg)):
+        with patch("core.brain._LLM_SESSION.post", return_value=_make_mock_response(expected_msg)):
             result = _execute_llm_completion(messages=sample_messages)
 
         assert isinstance(result, dict)
@@ -108,7 +108,7 @@ class TestExecuteLlmCompletion:
         from core.brain import _execute_llm_completion
 
         msg = {"role": "assistant", "content": "  hello world  "}
-        with patch("requests.post", return_value=_make_mock_response(msg)):
+        with patch("core.brain._LLM_SESSION.post", return_value=_make_mock_response(msg)):
             result = _execute_llm_completion(messages=sample_messages)
 
         assert result["content"] == "hello world"
@@ -118,7 +118,7 @@ class TestExecuteLlmCompletion:
         from core.brain import _execute_llm_completion
 
         msg = {"role": "assistant", "content": None, "tool_calls": []}
-        with patch("requests.post", return_value=_make_mock_response(msg)) as mock_post:
+        with patch("core.brain._LLM_SESSION.post", return_value=_make_mock_response(msg)) as mock_post:
             _execute_llm_completion(messages=sample_messages, tools=sample_admin_tools)
 
         sent_payload = mock_post.call_args.kwargs["json"]
@@ -131,7 +131,7 @@ class TestExecuteLlmCompletion:
         from core.brain import _execute_llm_completion
 
         msg = {"role": "assistant", "content": "hello"}
-        with patch("requests.post", return_value=_make_mock_response(msg)) as mock_post:
+        with patch("core.brain._LLM_SESSION.post", return_value=_make_mock_response(msg)) as mock_post:
             _execute_llm_completion(messages=sample_messages)
 
         sent_payload = mock_post.call_args.kwargs["json"]
@@ -144,7 +144,7 @@ class TestExecuteLlmCompletion:
 
         tc = [{"id": "call_1", "type": "function", "function": {"name": "get_current_time", "arguments": "{}"}}]
         msg = {"role": "assistant", "content": None, "tool_calls": tc}
-        with patch("requests.post", return_value=_make_mock_response(msg)):
+        with patch("core.brain._LLM_SESSION.post", return_value=_make_mock_response(msg)):
             result = _execute_llm_completion(messages=sample_messages, tools=sample_admin_tools)
 
         assert result["content"] is None
@@ -275,7 +275,7 @@ class TestNativeToolCalling:
             "tool_calls": [{"id": "call_xyz", "type": "function",
                             "function": {"name": "get_current_time", "arguments": "{}"}}],
         }
-        with patch("requests.post", return_value=_make_mock_response(tc_msg)):
+        with patch("core.brain._LLM_SESSION.post", return_value=_make_mock_response(tc_msg)):
             response_msg = _execute_llm_completion(
                 messages=sample_messages, tools=sample_admin_tools
             )
@@ -303,7 +303,7 @@ class TestNativeToolCalling:
             "tool_calls": [{"id": "call_abc", "type": "function",
                             "function": {"name": "get_current_time", "arguments": "{}"}}],
         }
-        with patch("requests.post", return_value=_make_mock_response(tc_msg)):
+        with patch("core.brain._LLM_SESSION.post", return_value=_make_mock_response(tc_msg)):
             response_msg = _execute_llm_completion(
                 messages=sample_messages, tools=sample_admin_tools
             )
@@ -637,7 +637,7 @@ class TestIntegrationSmoke:
         messages = list(sample_messages)
         responses = [_make_mock_response(tc_msg), _make_mock_response(text_msg)]
 
-        with patch("requests.post", side_effect=responses):
+        with patch("core.brain._LLM_SESSION.post", side_effect=responses):
                 # Round 1: tool call
             r1 = _execute_llm_completion(messages=messages, tools=sample_admin_tools)
             tool_payload, _ = _extract_native_tool_call(r1)

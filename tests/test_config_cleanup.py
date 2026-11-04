@@ -254,7 +254,7 @@ class TestReliabilityCampaignFlags:
         mock_resp.raise_for_status.return_value = None
         mock_resp.json.return_value = {"choices": [{"message": {"role": "assistant", "content": "ok"}}]}
 
-        with patch("requests.post", return_value=mock_resp) as mock_post:
+        with patch("core.brain._LLM_SESSION.post", return_value=mock_resp) as mock_post:
             _execute_llm_completion(
                 messages=[{"role": "user", "content": "hi"}],
                 temperature=config.LLM_TOOL_TEMPERATURE,

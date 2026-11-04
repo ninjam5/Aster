@@ -13,6 +13,17 @@ from livekit.agents.types import APIConnectOptions
 from livekit.agents.worker import AgentServer
 from livekit.plugins import silero
 
+# The Deepgram plugin self-registers on import (Plugin.register_plugin) and that
+# MUST happen on the main thread — a lazy import inside the job entrypoint raises
+# "Plugins must be registered on the main thread". So import it here at module
+# load (top-level, like silero). Guarded so a local-only build without the plugin
+# still boots; _build_stt/_build_tts fall back to local when it is None.
+try:
+    from livekit.plugins import deepgram
+except Exception as _deepgram_import_error:  # pragma: no cover - depends on install
+    deepgram = None
+    print(f"[Aster Voice] Deepgram plugin unavailable ({_deepgram_import_error}); cloud voice disabled.")
+
 from core.brain import process_user_input
 from local_stt import LocalWhisperSTT, release_whisper_model
 from local_tts import LocalKokoroTTS
@@ -54,16 +65,17 @@ def _build_stt():
     Kept module-level so it can be exercised by tests without a JobContext.
     """
     if _config.STT_PROVIDER == "deepgram":
-        from livekit.plugins import deepgram
-
-        base = deepgram.STTv2(
-            model=_config.DEEPGRAM_STT_MODEL,
-            sample_rate=16000,
-            keyterm=list(_config.DEEPGRAM_STT_KEYTERMS),
-            api_key=_config.DEEPGRAM_API_KEY,
-        )
-        print(f"[Aster Ears] STT: Deepgram Flux ({_config.DEEPGRAM_STT_MODEL}).")
-        return base, None, base
+        if deepgram is None:
+            print("[Aster Voice] ERROR: deepgram plugin missing — falling back to local STT.")
+        else:
+            base = deepgram.STTv2(
+                model=_config.DEEPGRAM_STT_MODEL,
+                sample_rate=16000,
+                keyterm=list(_config.DEEPGRAM_STT_KEYTERMS),
+                api_key=_config.DEEPGRAM_API_KEY,
+            )
+            print(f"[Aster Ears] STT: Deepgram Flux ({_config.DEEPGRAM_STT_MODEL}).")
+            return base, None, base
     base = LocalWhisperSTT()
     vad = silero.VAD.load()
     return base, vad, stt.StreamAdapter(stt=base, vad=vad)
@@ -72,12 +84,15 @@ def _build_stt():
 def _build_tts():
     """Pick the TTS engine for a call (local Kokoro or Deepgram Flux TTS)."""
     if _config.TTS_PROVIDER == "deepgram":
-        from deepgram_tts import DeepgramFluxTTS
+        try:
+            from deepgram_tts import DeepgramFluxTTS
 
-        return DeepgramFluxTTS(
-            model=_config.DEEPGRAM_TTS_MODEL,
-            api_key=_config.DEEPGRAM_API_KEY,
-        )
+            return DeepgramFluxTTS(
+                model=_config.DEEPGRAM_TTS_MODEL,
+                api_key=_config.DEEPGRAM_API_KEY,
+            )
+        except Exception as e:
+            print(f"[Aster Voice] ERROR: Deepgram Flux TTS unavailable ({e}) — falling back to local TTS.")
     return LocalKokoroTTS()
 
 
@@ -125,6 +140,7 @@ class ManualWebRTCBridge:
         # WAKE_INACTIVITY_TIMEOUT seconds of silence.
         self._awake = not _config.WAKE_WORD_ENABLED
         self._last_activity = time.monotonic()
+        self._stt_final_at = 0.0
         self._wake_detector: Any = None
 
     async def start(self) -> None:
@@ -372,6 +388,7 @@ class ManualWebRTCBridge:
                     continue
 
                 self._last_activity = time.monotonic()
+                self._stt_final_at = self._last_activity
 
                 # Coalesce: accumulate fragments; the brain fires only after
                 # UTTERANCE_DEBOUNCE seconds of silence.
@@ -425,6 +442,10 @@ class ManualWebRTCBridge:
 
         loop = asyncio.get_running_loop()
         t_pipeline_start = time.monotonic()
+        if self._stt_final_at:
+            print(f"[Aster Perf] STT-final -> response start: "
+                  f"{(t_pipeline_start - self._stt_final_at) * 1000:.0f}ms "
+                  f"(debounce + addressed gate)")
 
         def _status_callback(status_text: str) -> None:
             clean_status = self._clean_response(status_text)
@@ -497,10 +518,16 @@ class ManualWebRTCBridge:
         await self._speak(text, response_epoch)
 
     async def _speak(self, text: str, response_epoch: int) -> None:
+        _t_speak0 = time.monotonic()
         synth_stream = self._tts.synthesize(text, conn_options=TTS_CONN_OPTIONS)
+        _first = True
         try:
             async with self._audio_lock:
                 async for synthesized in synth_stream:
+                    if _first:
+                        _first = False
+                        print(f"[Aster Perf] TTS first frame: "
+                              f"{(time.monotonic() - _t_speak0) * 1000:.0f}ms")
                     if response_epoch != self._response_epoch:
                         return
                     await self._audio_source.capture_frame(synthesized.frame)

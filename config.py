@@ -247,6 +247,13 @@ LLM_TOOL_TEMPERATURE = float(_cfg("settings", "llm_tool_temperature", default=LL
 LLM_TOOL_TOP_P       = float(_cfg("settings", "llm_tool_top_p",       default=LLM_TOP_P))
 LLM_TOOL_TOP_K       = int(_cfg("settings",   "llm_tool_top_k",       default=LLM_TOP_K))
 
+# Max output tokens for ONE agentic tool-loop round. The old implicit cap was
+# 1000, which truncated any tool call carrying a large payload (e.g.
+# write_local_file with a whole HTML file) mid-JSON — the arguments came back
+# invalid and llama-server returned HTTP 500 parsing them. 4096 fits a modest
+# file; raise for bigger artifacts (longer generation time), lower to cap it.
+TOOL_MAX_TOKENS = int(_cfg("runtime", "tool_max_tokens", default=4096))
+
 # ============================================================================
 # RELIABILITY CAMPAIGN — instrumentation + mitigations for agent failure
 # modes (hallucinated execution, post-tool apathy, degenerate tool loops,

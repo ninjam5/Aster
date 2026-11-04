@@ -150,11 +150,19 @@ class TestMemorizeFactGate:
     def test_skip_does_not_write(self, monkeypatch):
         monkeypatch.setattr(memory, "_gate_fact",
                             lambda fact, **k: {"skip": True, "reason": "exact duplicate — already saved",
-                                          "category": "", "conflict": "", "supersedes": None})
+                                          "category": "fact", "conflict": "", "supersedes": None})
         out = memory.memorize_fact("Mohamed has two cats")
-        assert "NOT saved" in out
+        assert "Memory Confirmed" in out
         memory.memory_collection.add.assert_not_called()
         assert not os.path.exists(memory.MD_FILE)
+
+    def test_junk_skip_returns_not_saved(self, monkeypatch):
+        monkeypatch.setattr(memory, "_gate_fact",
+                            lambda fact, **k: {"skip": True, "reason": "classified as an action log",
+                                          "category": "junk", "conflict": "", "supersedes": None})
+        out = memory.memorize_fact("Aster clicked a button")
+        assert "NOT saved" in out
+        memory.memory_collection.add.assert_not_called()
 
     def test_write_appends_and_indexes(self, monkeypatch):
         monkeypatch.setattr(memory, "_gate_fact",
