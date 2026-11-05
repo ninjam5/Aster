@@ -6,8 +6,7 @@ stats and repeated-tool-call sensing.
 
 Writes one JSON object per line to Aster_Vault/reliability_log.jsonl and prints
 a mirrored "[RELIABILITY] ..." line (auto-forwarded by tools/diagnostics.py's
-stdout shim to Telegram diagnostics mode). Modeled on
-tools/emotion_recognition.py:log_mood_turn() — thread-safe, append-only, never
+stdout shim to Telegram diagnostics mode) — thread-safe, append-only, never
 raises.
 
 This module changes NO agent behavior by itself; it only makes failure rates

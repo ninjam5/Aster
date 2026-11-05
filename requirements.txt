@@ -31,16 +31,13 @@ huggingface_hub
 # --- speech / audio ---
 faster-whisper
 soundfile
-sounddevice
 kokoro
 speechbrain
 openwakeword
-webrtcvad
 # --- vision / perception ---
 face_recognition
 mediapipe
 rembg
-hsemotion-onnx
 ultralytics
 # --- memory / search / integrations ---
 chromadb

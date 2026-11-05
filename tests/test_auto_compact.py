@@ -146,8 +146,6 @@ def _isolate_reliability_log(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _isolate_vault_logs(tmp_path, monkeypatch):
-    """QA round 6: this file appended real turns to Aster_Vault/Conversations/ and (via
-    the mood tag) real rows to Aster_Vault/emotion_log.jsonl."""
+    """QA round 6: isolate Aster_Vault/Conversations/ writes during tests."""
     import config as _c
     monkeypatch.setattr(_c, "CONVERSATIONS_DIR", str(tmp_path / "Conversations"), raising=False)
-    monkeypatch.setattr(_c, "MOOD_LOG_PATH", str(tmp_path / "emotion_log.jsonl"), raising=False)

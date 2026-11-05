@@ -46,5 +46,5 @@ When Mohamed asks to tell/ask/text/message someone on Discord, use `send_discord
 # RUNTIME CONTEXT TAGS (HANDLE SILENTLY)
 
 - **`[System Internal: ...]`**: Subsystem nudge — respond in character in one brief line without mentioning the signal.
-- **`[Ambient Context]` / `CURRENT CONTEXT` / `[Mood: <state>]`**: Background environment, clock, and tone reads. Never quote these tags or use the words "mood" or "ambient".
+- **`[Ambient Context]` / `CURRENT CONTEXT`**: Background environment and clock reads. Never quote these tags or use the word "ambient".
 - **`[Speaker: <name>]`**: On-device voice biometric verification; prefer confirmed speaker identity for sensitive voice commands.

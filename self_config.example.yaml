@@ -203,41 +203,6 @@ settings:
   # llm_tool_top_p: 0.95
   # llm_tool_top_k: 64
 
-emotion:
-  enabled: true
-  text_model: j-hartmann/emotion-english-distilroberta-base   # Tier 0 — CPU, eager
-  voice_model: speechbrain/emotion-recognition-wav2vec2-IEMOCAP  # Tier 1 — CUDA, lazy
-  min_confidence: 0.5            # below this score → neutral
-  face:                          # Tier 2 — facial emotion (CPU, eager, HSEmotion AffectNet)
-    enabled: false               # opt-in; flip true after `pip install hsemotion`. Toggle via toggle_face_emotion / /faceemotion
-    model: enet_b2_8             # HSEmotion model name (AffectNet 8-class EfficientNet-B2)
-    min_confidence: 0.5          # below this smoothed score → hold previous read
-    ema_alpha: 0.5               # EMA smoothing on the probability vector (higher = snappier, lower = steadier)
-  ambient_audio:                 # Tier 1b — passive room listening (CPU, opt-in). See tools/ambient_audio.py
-    enabled: false               # opt-in; flip true after `pip install sounddevice webrtcvad`. Toggle via toggle_ambient_audio / /ambientaudio
-    device:                      # mic device index/name, or null for the system default
-    vad_aggressiveness: 2        # webrtcvad 0..3 (higher = more aggressive speech gating)
-    min_utterance_seconds: 2.0   # ignore speech clips shorter than this
-    ema_alpha: 0.5               # EMA smoothing on the voice probability vector
-    gate_owner: true             # only trust tone when ECAPA identifies the owner (rejects friends/TTS/music)
-    window_feed_cooldown: 60     # min seconds between feeding an ambient read into the sustained-mood window
-  mood_trend:                    # roadmap Idea 3 — mood logging + emotional continuity
-    enabled: true                # log per-turn mood + fold periodic summaries into memory
-    sustain_turns: 3             # consecutive same-mood turns = a "sustained" read (shared foundation for Ideas 1 & 2)
-    retention_days: 30           # prune emotion_log.jsonl entries older than this
-    flush_interval_hours: 24     # minimum gap between rolled-up summary writes to memory
-    flush_min_turns: 6           # need at least this many logged turns in the window to summarize
-    flush_min_nonneutral_frac: 0.4   # skip the summary if mood was mostly neutral (boring day)
-  mood_actions:                  # roadmap Idea 2 — inline ambient-action OFFERS (never auto-executes)
-    enabled: false               # opt-in; toggle at runtime via toggle_mood_actions / /moodactions
-    cooldown_seconds: 1800       # minimum gap between offers (also one-offer-per-streak; debounce uses mood_trend.sustain_turns)
-  proactive_checkin:             # roadmap Idea 1 — proactive mood check-ins (Awareness daemon)
-    enabled: false               # opt-in; toggle via toggle_mood_checkins / /checkins. Needs initiative >= medium
-    quiet_seconds: 90            # how long the user must be quiet (post-streak) before checking in
-    cooldown_seconds: 3600       # minimum gap between check-ins (also one-per-streak)
-  mood_shared:                   # cross-system coordination
-    touch_cooldown_seconds: 120  # minimum gap between ANY two mood-driven nudges (Idea 1 + Idea 2)
-
 intervention:
   check_interval: 30             # seconds between foreground-window polls
   threshold: 60                  # continuous seconds on a distraction → intervene

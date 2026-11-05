@@ -179,7 +179,7 @@ The model can return an empty string after successfully executing tools (Gemma-4
 
 ### Separate Conversation Contexts
 
-- **Admin brain** — `process_user_input()`, uses `ADMIN_TOOLS` (71 tools), full conversation history, 15-round loop.
+- **Admin brain** — `process_user_input()`, uses `ADMIN_TOOLS` (67 tools), full conversation history, 15-round loop.
 - **Discord brain** — `process_discord_chat()`, per-friend history in `discord_chat_histories` (keyed by lowercase name), separate `DISCORD_CHAT_SYSTEM_PROMPT`, only 3 tools (`forward_to_owner`, `save_personal_fact`, `get_current_track`), 4-round loop.
 
 These histories are fully independent. Discord replies pass through `_enforce_discord_honorific()`, which rewrites "Sir" → "Ma'am" / "Mr." → "Ms." for friends listed in `config.DISCORD_FEMALE_NAMES` (sourced from `self_config.yaml → contacts.female_names`, empty by default — per-install data, not hardcoded). This regex is fragile (can mangle words like "Sirius").
@@ -193,7 +193,7 @@ These histories are fully independent. Discord replies pass through `_enforce_di
 - **CLI** — input loop on the main thread (`main.py`), headless mode.
 - **Telegram C2 bridge** — hardcoded `AUTHORIZED_CHAT_ID`; handles `/status`, `/compact`, `/sentry on|off`, `/stop`, `/diagnostics on|off`, `/screenshot`, `/peek [N]`, `/gpu`, `/gesture on|off`, `/intervention on|off`, `/note <text>`, `/find <thing>` (Assist Mode highlight), voice (Faster-Whisper STT), photos, text. `_dispatch_telegram_response()` intercepts `[NATIVE_AUDIO_PAYLOAD:path]` tags and sends voice notes.
 - **Discord** — two subsystems: `tools/discord_listener.py` (discord.py DM listener, 9-contact whitelist) for inbound, `tools/discord_api.py` (raw Discord REST v10) for outbound. Outbound relay (`_extract_discord_message_intent` → `send_discord_message`) sends immediately for an exact contact name **or a typo in the addressee position** (`resolve_typo`: `geroge`→george — owner decision 2026-09-29, a clear misspelling must just send); anything fuzzy/semantic, or a name only mentioned in the message body, returns `[CONFIRM REQUIRED]` and sends nothing until `confirm=true` on a later turn. **Conversation-ending ("Aster's self-respect", 2026-09-29)** — spec: [`conversation-ending.md`](conversation-ending.md); policy in `tools/conversations.py` (`Aster_Vault/conversation_state.json`). A Laya-bound gate (`core.brain._discord_hostility`, one `check_state` at margin 0.75, fail-open) counts strikes from a hostile DM; at **3 strikes** (decaying after `strike_window_minutes`) Aster **ends the conversation** — a canned cold FINAL line, then a temporary mute (`mute_minutes`, default 60). While muted an inbound DM gets a **code-only countdown** (no LLM) and is logged to a **permanent record** (never forwarded). Re-mutes mention "for the {n}th time". Owner override `/unmute <name>`; record recall via `/discordlog [name]` and the `get_discord_incidents` admin tool. Kill switch `discord_conversation.enabled`.
-- **Voice call bridge** (`webrtc_bridge.py` + `tools/face_server.py`) — **Mainstream transport is Direct Local WebSocket (`WS /api/voice/ws` on `:8000` via `LocalWebSocketVoiceBridge`)**; LiveKit Agents SDK (`ManualWebRTCBridge`) has `devmode=False` (no multi-GB subprocess fork) and is **benched by default** (`daemons.webrtc_bridge: disabled`, `voice.transport: local_ws`) for future mobile app use. Pipeline: 16 kHz PCM stream → Silero VAD → Faster-Whisper STT (`small.en`) → brain → Kokoro TTS (24 kHz PCM stream). Supports barge-in (`{"type": "clear_audio"}` flushes browser audio buffers immediately) and epoch-based stale-response cancellation. **Chunk-streaming TTS** (`runtime.tts_chunk_streaming`, default on): `local_tts.py` pushes each Kokoro segment's audio into the call as it is synthesized (first-chunk latency logged as `[Aster Perf] First audio chunk in Xms`) instead of concatenating the whole reply first; a stop-event halts synthesis at the next segment on barge-in. STT and TTS are **shared process-wide**: one CUDA Faster-Whisper `small.en` instance for calls (`local_stt.get_whisper_model()` — Telegram voice notes reuse it when a call is live, otherwise `local_stt.transcribe_file` uses a lazy **CPU** instance so voice notes cost zero VRAM) and one ref-counted Kokoro pipeline — no per-call duplicate model loads. **Cloud voice providers (opt-in, `voice:` in `self_config.yaml`):** `voice.stt_provider` / `voice.tts_provider` may be `local` (default, the above) or `deepgram` — cloud **Deepgram Flux** STT (`deepgram.STTv2`, `flux-general-en`, `/v2/listen`) + **Flux TTS** voice (`flux-colin-en` = British "Colin") via the hand-rolled `deepgram_tts.py` adapter (`/v2/speak`; the installed `livekit-plugins-deepgram` 1.5.7 predates Flux TTS and upgrading it would drag `livekit-agents` off 1.5.x). Resolution is **fail-closed** — a missing `deepgram.api_key` in `secrets.yaml` silently keeps the local engine. Cloud mode sends call audio to Deepgram and drops the on-call `[Speaker:]` voice-ID / voice-prosody `[Mood:]` tags and the cloned Kokoro voice (the brain still adds a Tier-0 text mood); Telegram voice notes and the CLI always stay local. See `engine_testing/qa/voice-cloud-swap.md`. Module-level `_active_bridge`/`_active_loop` expose `call_is_active()` and `speak_intervention(text)` so other threads can push an unprompted turn into a live call (used by Intervention Mode, Awareness, and Ambient Audio).
+- **Voice call bridge** (`webrtc_bridge.py` + `tools/face_server.py`) — **Mainstream transport is Direct Local WebSocket (`WS /api/voice/ws` on `:8000` via `LocalWebSocketVoiceBridge`)**; LiveKit Agents SDK (`ManualWebRTCBridge`) has `devmode=False` (no multi-GB subprocess fork) and is **benched by default** (`daemons.webrtc_bridge: disabled`, `voice.transport: local_ws`) for future mobile app use. Pipeline: 16 kHz PCM stream → Silero VAD → Faster-Whisper STT (`small.en`) → brain → Kokoro TTS (24 kHz PCM stream). Supports barge-in (`{"type": "clear_audio"}` flushes browser audio buffers immediately) and epoch-based stale-response cancellation. **Chunk-streaming TTS** (`runtime.tts_chunk_streaming`, default on): `local_tts.py` pushes each Kokoro segment's audio into the call as it is synthesized (first-chunk latency logged as `[Aster Perf] First audio chunk in Xms`) instead of concatenating the whole reply first; a stop-event halts synthesis at the next segment on barge-in. STT and TTS are **shared process-wide**: one CUDA Faster-Whisper `small.en` instance for calls (`local_stt.get_whisper_model()` — Telegram voice notes reuse it when a call is live, otherwise `local_stt.transcribe_file` uses a lazy **CPU** instance so voice notes cost zero VRAM) and one ref-counted Kokoro pipeline — no per-call duplicate model loads. **Cloud voice providers (opt-in, `voice:` in `self_config.yaml`):** `voice.stt_provider` / `voice.tts_provider` may be `local` (default, the above) or `deepgram` — cloud **Deepgram Flux** STT (`deepgram.STTv2`, `flux-general-en`, `/v2/listen`) + **Flux TTS** voice (`flux-colin-en` = British "Colin") via the hand-rolled `deepgram_tts.py` adapter (`/v2/speak`; the installed `livekit-plugins-deepgram` 1.5.7 predates Flux TTS and upgrading it would drag `livekit-agents` off 1.5.x). Resolution is **fail-closed** — a missing `deepgram.api_key` in `secrets.yaml` silently keeps the local engine. Cloud mode sends call audio to Deepgram and drops the on-call `[Speaker:]` voice-ID tag and the cloned Kokoro voice; Telegram voice notes and the CLI always stay local. See `engine_testing/qa/voice-cloud-swap.md`. Module-level `_active_bridge`/`_active_loop` expose `call_is_active()` and `speak_intervention(text)` so other threads can push an unprompted turn into a live call (used by Intervention Mode and Awareness).
 
 ### Vision & UI Automation (`tools/vision.py`)
 
@@ -227,52 +227,6 @@ Speaker identification via SpeechBrain ECAPA-TDNN (`speechbrain/spkrec-ecapa-vox
 **Enrollment:** `/enroll <name>` via Telegram → `Voices/{Name}/{Name}.wav`; re-enrolling an existing speaker adds `{Name}__{ts}.wav` (no overwrite).
 
 **Thresholds:** `SIMILARITY_THRESHOLD = 0.35`, `LEARN_THRESHOLD = 0.50`, `MIN_LEARN_SECONDS = 2.5`, `MAX_SAMPLES_PER_SPEAKER = 15`. VRAM: ~200 MB.
-
-### Emotion Recognition (`tools/emotion_recognition.py`)
-
-User mood detection. Embeds `[Mood: <state>]` into every user message before the brain sees it. All three mood-triggered roadmap features are live: Mood-Trend Memory (Idea 3), Proactive Check-ins (Idea 1), Ambient-Action Offers (Idea 2). Ideas 1 & 2 are opt-in (default OFF).
-
-**Label vocabulary:** `happy` | `sad` | `frustrated` | `anxious` | `neutral`. Always tagged — `neutral` when below `EMOTION_MIN_CONFIDENCE` (default 0.5).
-
-**Tiers:**
-- **Tier 0 — text (CPU, eager):** `j-hartmann/emotion-english-distilroberta-base` (7-class → 5-label). Zero VRAM. `detect_text_emotion(text)`. Injected centrally in `_maybe_tag_text_mood()` (`core/brain.py`) at the top of `process_user_input()`.
-- **Tier 1 — voice (CUDA, lazy/ref-counted):** `speechbrain/emotion-recognition-wav2vec2-IEMOCAP` (4-class → 4-label; no `anxious` from voice). ~200–300 MB VRAM. `acquire_voice_emotion_model()` / `release_voice_emotion_model()`. `detect_voice_emotion(audio)` self-manages acquire/release. LiveKit call: `LocalWhisperSTT.__init__` acquires an outer hold; `aclose()` releases. Telegram: load → classify → offload per voice note. Loading requires `_prepare_speechbrain_imports()` workaround (SpeechBrain lazy-module guard + CVE-2025-32434 patch) — details in `summary.md`.
-- **Tier 1b — ambient room audio (`tools/ambient_audio.py`, CPU, opt-in/default OFF):** local-mic daemon (sounddevice → webrtcvad VAD) reads Mohamed's vocal tone when not addressing Aster. Owner-gated (ECAPA `identify_speaker` == `OWNER_NAME`), paused during calls. Separate CPU copy of IEMOCAP (`_get_cpu_voice_clf()`). Content never transcribed/logged — tone label only. Toggle: `toggle_ambient_audio` / `/ambientaudio on|off`. Config: `emotion.ambient_audio` in `self_config.yaml`. Tests: `ambient-audio-test.py`.
-- **Tier 2 — face (CPU, eager, opt-in/default OFF):** `hsemotion-onnx` (AffectNet 8-class EfficientNet-B2, via `onnxruntime`). `detect_face_emotion(frame)` — EMA-smoothed, confidence-gated. `get_face_mood()` / `reset_face_mood()`. Owner-gated: Awareness daemon only updates `face_mood` when `config.OWNER_NAME` is the recognized face. Toggle: `toggle_face_emotion` / `/faceemotion on|off`. Config: `emotion.face`. Tests: `face-emotion-test.py`.
-
-**Fusion (`fuse_moods`):** confident text content wins over voice prosody; prosody used only when text reads `neutral` (handles "I'm fine" said sadly). IEMOCAP reads angry speech as `happy` (high-arousal confusion) — text content gates prosody to fix this.
-
-**Per-path:**
-- Typed text / CLI / Telegram text / image captions: Tier 0 only.
-- LiveKit call: `detect_combined_emotion(audio, transcript)` — Tier 1 + Tier 0 on Whisper transcript, fused.
-- Telegram voice note: `detect_text_emotion(gist)` + `detect_voice_emotion(audio)` fused in `core/brain.py`.
-- Ambient room: Tier 1b only, lowest-precedence.
-
-**Fusion precedence in `_maybe_tag_text_mood()`:** text > face (`fuse_face()`) > ambient-voice (`get_ambient_voice_mood()`), each ambient signal filling only a still-neutral read.
-
-**Injection sites:**
-- LiveKit: `[Mood: X]` inserted after `[Speaker: Y]` in `local_stt.py`.
-- Telegram voice note: `[Mood: X]` injected into voice-note caption in `core/brain.py`.
-- Text: `_maybe_tag_text_mood()` in `core/brain.py`; skips `[System Internal]` nudges, already-tagged messages, `[NATIVE_AUDIO_PAYLOAD:]` blobs.
-
-**Config:** `emotion:` in `self_config.yaml`; `EMOTION_ENABLED`, `EMOTION_TEXT_MODEL`, `EMOTION_VOICE_MODEL`, `EMOTION_MIN_CONFIDENCE`. Set `emotion.enabled: false` to fully disable.
-
-### Mood-Trend Memory (`tools/mood_memory.py`)
-
-Longitudinal mood logging (emotion roadmap Idea 3). `_log_turn_mood()` (`core/brain.py`) reads `[Mood: X]` from the already-tagged `user_text` and calls `log_mood_turn(mood, context)` in `tools/emotion_recognition.py` — appends `{ts, mood, context}` to `Aster_Vault/emotion_log.jsonl` per real user turn. `[System Internal]` nudges and slash commands are skipped. Also feeds an in-memory deque for `get_sustained_mood(min_turns=MOOD_SUSTAIN_TURNS)` — returns a mood only when last N turns are the same non-neutral label (debounce gate for Ideas 1 & 2).
-
-`maybe_flush_mood_summary()` runs in the auto-consolidation cycle (every 5 turns): prunes log (`MOOD_LOG_RETENTION_DAYS` = 30d), and if ≥ 24h since last flush + ≥ 6 logged turns, writes a distribution summary to `Aster_Vault/mood_trends.md` + ChromaDB (`moodtrend_` prefix). Mostly-neutral windows advance the clock but write nothing. State persists in `Aster_Vault/mood_flush_state.json`.
-
-**Config:** `emotion.mood_trend:` in `self_config.yaml`; `MOOD_TREND_ENABLED`, `MOOD_SUSTAIN_TURNS`, `MOOD_LOG_RETENTION_DAYS`, `MOOD_FLUSH_INTERVAL_HOURS`, `MOOD_FLUSH_MIN_TURNS`, `MOOD_FLUSH_NONNEUTRAL_FRAC`. Gated by both `EMOTION_ENABLED` and `MOOD_TREND_ENABLED`. Tests: `tests/test_mood_memory.py` (15 cases).
-
-### Mood-Triggered Behaviors — Check-ins (Idea 1) & Ambient-Action Offers (Idea 2)
-
-Both consume `get_sustained_mood()` debounce and share a streak-guard (`get_mood_streak()`, `note_mood_touch()`, `mood_touch_recent()`) to prevent double-nudging. **Idea 2 owns active chat; Idea 1 owns the quiet after.** Both opt-in (default OFF).
-
-- **Idea 2 — Ambient-Action Offers (`tools/mood_actions.py`):** `maybe_mood_action_nudge()` returns a `[System Internal: …offer…]` appended to the current turn in `process_user_input` (skips system nudges / `[NATIVE_*]` payloads). Never auto-executes. Policy: sad/anxious → calming playlist + lower volume; frustrated → close distraction window; happy → hype playlist. Toggle: `toggle_mood_actions` / `/moodactions on|off`. Config: `MOOD_ACTIONS_ENABLED`, `MOOD_ACTIONS_COOLDOWN`.
-- **Idea 1 — Proactive Check-ins (`tools/awareness.py`):** `_maybe_trigger_mood_checkin()` runs per Awareness-daemon tick. Fires on sustained sad/anxious/happy streak + quiet period ≥ `MOOD_CHECKIN_QUIET_SECONDS`, gated by per-streak guard + `_budget_remaining()`. Requires the Awareness daemon running. Delivers via `_push_nudge()`. Toggle: `toggle_mood_checkins` / `/checkins on|off`. Config: `MOOD_CHECKIN_ENABLED`, `MOOD_CHECKIN_QUIET_SECONDS`, `MOOD_CHECKIN_COOLDOWN`.
-
-Shared config: `emotion.mood_shared` (`MOOD_TOUCH_COOLDOWN`), `MOOD_SUSTAIN_TURNS`. Tests: `emotion-test.py` (19 checks, no llama-server).
 
 ### GUI Automation (active)
 
@@ -352,9 +306,9 @@ Partial and Autonomous request identical Google OAuth scopes (`gmail.modify` +
 
 ---
 
-## Tool Registry (71 admin tools registered at boot)
+## Tool Registry (67 admin tools registered at boot)
 
-Categories: System (7), File I/O (3), Spotify (9), Timers (2), Memory (3), Vision (4), GUI Automation (6), RAG (1), Notes (2), Awareness/Initiative (2), Intervention (3), Mood opt-in (4), Sentry/Gesture (2), Self-knowledge (6), Diagnostics (1), Discord/Voice (2), Gmail (7), Calendar (4).
+Categories: System (7), File I/O (3), Spotify (9), Timers (2), Memory (3), Vision (4), GUI Automation (6), RAG (1), Notes (2), Awareness/Initiative (2), Intervention (3), Sentry/Gesture (2), Self-knowledge (6), Diagnostics (1), Discord/Voice (2), Gmail (7), Calendar (4).
 
 To regenerate full list: `python -c "import core.brain as b; [print(t['function']['name']) for t in b.ADMIN_TOOLS]"`. Full per-tool table in `summary.md` Appendix A.
 
@@ -364,7 +318,7 @@ Discord brain has only 3 tools: `forward_to_owner`, `save_personal_fact`, `get_c
 
 ## Thread Architecture
 
-Main thread runs the CLI loop. Daemon threads: Telegram `infinity_polling`, Discord DM listener, WebRTC bridge, Gesture daemon, Intervention daemon (idle until `/intervention on`), Awareness daemon, Ambient Audio daemon (`tools/ambient_audio.py`, idle/no-mic until `/ambientaudio on`), Face server (`tools/face_server.py`, uvicorn on `:8000`), Health watchdog (`tools/health_watchdog.py` — pings llama-server `/health` every 30s; 3 consecutive failures → Telegram alert + capped auto-relaunch of `start.bat`; 503 = model loading, never restarts into it; flags `daemons.health_watchdog` / `health_watchdog_autorestart`) — all active; Sentry daemon (disabled); Screen watcher (on-demand, 1-hour timeout).
+Main thread runs the CLI loop. Daemon threads: Telegram `infinity_polling`, Discord DM listener, Gesture daemon, Intervention daemon (idle until `/intervention on`), Awareness daemon, Face server (`tools/face_server.py`, uvicorn on `:8000`, also hosts `WS /api/voice/ws`), Health watchdog (`tools/health_watchdog.py` — pings llama-server `/health` every 30s; 3 consecutive failures → Telegram alert + capped auto-relaunch of `start.bat`; 503 = model loading, never restarts into it; flags `daemons.health_watchdog` / `health_watchdog_autorestart`) — all active; Sentry daemon (disabled); Screen watcher (on-demand, 1-hour timeout).
 
 ---
 
@@ -395,15 +349,11 @@ Main thread runs the CLI loop. Daemon threads: Telegram `infinity_polling`, Disc
 | `core/memory.py` | Hybrid memory read/write, tool-pair-aware `trim_memory()`, raw daily conversation archive (`log_raw_turn()`) |
 | `core/tool_result.py` | `ToolResult(ok, text)` envelope + `tool_ok`/`tool_fail` helpers — exact failure signal for migrated tools (media.py, GUI branches); normalized in `core.brain._normalize_tool_result` |
 | `tools/health_watchdog.py` | llama-server `/health` watchdog daemon — 3-strike detection, Telegram alert (`diagnostics.send_alert`), capped auto-relaunch of `start.bat` |
-| `tools/vision.py` | Screen/webcam capture, face recognition, `get_primary_face_crop_rgb` (face crop for Tier-2 emotion), `locate_ui_element_ex` (Tracks 1-2: cached OCR + YOLO/captioning; Track 0 delegated to `tools/uia.py`), `screens_differ` action diffing, cold storage |
+| `tools/vision.py` | Screen/webcam capture, face recognition, `locate_ui_element_ex` (Tracks 1-2: cached OCR + YOLO/captioning; Track 0 delegated to `tools/uia.py`), `screens_differ` action diffing, cold storage |
 | `tools/uia.py` | Locator Track 0 — Windows UI Automation accessibility tree (`uia_locate`, Chromium warm-up retry); `get_foreground_window_title`, `focused_control_type` (smart_type Ctrl+A safety) |
 | `tools/locator_common.py` | Shared goal parsing/scoring for all locator tracks: `parse_goal` (filler stripping, spatial + control-type hints), `score_text`, `spatial_weight` |
 | `engine_testing/locator_eval.py` | Locator eval harness: `capture` / `run [--captions]` / `live "<goal>"` — decides captioner/threshold questions with data on real screenshots |
 | `tools/voice_recognition.py` | SpeechBrain ECAPA speaker recognition (CUDA, eager-preloaded); per-speaker subfolders under `Voices/`; centroid-averaged embeddings; `load_known_voices()`, `identify_speaker()`, `identify_and_maybe_learn()`, `accumulate_sample()` — auto-accumulates high-confidence utterances (cap 15/speaker) |
-| `tools/emotion_recognition.py` | Multi-tier user mood detection. Tier 0: text (CPU, eager, `j-hartmann/emotion-english-distilroberta-base`). Tier 1: voice (CUDA, lazy/ref-counted, `speechbrain/emotion-recognition-wav2vec2-IEMOCAP`). Tier 1b: ambient room voice (a **CPU** copy of the same model, `_get_cpu_voice_clf`/`detect_ambient_voice_emotion`/`get_ambient_voice_mood`/`reset_ambient_voice_mood`; shared inference via `_classify_voice_waveform`). Tier 2: face (CPU, eager, opt-in, `hsemotion-onnx` AffectNet-8; `detect_face_emotion`/`get_face_mood`/`reset_face_mood`/`fuse_face`). Emits `[Mood: <state>]` tags. Also hosts mood-trend logging primitives (`log_mood_turn`, `get_sustained_mood`, `read_mood_log`, `prune_mood_log`). |
-| `tools/ambient_audio.py` | Tier-1b ambient room-audio daemon (opt-in/default OFF) — `sounddevice` local mic → `webrtcvad` VAD → LiveKit-call pause → ECAPA owner gate → `detect_ambient_voice_emotion` (CPU). Mock tests: `ambient-audio-test.py`. |
-| `tools/mood_memory.py` | Mood-Trend Memory (Idea 3) — reads `Aster_Vault/emotion_log.jsonl`, time-gated flush to `Aster_Vault/mood_trends.md` + ChromaDB (`maybe_flush_mood_summary`). |
-| `tools/mood_actions.py` | Ambient-Action Offers (Idea 2) — `maybe_mood_action_nudge`, injected inline in `process_user_input`. Proactive check-ins (Idea 1) live in `tools/awareness.py` (`_maybe_trigger_mood_checkin`). Mock tests: `emotion-test.py`. |
 | `tools/system.py` `tools/media.py` | OS control / Spotify + timers |
 | `tools/sentry.py` | Webcam intruder daemon |
 | `tools/intervention.py` | Intervention Mode — foreground-window focus daemon; `classify_window()`, toggle/snooze/close, brain-routed in-persona delivery |

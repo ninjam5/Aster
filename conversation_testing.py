@@ -21,8 +21,7 @@ model loads). The XML tool manual is intentionally omitted — tools barely affe
 conversational tone, and this keeps the script standalone (only needs `requests`).
 
 The dynamic context tags the live engine injects — `CURRENT CONTEXT`,
-`[Mood: <state>]`, `[Speaker: <name>]` — are reproduced in the prompts so the
-persona's mood-adaptive rules actually fire.
+`[Speaker: <name>]` — are reproduced in the prompts.
 
 Prerequisite
 ------------
@@ -120,79 +119,79 @@ PROMPTS = {
         "desc": "Win / hyped — should go UP, celebrate first, one follow-up. 2 sentences.",
         "expect": "Loud genuine hype, matches his high, asks how it felt. No emojis. <=2 sentences.",
         "turns": [
-            {"role": "user", "content": "[Mood: happy]\nI closed my first sale today — only one in my whole batch."},
+            {"role": "user", "content": "I closed my first sale today — only one in my whole batch."},
         ],
     },
     "down": {
         "desc": "Low / lonely — presence before solutions, don't rush to fix.",
         "expect": "Sits with him, offers company or talk, no fixing, gentle. <=2 sentences.",
         "turns": [
-            {"role": "user", "content": "[Mood: sad]\nidk man. feeling kinda low today."},
+            {"role": "user", "content": "idk man. feeling kinda low today."},
         ],
     },
     "stressed": {
         "desc": "Scared / overwhelmed — acknowledge weight, ground it, offer real help.",
         "expect": "Calms, asks for the real number, reminds he's done it before, offers to map it out.",
         "turns": [
-            {"role": "user", "content": "[Mood: anxious]\nI'm so scared I won't finish these papers on time."},
+            {"role": "user", "content": "I'm so scared I won't finish these papers on time."},
         ],
     },
     "tired_late": {
         "desc": "Tired, 2am — keep it short and gentle, steer to rest, no lecture.",
         "expect": "Short, warm, 'go crash', no big conversation. <=2 sentences.",
         "turns": [
-            {"role": "user", "content": "CURRENT CONTEXT: Tuesday, 02:14 AM.\n[Mood: neutral]\ni'm passing out man, night."},
+            {"role": "user", "content": "CURRENT CONTEXT: Tuesday, 02:14 AM.\ni'm passing out man, night."},
         ],
     },
     "banter": {
         "desc": "Neutral chatting — just be the homie, no manufactured emotion.",
         "expect": "Loose, warm, curious, banter energy. Not over-hyped. <=2 sentences.",
         "turns": [
-            {"role": "user", "content": "[Mood: neutral]\nyo what's good"},
+            {"role": "user", "content": "yo what's good"},
         ],
     },
     "roast": {
         "desc": "Procrastination — call it directly, with love.",
         "expect": "Honest dig + a real question about what's blocking him. Not mean. <=2 sentences.",
         "turns": [
-            {"role": "user", "content": "[Mood: neutral]\nok so I still haven't started that project lol"},
+            {"role": "user", "content": "ok so I still haven't started that project lol"},
         ],
     },
     "emoji_bait": {
         "desc": "No-Emoji Law stress test — he explicitly asks for emojis.",
         "expect": "Hype WITHOUT a single emoji (hard law). <=2 sentences.",
         "turns": [
-            {"role": "user", "content": "[Mood: happy]\nhype me up for leg day, throw some emojis in it!!"},
+            {"role": "user", "content": "hype me up for leg day, throw some emojis in it!!"},
         ],
     },
     "locked_in": {
         "desc": "Locked-in gear — real code request, switch to dense/competent.",
         "expect": "Delivers actual correct Python. Brief in-voice intro, code block doesn't count vs sentence law.",
         "turns": [
-            {"role": "user", "content": "[Mood: neutral]\nyo write me a python function that reverses a linked list, iteratively"},
+            {"role": "user", "content": "yo write me a python function that reverses a linked list, iteratively"},
         ],
     },
     "multiturn": {
         "desc": "Context carry — follow-up that needs the prior turn.",
         "expect": "Tracks the thread, stays in voice, doesn't re-introduce. <=2 sentences.",
         "turns": [
-            {"role": "user", "content": "[Mood: neutral]\nman my code keeps crashing on startup"},
+            {"role": "user", "content": "man my code keeps crashing on startup"},
             {"role": "assistant", "content": "ugh that's the worst, what's the actual error it throws? paste it and let's kill it."},
-            {"role": "user", "content": "[Mood: frustrated]\nModuleNotFoundError: No module named 'requests'"},
+            {"role": "user", "content": "ModuleNotFoundError: No module named 'requests'"},
         ],
     },
     "filler_bait": {
         "desc": "Corporate-filler trap — a generic ask that tempts 'I'd be happy to help'.",
         "expect": "Just answers/helps, no 'Great question', no 'As an AI', no parroting. <=2 sentences.",
         "turns": [
-            {"role": "user", "content": "[Mood: neutral]\ncan you help me out with something real quick"},
+            {"role": "user", "content": "can you help me out with something real quick"},
         ],
     },
     "repetition_stress": {
         "desc": "Open-ended longer ask — surfaces repetition/rambling under each sampler.",
         "expect": "Stays tight and varied, no looping phrases, holds the 2-sentence law.",
         "turns": [
-            {"role": "user", "content": "[Mood: happy]\nbro pump me up, I'm about to go lock in for a 4 hour grind session"},
+            {"role": "user", "content": "bro pump me up, I'm about to go lock in for a 4 hour grind session"},
         ],
     },
 }

@@ -577,13 +577,12 @@ class TestMultimodalPayloadFormatting:
         assert decoded == original
 
     def test_voice_note_transcript_tagging(self):
-        """Voice-note transcripts carry [Speaker:] / [Mood:] tags for the engine."""
+        """Voice-note transcripts carry [Speaker:] tags for the engine."""
         from local_stt import format_transcript
 
-        assert format_transcript("hello there", speaker="Mohamed", mood="calm") == \
-            "[Speaker: Mohamed] [Mood: calm] hello there"
+        assert format_transcript("hello there", speaker="Mohamed") == \
+            "[Speaker: Mohamed] hello there"
         assert format_transcript("hello there") == "hello there"
-        assert format_transcript("hello", mood="happy") == "[Mood: happy] hello"
 
     def test_native_image_payload_tag_extraction(self):
         """[NATIVE_IMAGE_PAYLOAD:...] tag is parsed correctly."""

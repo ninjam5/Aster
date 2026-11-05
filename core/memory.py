@@ -17,9 +17,7 @@ from config import MEMORY_AVAILABLE, MD_FILE, memory_collection
 # gmail_tool, face_server, vision and the Discord sync all bypassed it — that is how
 # the duplicate pairs (memory.md:9/11, :10/12) and ~78 "Aster sent an email reply"
 # lines got in. It now runs HERE, at the single choke point every FACT writer goes
-# through. (QA round 9: `tools/mood_memory.py` still writes its mood-trend summaries
-# directly to the shared Chroma collection under a separate `moodtrend_` namespace —
-# a deliberate exception, since those are not personal facts. It is the only one.)
+# through.
 _GATE_MARGIN = 0.5  # stricter than the DOM motor's 0.25: a wrong "skip" loses a fact
 _WRITE_LOCK = threading.RLock()   # QA round 6: serialize read-gate-append across threads
 _NONE_KEY = "Z"
@@ -492,8 +490,7 @@ def log_raw_turn(user_text: str, assistant_text: str) -> None:
             user_display = text[bracket_end + 1:].strip() if bracket_end != -1 else "(image)"
         else:
             user_display = text
-        user_display = re.sub(r"\[Speaker:[^\]]*\]", "", user_display)
-        user_display = re.sub(r"\[Mood:[^\]]*\]", "", user_display).strip()
+        user_display = re.sub(r"\[Speaker:[^\]]*\]", "", user_display).strip()
         if not user_display:
             return
 

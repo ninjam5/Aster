@@ -421,55 +421,14 @@ DISCORD_MUTE_MINUTES = float(_cfg("discord_conversation", "mute_minutes", defaul
 DISCORD_HOSTILITY_MARGIN = float(_cfg("discord_conversation", "hostility_margin", default=0.75))
 
 # ============================================================================
-# EMOTION DETECTION
+# IDENTITY & CONTACTS
 # ============================================================================
-# Two-tier pipeline: text (CPU, eager) + voice (CUDA, lazy/ref-counted).
-# Embeds [Mood: <state>] tags into every user message before the brain sees it.
-# Labels: happy | sad | frustrated | anxious | neutral
-# Disable the whole system with emotion.enabled: false in self_config.yaml.
-EMOTION_ENABLED         = bool(_cfg("emotion", "enabled",       default=True))
-EMOTION_TEXT_MODEL      = str(_cfg("emotion",  "text_model",    default="j-hartmann/emotion-english-distilroberta-base"))
-EMOTION_VOICE_MODEL     = str(_cfg("emotion",  "voice_model",   default="speechbrain/emotion-recognition-wav2vec2-IEMOCAP"))
-EMOTION_MIN_CONFIDENCE  = float(_cfg("emotion","min_confidence", default=0.5))
-
-# ── Tier 2 — face (CPU, eager, HSEmotion) ────────────────────────────────────
-# Reads facial affect from the webcam frame the Awareness daemon already grabs
-# (no new camera open). 8-class AffectNet output → the 5-label vocab above.
-# Ambient (surfaced as "Face read:" in the awareness block) AND fused into the
-# per-turn [Mood:] tag. Opt-in / default OFF for privacy and because the
-# hsemotion dep + weights aren't present until installed — flip true after
-# `pip install hsemotion`. Toggle at runtime via toggle_face_emotion / /faceemotion.
-FACE_EMOTION_ENABLED        = bool(_cfg("emotion", "face", "enabled",        default=False))
-FACE_EMOTION_MODEL          = str(_cfg("emotion",  "face", "model",          default="enet_b2_8"))
-FACE_EMOTION_MIN_CONFIDENCE = float(_cfg("emotion","face", "min_confidence", default=0.5))
-FACE_EMOTION_EMA_ALPHA      = float(_cfg("emotion","face", "ema_alpha",      default=0.5))
-
-# Owner identity — the enrolled face/voice name that ambient mood reads are
-# trusted from (rejects a visiting friend's expression/tone, Aster's own TTS
-# echo, and background media from poisoning Mohamed's mood). Reused by the
-# Tier-2 face-emotion guard and the ambient-audio owner gate.
 OWNER_NAME = str(_cfg("identity", "owner", default="User"))
 
 # Discord friends whose honorific should be "Ma'am"/"Ms." instead of the
 # default "Sir"/"Mr." (see core.brain._discord_honorific). Per-install list —
 # lives in self_config.yaml under contacts.female_names, empty by default.
 DISCORD_FEMALE_NAMES = set(_cfg("contacts", "female_names", default=[]) or [])
-
-# ── Tier 1b — ambient room audio (CPU, opt-in/default OFF) ────────────────────
-# A dedicated local-mic daemon (tools/ambient_audio.py) that passively listens
-# to the room so Aster reads Mohamed's vocal tone even when he isn't addressing
-# it (e.g. upset on the phone). VAD-gated, owner-gated via ECAPA speaker ID,
-# paused during LiveKit calls. The voice-emotion model runs on a CPU copy here
-# (zero VRAM) — distinct from the CUDA path used by LiveKit/Telegram. Toggle at
-# runtime via toggle_ambient_audio / /ambientaudio. Default OFF (privacy + the
-# sounddevice/webrtcvad deps load on demand).
-AMBIENT_AUDIO_ENABLED       = bool(_cfg("emotion", "ambient_audio", "enabled",            default=False))
-AMBIENT_AUDIO_DEVICE        = _cfg("emotion",       "ambient_audio", "device",             default=None)  # None = system default mic
-AMBIENT_VAD_AGGRESSIVENESS  = int(_cfg("emotion",   "ambient_audio", "vad_aggressiveness", default=2))    # 0..3 (webrtcvad)
-AMBIENT_MIN_UTTERANCE_SECONDS = float(_cfg("emotion","ambient_audio", "min_utterance_seconds", default=2.0))
-AMBIENT_VOICE_EMA_ALPHA     = float(_cfg("emotion", "ambient_audio", "ema_alpha",          default=0.5))
-AMBIENT_VOICE_GATE_OWNER    = bool(_cfg("emotion",  "ambient_audio", "gate_owner",         default=True))
-AMBIENT_WINDOW_FEED_COOLDOWN = float(_cfg("emotion","ambient_audio", "window_feed_cooldown", default=60.0))
 
 # ============================================================================
 # WAKE-WORD (openWakeWord)
@@ -536,10 +495,10 @@ _init_name = str(_cfg("settings", "initiative_level", default="medium")).strip()
 INITIATIVE_LEVEL = _INITIATIVE_NAME_TO_INT.get(_init_name, 2)
 # Per-level capability matrix — code shape, not user-tunable; lives here.
 INITIATIVE_LEVELS = {
-    0: {"unsolicited_max_per_hour": 0, "compliment": False, "env_nudges": False, "context_questions": False, "mood_checkin": False, "email_checkin": False},
-    1: {"unsolicited_max_per_hour": 1, "compliment": False, "env_nudges": False, "context_questions": True,  "mood_checkin": False, "email_checkin": False},
-    2: {"unsolicited_max_per_hour": 3, "compliment": True,  "env_nudges": True,  "context_questions": True,  "mood_checkin": True,  "email_checkin": True},
-    3: {"unsolicited_max_per_hour": 6, "compliment": True,  "env_nudges": True,  "context_questions": True,  "mood_checkin": True,  "email_checkin": True},
+    0: {"unsolicited_max_per_hour": 0, "compliment": False, "env_nudges": False, "context_questions": False, "email_checkin": False},
+    1: {"unsolicited_max_per_hour": 1, "compliment": False, "env_nudges": False, "context_questions": True,  "email_checkin": False},
+    2: {"unsolicited_max_per_hour": 3, "compliment": True,  "env_nudges": True,  "context_questions": True,  "email_checkin": True},
+    3: {"unsolicited_max_per_hour": 6, "compliment": True,  "env_nudges": True,  "context_questions": True,  "email_checkin": True},
 }
 _iqh = _cfg("awareness", "initiative_quiet_hours", default=None)
 INITIATIVE_QUIET_HOURS = tuple(_iqh) if isinstance(_iqh, (list, tuple)) and len(_iqh) == 2 else None
@@ -590,44 +549,8 @@ SYSTEM_PROMPTS_DIR = str(_cfg("paths", "system_prompts_dir", default=os.path.joi
 CUSTOM_VOICES_DIR  = str(_cfg("paths", "custom_voices_dir",  default=os.path.join(VAULT_DIR, "TTS-Voices")))
 CONVERSATIONS_DIR  = str(_cfg("paths", "conversations_dir",  default=os.path.join(VAULT_DIR, "Conversations")))
 
-# ============================================================================
-# MOOD-TREND MEMORY (emotion roadmap — Idea 3)
-# ============================================================================
-# Logs each real user turn's (timestamp, mood, context) to a rolling JSONL log,
-# maintains an in-memory "sustained mood" window (the shared foundation Ideas 1
-# & 2 will consume), and periodically folds a rolled-up summary into long-term
-# memory. The raw log is always emotion_log.jsonl; the daily summary goes to its
-# own mood_trends.md + ChromaDB so memory.md stays reserved for personal facts.
-# All knobs live under emotion.mood_trend in self_config.yaml.
-MOOD_TREND_ENABLED         = bool(_cfg("emotion", "mood_trend", "enabled",                default=True))
-MOOD_SUSTAIN_TURNS         = int(_cfg("emotion",  "mood_trend", "sustain_turns",          default=3))
-MOOD_LOG_RETENTION_DAYS    = int(_cfg("emotion",  "mood_trend", "retention_days",         default=30))
-MOOD_FLUSH_INTERVAL_HOURS  = float(_cfg("emotion","mood_trend", "flush_interval_hours",   default=24))
-MOOD_FLUSH_MIN_TURNS       = int(_cfg("emotion",  "mood_trend", "flush_min_turns",        default=6))
-MOOD_FLUSH_NONNEUTRAL_FRAC = float(_cfg("emotion","mood_trend", "flush_min_nonneutral_frac", default=0.4))
-MOOD_LOG_PATH              = os.path.join(VAULT_DIR, "emotion_log.jsonl")
-
 # Reliability-campaign instrumentation log (RELIABILITY_LOG_ENABLED above).
 RELIABILITY_LOG_PATH       = os.path.join(VAULT_DIR, "reliability_log.jsonl")
-MOOD_TRENDS_FILE           = os.path.join(VAULT_DIR, "mood_trends.md")
-MOOD_FLUSH_STATE_FILE      = os.path.join(VAULT_DIR, "mood_flush_state.json")
-
-# ── Mood-triggered behaviors (emotion roadmap — Ideas 1 & 2) ─────────────────
-# Both default OFF (opt-in). Idea 2 (ambient-action offers) fires inline while
-# chatting; Idea 1 (proactive check-ins) fires from the Awareness daemon once
-# Mohamed has gone quiet. Both consume get_sustained_mood() / get_mood_streak()
-# and coordinate via the shared streak-guard so they never double-nudge.
-# Idea 2 — inline ambient-action OFFERS (never auto-executes):
-# (Both systems share the single MOOD_SUSTAIN_TURNS debounce window above so the
-# streak-guard stays coherent — there is intentionally no per-system turn knob.)
-MOOD_ACTIONS_ENABLED       = bool(_cfg("emotion", "mood_actions", "enabled",        default=False))
-MOOD_ACTIONS_COOLDOWN      = float(_cfg("emotion","mood_actions", "cooldown_seconds", default=1800))
-# Idea 1 — proactive mood check-ins (via the Awareness daemon):
-MOOD_CHECKIN_ENABLED       = bool(_cfg("emotion", "proactive_checkin", "enabled",         default=False))
-MOOD_CHECKIN_QUIET_SECONDS = float(_cfg("emotion","proactive_checkin", "quiet_seconds",   default=90))
-MOOD_CHECKIN_COOLDOWN      = float(_cfg("emotion","proactive_checkin", "cooldown_seconds", default=3600))
-# Shared — minimum gap between ANY two mood-driven nudges (cross-system):
-MOOD_TOUCH_COOLDOWN        = float(_cfg("emotion","mood_shared", "touch_cooldown_seconds", default=120))
 
 # ============================================================================
 # GOOGLE (GMAIL + CALENDAR) — tiered account access

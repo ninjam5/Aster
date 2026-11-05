@@ -26,7 +26,7 @@ not an instruction; see the "judgment calls" note before deleting.
 | Stale comment in `_discord_hostility` | 3227–3229 | Says the lexicon "catches slurs and profanity aimed at Aster" — false after the imperative-only lexicon. |
 | `_laya_relay_intent` docstring | 2527–2534 | Says "send-ish verb pre-filter"; code now requires a contact name or "discord". Minor drift. |
 
-**Checked and clean:** all 71 `ADMIN_TOOLS` schemas have a matching
+**Checked and clean:** all 67 `ADMIN_TOOLS` schemas have a matching
 `_execute_tool_impl` branch (script-verified) — no orphaned tools, and no
 dispatch branch without a schema.
 
@@ -67,7 +67,6 @@ dispatch branch without a schema.
 |---|---|---|
 | `MODEL_NAME` | `config.py:164` | Never used; brain hardcodes `"model": "local"` (brain.py:105). Comment admits the server ignores it. |
 | `RAG_STALE_DAYS` | `config.py:514` | Never read; `tools/rag.py:193` hardcodes `90`. Changing the knob does nothing. |
-| `MOOD_CHECKIN_COOLDOWN` | `config.py:561` | Never read (awareness uses `MOOD_CHECKIN_QUIET_SECONDS` + `MOOD_TOUCH_COOLDOWN`). `CLAUDE.md` documents it as live. |
 | `LIVEKIT_ROOM_NAME` | `main.py:45` | Dead constant. |
 
 ## 5. Dead files / assets
@@ -77,8 +76,7 @@ dispatch branch without a schema.
   template; referenced by nothing. Unrelated to Aster (old agent-test artifact).
 - `conversation_testing.py` — unreferenced dev harness; docstring still describes
   "The XML tool manual" (pre-Qwen era).
-- Root one-off scripts, all unreferenced: `system1-test.py`, `emotion-test.py`,
-  `ambient-audio-test.py`, `face-emotion-test.py`, `dom-motor-test.py`,
+- Root one-off scripts, all unreferenced: `system1-test.py`, `dom-motor-test.py`,
   `kokoro_test.py`, `_inspect_mmproj.py`.
 - `annoying-aster-prompt.txt` (16 KB), `WhatsApp Chat with George Da Homie.txt`
   (272 KB), `Bugs.txt`, `ideas-for-backend.md` — unreferenced.
@@ -123,8 +121,8 @@ disk, but confirm nothing external depends on them first.
 ## 8. Suggested cleanup order
 
 1. **Zero-risk:** `_RELAY_HINT_RE`, the unused imports (§3), `LIVEKIT_ROOM_NAME`,
-   the `main.py:51` message, `MODEL_NAME` / `RAG_STALE_DAYS` /
-   `MOOD_CHECKIN_COOLDOWN`, `index.html`, `yolov8n.pt`.
+   the `main.py:51` message, `MODEL_NAME` / `RAG_STALE_DAYS`,
+   `index.html`, `yolov8n.pt`.
 2. **Low-risk:** `tools/gui.py`, `verify_action_result`, `_hostility_margin`,
    `pronoun_for`, `reset_session`, `_ANIMATED_KEYS`, `_WEB_LOCK`, `answer_margin`,
    `publish_telemetry`, `_is_discord_message_request`, the missing `ui_guides` map

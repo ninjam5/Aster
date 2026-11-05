@@ -315,7 +315,7 @@ class TestAffirmativeConfirmation:
         assert brain._should_force_relay_confirm(exact, "tell george I'm late", "george") is False
         # a pending for THIS target + an affirmative reply is the confirmation
         assert brain._should_force_relay_confirm(guess, "yes, send it to george", "george") is False
-        assert brain._should_force_relay_confirm(guess, "[Mood: happy] yes, do it", "george") is False
+        assert brain._should_force_relay_confirm(guess, "[Speaker: Mohamed] yes, do it", "george") is False
         # ... but a NEW command in the same window is still forced
         assert brain._should_force_relay_confirm(guess, "tell geroge I'm late", "george") is True
         # a pending for a DIFFERENT target must not authorise this one (round 12)
@@ -324,22 +324,15 @@ class TestAffirmativeConfirmation:
         brain._clear_pending_relay_confirm()
 
     def test_the_tagged_affirmative_is_recognised(self):
-        assert brain._looks_affirmative("[Mood: happy] yes, send it to george") is True
+        assert brain._looks_affirmative("[Speaker: Mohamed] yes, send it to george") is True
 
-    def test_the_four_toggle_tools_accept_a_string_state(self, monkeypatch):
-        """QA round 10/11: an undefined _as__as_bool left these raising NameError, and
-        the first version asserted only 'not an error' — a deleted handler returns None
-        and also passed. Assert the POLARITY."""
+    def test_toggle_awareness_accepts_a_string_state(self, monkeypatch):
+        """Verify _as_bool coercion on boolean toggle tools."""
         import tools.awareness as _aw
-        monkeypatch.setattr(config, "MOOD_ACTIONS_ENABLED", True, raising=False)
-        monkeypatch.setattr(config, "MOOD_CHECKIN_ENABLED", True, raising=False)
-        monkeypatch.setattr(config, "FACE_EMOTION_ENABLED", True, raising=False)
-        monkeypatch.setattr(config, "AMBIENT_AUDIO_ENABLED", True, raising=False)
         monkeypatch.setattr(_aw, "AWARENESS_ACTIVE", True, raising=False)
-        for tool in ("toggle_mood_actions", "toggle_mood_checkins",
-                     "toggle_face_emotion", "toggle_ambient_audio"):
-            out = brain.execute_tool(tool, {"state": "false"})
-            assert "OFF" in str(out), (tool, out)
+        monkeypatch.setattr(config, "AWARENESS_ACTIVE", True, raising=False)
+        out = brain.execute_tool("toggle_awareness_mode", {"state": "false"})
+        assert "OFF" in str(out)
 
 
 @pytest.fixture(autouse=True)

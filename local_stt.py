@@ -155,14 +155,11 @@ def _get_cpu_whisper() -> WhisperModel:
     return _cpu_whisper
 
 
-def format_transcript(text: str, speaker: str | None = None,
-                      mood: str | None = None) -> str:
-    """Attach the canonical [Speaker: X] / [Mood: Y] tags in front of a transcript."""
+def format_transcript(text: str, speaker: str | None = None) -> str:
+    """Attach the canonical [Speaker: X] tag in front of a transcript."""
     tags = ""
     if speaker:
         tags += f"[Speaker: {speaker}] "
-    if mood:
-        tags += f"[Mood: {mood}] "
     return f"{tags}{text}".strip()
 
 
@@ -198,13 +195,6 @@ class LocalWhisperSTT(stt.STT):
         # Reuse the process-wide shared model (no second VRAM copy).
         self._whisper_model = get_whisper_model()
         self._pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        # Hold the voice-emotion model for the call's lifetime so each _transcribe
-        # call doesn't load/offload per utterance.  Released in aclose().
-        try:
-            from tools.emotion_recognition import acquire_voice_emotion_model
-            acquire_voice_emotion_model()
-        except Exception:
-            pass
 
     @property
     def model(self) -> str:
@@ -252,7 +242,6 @@ class LocalWhisperSTT(stt.STT):
             # Whisper commonly mishears "Aster" as "Esther" — correct it.
             text = re.sub(r'\bEsther\b', 'Aster', text)
             text = re.sub(r'\besther\b', 'aster', text)
-            transcript = text  # clean words — fed to the text-emotion fusion below
             speaker = None
             try:
                 from tools.voice_recognition import identify_and_maybe_learn
@@ -261,17 +250,7 @@ class LocalWhisperSTT(stt.STT):
                     _notify_unknown_livekit_voice(audio)
             except Exception:
                 pass
-            # Fused mood — voice prosody (Tier 1, model warm for the call via the
-            # STT's outer acquire) + transcript content (Tier 0, CPU).  Confident
-            # text content overrides prosody so high-arousal anger isn't misread
-            # as 'happy' (see emotion_recognition.fuse_moods).
-            mood = None
-            try:
-                from tools.emotion_recognition import detect_combined_emotion
-                mood = detect_combined_emotion(audio, transcript, sample_rate=16000)
-            except Exception:
-                pass
-            return format_transcript(text, speaker=speaker, mood=mood)
+            return format_transcript(text, speaker=speaker)
 
         loop = asyncio.get_running_loop()
         text = await loop.run_in_executor(self._pool, _transcribe)
@@ -287,9 +266,3 @@ class LocalWhisperSTT(stt.STT):
     async def aclose(self) -> None:
         self._pool.shutdown(wait=False, cancel_futures=True)
         self._whisper_model = None
-        # Drop the voice-emotion model's call-lifetime hold.
-        try:
-            from tools.emotion_recognition import release_voice_emotion_model
-            release_voice_emotion_model()
-        except Exception:
-            pass

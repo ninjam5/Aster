@@ -139,40 +139,6 @@ def capture_frame_base64(camera_index=0) -> str | None:
         return None
 
 
-def get_primary_face_crop_rgb(frame_or_b64) -> "np.ndarray | None":
-    """Return the largest detected face as an RGB numpy crop, or None.
-
-    Accepts a BGR numpy frame (OpenCV) or a base64 JPEG string (the form the
-    Awareness daemon already holds). Reuses face_recognition's HOG detector
-    (already loaded here). Used by the Tier-2 facial-emotion model in
-    tools/emotion_recognition.py. Best-effort — None on any failure / no face.
-    """
-    try:
-        if isinstance(frame_or_b64, str):
-            raw = frame_or_b64.split(",", 1)[-1]
-            np_arr = np.frombuffer(base64.b64decode(raw), np.uint8)
-            frame_bgr = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-        else:
-            frame_bgr = frame_or_b64
-        if frame_bgr is None or getattr(frame_bgr, "size", 0) == 0:
-            return None
-
-        rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        boxes = face_recognition.face_locations(rgb)   # (top, right, bottom, left)
-        if not boxes:
-            return None
-
-        top, right, bottom, left = max(boxes, key=lambda b: (b[2] - b[0]) * (b[1] - b[3]))
-        h, w = rgb.shape[:2]
-        top, left = max(0, top), max(0, left)
-        bottom, right = min(h, bottom), min(w, right)
-        if bottom <= top or right <= left:
-            return None
-        return rgb[top:bottom, left:right]
-    except Exception:
-        return None
-
-
 def _downscale_bgr(frame_bgr, max_width: int):
     """Shrink a BGR frame so its width is at most max_width (aspect preserved).
 

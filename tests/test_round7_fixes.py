@@ -58,22 +58,15 @@ class TestLiveKitGateWiring:
         assert bridge._pending_transcript == "hello aster"   # kept for the retry
 
 
-# ── F3: the mood tag must not defeat the relay parser ─────────────────────────
+# ── F3: runtime speaker/ambient tags must not defeat the relay parser ────────
 
-class TestMoodTagStripping:
-    def test_a_mood_tagged_relay_is_still_exact(self, monkeypatch):
-        import tools.discord_api as d
-        monkeypatch.setattr(d, "CONTACTS", {"george": "1"}, raising=False)
-        out = brain._extract_discord_message_intent("[Mood: neutral] tell george I'll be late")
-        assert out is not None, "the mood tag defeated the relay parser"
-        assert out["target"] == "george" and out["exact"] is True
-        assert "[Mood" not in out["payload"]
-
-    def test_a_speaker_tag_is_stripped_too(self, monkeypatch):
+class TestRuntimeTagStripping:
+    def test_a_speaker_tag_is_stripped(self, monkeypatch):
         import tools.discord_api as d
         monkeypatch.setattr(d, "CONTACTS", {"george": "1"}, raising=False)
         out = brain._extract_discord_message_intent("[Speaker: farah] tell george hello")
-        assert out is not None and out["target"] == "george"
+        assert out is not None and out["target"] == "george" and out["exact"] is True
+        assert "[Speaker" not in out["payload"]
 
 
 # ── consolidation digest window + attempt cap ─────────────────────────────────
@@ -153,7 +146,6 @@ class TestToolHintNotForRelays:
         monkeypatch.setattr(tr, "pick_tool_for_request",
                             lambda text: calls.append(text) or {"tool": None})
         monkeypatch.setattr(config, "AUTO_COMPACT_ENABLED", False, raising=False)
-        monkeypatch.setattr(brain, "_log_turn_mood", lambda t: None, raising=False)
         monkeypatch.setattr(brain.awareness, "render_context_block", lambda: None, raising=False)
         monkeypatch.setattr(brain, "trim_memory", lambda m: m, raising=False)
         monkeypatch.setattr(brain, "publish_terminal", lambda *a, **k: None, raising=False)
@@ -200,8 +192,6 @@ class TestWriteLock:
 @pytest.fixture(autouse=True)
 def _isolate_brain_turn(tmp_path, monkeypatch):
     """QA round 8: these tests run a real admin turn, which appended to the real
-    Aster_Vault/Conversations/ and could tag the text with a mood (changing the input)."""
+    Aster_Vault/Conversations/."""
     import config as _c
     monkeypatch.setattr(_c, "CONVERSATIONS_DIR", str(tmp_path / "Conversations"), raising=False)
-    monkeypatch.setattr(_c, "MOOD_LOG_PATH", str(tmp_path / "emotion_log.jsonl"), raising=False)
-    monkeypatch.setattr(brain, "_maybe_tag_text_mood", lambda t: t, raising=False)

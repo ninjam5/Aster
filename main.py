@@ -302,10 +302,7 @@ if config.bot:
                 with open(_voice_rec.TEMP_VOICE_PATH, "wb") as vf:
                     vf.write(pcm_bytes)
 
-            # 4. Transcribe the clip, then fuse prosody + transcript content into
-            #    the [Mood:] tag — the same shape the LiveKit path produces in
-            #    local_stt.py. The engine has no audio input, so the transcript IS
-            #    the turn.
+            # 4. Transcribe the clip and tag speaker identity.
             from local_stt import transcribe_file, format_transcript
             transcript = transcribe_file(temp_pcm_path)
             if not transcript:
@@ -314,18 +311,9 @@ if config.bot:
                     "I could not make out any speech in that voice note, Sir.",
                 )
                 return
-            mood = None
-            try:
-                from tools.emotion_recognition import (
-                    detect_voice_emotion, detect_text_emotion, fuse_moods,
-                )
-                mood = fuse_moods(detect_text_emotion(transcript),
-                                  detect_voice_emotion(pcm_bytes))
-            except Exception:
-                pass
 
             caption = message.caption if message.caption else ""
-            user_text = format_transcript(transcript, speaker=speaker, mood=mood)
+            user_text = format_transcript(transcript, speaker=speaker)
             if caption:
                 user_text += f"\n\n[User caption: {caption}]"
             response_text = process_user_input(user_text, None)
@@ -417,62 +405,6 @@ if config.bot:
         else:
             _intervention.toggle_intervention(False)
             config.bot.reply_to(message, "[Aster Intervention: INACTIVE.]")
-
-    @config.bot.message_handler(commands=['moodactions'])
-    def handle_moodactions_command(message):
-        if message.chat.id != config.AUTHORIZED_CHAT_ID:
-            config.bot.reply_to(message, "Unauthorized user. Access denied.")
-            return
-        args = message.text.split()
-        state = len(args) > 1 and args[1].lower() == "on"
-        config.MOOD_ACTIONS_ENABLED = state
-        status = "ACTIVE. Will OFFER mood-fitting actions while chatting." if state else "INACTIVE."
-        config.bot.reply_to(message, f"[Aster Mood Actions: {status}]")
-
-    @config.bot.message_handler(commands=['checkins'])
-    def handle_checkins_command(message):
-        if message.chat.id != config.AUTHORIZED_CHAT_ID:
-            config.bot.reply_to(message, "Unauthorized user. Access denied.")
-            return
-        args = message.text.split()
-        state = len(args) > 1 and args[1].lower() == "on"
-        config.MOOD_CHECKIN_ENABLED = state
-        status = "ACTIVE. Will check in if a mood persists then you go quiet." if state else "INACTIVE."
-        config.bot.reply_to(message, f"[Aster Mood Check-ins: {status}]")
-
-    @config.bot.message_handler(commands=['faceemotion'])
-    def handle_faceemotion_command(message):
-        if message.chat.id != config.AUTHORIZED_CHAT_ID:
-            config.bot.reply_to(message, "Unauthorized user. Access denied.")
-            return
-        args = message.text.split()
-        state = len(args) > 1 and args[1].lower() == "on"
-        config.FACE_EMOTION_ENABLED = state
-        if state:
-            try:
-                from tools.emotion_recognition import load_face_emotion_model
-                load_face_emotion_model()
-            except Exception as e:
-                print(f"[Aster] Face emotion load on enable failed: {e}")
-        status = "ACTIVE. Reading facial expression from the webcam." if state else "INACTIVE."
-        config.bot.reply_to(message, f"[Aster Face Emotion: {status}]")
-
-    @config.bot.message_handler(commands=['ambientaudio'])
-    def handle_ambientaudio_command(message):
-        if message.chat.id != config.AUTHORIZED_CHAT_ID:
-            config.bot.reply_to(message, "Unauthorized user. Access denied.")
-            return
-        args = message.text.split()
-        state = len(args) > 1 and args[1].lower() == "on"
-        config.AMBIENT_AUDIO_ENABLED = state
-        if not state:
-            try:
-                from tools.emotion_recognition import reset_ambient_voice_mood
-                reset_ambient_voice_mood()
-            except Exception:
-                pass
-        status = f"ACTIVE. Passively listening to the room for {config.OWNER_NAME}'s vocal tone." if state else "INACTIVE."
-        config.bot.reply_to(message, f"[Aster Ambient Audio: {status}]")
 
     @config.bot.message_handler(commands=['initiative'])
     def handle_initiative_command(message):
@@ -713,10 +645,6 @@ def start_background_services():
 
     # Start Awareness daemon (active by default — ambient context + initiative dial)
     threading.Thread(target=_awareness.awareness_daemon, daemon=True, name="awareness").start()
-
-    # Start Ambient Audio daemon (inactive until /ambientaudio on — no mic opened while idle)
-    from tools import ambient_audio as _ambient_audio
-    threading.Thread(target=_ambient_audio.ambient_audio_daemon, daemon=True, name="ambient-audio").start()
 
     # Start Face server (token + log stream for the Tauri desktop UI)
     threading.Thread(target=_face_server.start_face_server, daemon=True).start()

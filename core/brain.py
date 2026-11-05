@@ -896,74 +896,6 @@ ADMIN_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "toggle_mood_actions",
-            "description": "Turns mood-action OFFERS on or off (opt-in). When ON, if the user's mood stays the same for several messages while chatting, Aster will OFFER (never auto-run) a fitting action — calming music + lower volume when they're down, closing a distraction when frustrated, or hype music when they're happy. Disable to stop all mood-driven offers.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "state": {
-                        "type": "boolean",
-                        "description": "True to turn mood-action offers ON, False to turn them OFF."
-                    }
-                },
-                "required": ["state"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "toggle_mood_checkins",
-            "description": "Turns proactive mood check-ins on or off (opt-in). When ON, if a heavy or upbeat mood persists across several messages and the user then goes quiet, Aster opens a gentle unsolicited check-in. Requires Awareness Mode running and initiative at medium or higher.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "state": {
-                        "type": "boolean",
-                        "description": "True to turn proactive mood check-ins ON, False to turn them OFF."
-                    }
-                },
-                "required": ["state"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "toggle_face_emotion",
-            "description": "Turns facial-emotion reading on or off (opt-in). When ON, Aster reads the user's facial expression from the webcam (via the Awareness daemon's existing poll) and folds it into their mood — surfaced as a 'Face read:' line and blended into the per-turn mood tag. Disable to stop all webcam-based emotion reading.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "state": {
-                        "type": "boolean",
-                        "description": "True to turn facial-emotion reading ON, False to turn it OFF."
-                    }
-                },
-                "required": ["state"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "toggle_ambient_audio",
-            "description": "Turns ambient room-audio mood listening on or off (opt-in). When ON, Aster passively listens to the room through the local microphone and reads the user's vocal tone even when they aren't talking to Aster (e.g. upset on the phone) — gated to the user's voice, paused during voice calls, surfaced as a 'Voice tone:' line and blended into the per-turn mood tag. Disable to close the microphone and stop all passive listening.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "state": {
-                        "type": "boolean",
-                        "description": "True to turn ambient room-audio listening ON, False to turn it OFF."
-                    }
-                },
-                "required": ["state"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "close_distraction_window",
             "description": "Closes the distracting window that Intervention Mode most recently flagged. Use this when the user agrees to your offer to close it (e.g. 'yes, close it').",
             "parameters": {
@@ -1986,42 +1918,6 @@ def _execute_tool_impl(tool_name, arguments):
         status = "ON" if state else "OFF"
         print(f"\n[Aster Internal: Awareness Mode toggled {status}]")
         return f"[System Note: Awareness Mode is now {status}.]"
-    elif tool_name == "toggle_mood_actions":
-        state = _as_bool(arguments.get("state", True))
-        config.MOOD_ACTIONS_ENABLED = state
-        status = "ON" if state else "OFF"
-        print(f"\n[Aster Internal: Mood-action offers toggled {status}]")
-        return f"[System Note: Mood-action offers are now {status}.]"
-    elif tool_name == "toggle_mood_checkins":
-        state = _as_bool(arguments.get("state", True))
-        config.MOOD_CHECKIN_ENABLED = state
-        status = "ON" if state else "OFF"
-        print(f"\n[Aster Internal: Proactive mood check-ins toggled {status}]")
-        return f"[System Note: Proactive mood check-ins are now {status}.]"
-    elif tool_name == "toggle_face_emotion":
-        state = _as_bool(arguments.get("state", True))
-        config.FACE_EMOTION_ENABLED = state
-        if state:
-            try:
-                from tools.emotion_recognition import load_face_emotion_model
-                load_face_emotion_model()      # lazy first-load on enable
-            except Exception as _e:
-                print(f"[Aster Internal: Face emotion load on enable failed: {_e}]")
-        status = "ON" if state else "OFF"
-        print(f"\n[Aster Internal: Facial-emotion reading toggled {status}]")
-        return f"[System Note: Facial-emotion reading is now {status}.]"
-    elif tool_name == "toggle_ambient_audio":
-        state = _as_bool(arguments.get("state", True))
-        config.AMBIENT_AUDIO_ENABLED = state
-        if not state:
-            try:
-                from tools.emotion_recognition import reset_ambient_voice_mood
-                reset_ambient_voice_mood()
-            except Exception:
-                pass
-        status = "ON" if state else "OFF"
-        print(f"\n[Aster Internal: Ambient room-audio listening toggled {status}]")
-        return f"[System Note: Ambient room-audio listening is now {status}.]"
     elif tool_name == "set_initiative":
         return awareness.set_initiative(arguments.get("level", 2))
     elif tool_name == "get_my_config":
@@ -2403,7 +2299,7 @@ _AFFIRMATIVE_RE = re.compile(
     re.IGNORECASE,
 )
 _LEADING_TAG_RE = re.compile(
-    r"^\s*(?:\[(?:Mood|Speaker|Ambient|Image|System)[^\]]*\]\s*)+")
+    r"^\s*(?:\[(?:Speaker|Ambient|Image|System)[^\]]*\]\s*)+")
 # A guess only becomes sendable after the OWNER confirms, so the confirmation is tracked
 # rather than inferred from a prefix (QA round 10: a stateless prefix match let
 # "ok tell geroge I'm late" skip the gate entirely).
@@ -2414,9 +2310,8 @@ _PENDING_RELAY_TTL = 300.0
 def _looks_affirmative(text: str) -> bool:
     """True when the owner is confirming something (QA round 9/10).
 
-    Strips leading runtime tags first: `_maybe_tag_text_mood` PREPENDS `[Mood: …]`, so
-    on emotion-enabled installs a tagged confirmation was not recognised and the relay
-    loop stayed unwinnable.
+    Strips leading runtime tags first (`[Speaker: …]`, `[Ambient…]`, etc.) so a
+    voice-tagged confirmation is recognised by the `^` anchor.
     """
     return bool(_AFFIRMATIVE_RE.match(_LEADING_TAG_RE.sub("", str(text or ""))))
 
@@ -2497,11 +2392,9 @@ def _extract_discord_message_intent(user_text: str) -> dict | None:
     # Discord relay whose directive embedded the whole blob and blew the context.
     user_text = re.sub(r"\[NATIVE_(?:IMAGE|AUDIO)_PAYLOAD:[^\]]*\]", " ", user_text, count=1)
 
-    # QA round 7: strip leading runtime tags (`[Mood: …]`, `[Speaker: …]`, `[Ambient…]`).
-    # The mood tag is PREPENDED to the user text, which broke this parser's `^` anchor —
-    # on emotion-enabled installs every typed relay was downgraded to a "guess" (or
-    # missed entirely with the kernel off).
-    text = re.sub(r"^\s*(?:\[(?:Mood|Speaker|Ambient|Image|System)[^\]]*\]\s*)+", "", user_text)
+    # QA round 7: strip leading runtime tags (`[Speaker: …]`, `[Ambient…]`, etc.)
+    # so voice/ambient tags do not break this parser's `^` anchor.
+    text = re.sub(r"^\s*(?:\[(?:Speaker|Ambient|Image|System)[^\]]*\]\s*)+", "", user_text)
     text = re.sub(r"\s+", " ", text.strip())
     if not text:
         return None
@@ -3501,95 +3394,6 @@ def process_discord_chat(sender_name: str, user_message: str) -> str:
 # ============================================================================
 # CORE LLM LOGIC: Shared by CLI and Telegram
 # ============================================================================
-def _maybe_tag_text_mood(user_text: str) -> str:
-    """Prepend [Mood: <state>] to user_text using the Tier-0 text detector.
-
-    Rules (in priority order):
-    - Skip if emotion detection is disabled, text is a system nudge, or already
-      carries a [Mood:] tag.
-    - For [NATIVE_IMAGE_PAYLOAD:…] — detect on the caption (text after the ']')
-      and insert the tag immediately after the ']' so the payload prefix is intact.
-    - For plain text / [Speaker:]-prefixed text — detect on the human text only
-      and insert [Mood: X] right after [Speaker: …] if present, else at the front.
-    """
-    if not config.EMOTION_ENABLED:
-        return user_text
-    text = str(user_text)
-    if text.startswith("[System Internal"):
-        return user_text
-    if "[Mood:" in text:
-        return user_text       # already tagged (voice path)
-
-    try:
-        from tools.emotion_recognition import (detect_text_emotion, fuse_face,
-                                                get_face_mood, get_ambient_voice_mood)
-
-        # Fold the ambient reads (Tier 2 face, Tier 1b room voice) into the text
-        # content read. fuse_face's policy (base wins; neutral base → fallback)
-        # composes to text > face > ambient-voice: each ambient signal only fills
-        # in when the stronger one is still neutral. No-op when both are off
-        # (their accessors then return 'neutral').
-        def _with_face(m: str) -> str:
-            m = fuse_face(m, get_face_mood())
-            m = fuse_face(m, get_ambient_voice_mood())
-            return m
-
-        if text.startswith("[NATIVE_IMAGE_PAYLOAD:"):
-            # Keep the payload prefix intact; detect on caption after the closing ']'
-            bracket_end = text.index("]") + 1
-            caption = text[bracket_end:].strip()
-            if not caption:
-                return user_text
-            mood = _with_face(detect_text_emotion(caption))
-            return text[:bracket_end] + f" [Mood: {mood}] " + text[bracket_end:].lstrip()
-
-        # Plain text — may carry a leading [Speaker: X] tag
-        import re as _re
-        speaker_match = _re.match(r"^(\[Speaker:[^\]]*\])\s*", text)
-        if speaker_match:
-            speaker_prefix = speaker_match.group(0).rstrip()
-            rest = text[speaker_match.end():]
-            mood = _with_face(detect_text_emotion(rest))
-            return f"{speaker_prefix} [Mood: {mood}] {rest}"
-
-        mood = _with_face(detect_text_emotion(text))
-        return f"[Mood: {mood}] {text}"
-
-    except Exception:
-        return user_text
-
-
-def _log_turn_mood(tagged_text: str) -> None:
-    """Log the [Mood: X] tag the brain just embedded to the mood-trend store
-    (roadmap Idea 3 — emotional continuity). Best-effort; never raises.
-
-    Reads the tag off the already-embedded text so it works uniformly for the
-    typed-text path (Tier 0) and the voice paths (Tier 1, tagged upstream).
-    """
-    if not (config.EMOTION_ENABLED and getattr(config, "MOOD_TREND_ENABLED", False)):
-        return
-    try:
-        text = str(tagged_text)
-        m = re.search(r"\[Mood:\s*([A-Za-z]+)\s*\]", text)
-        if not m:
-            return                          # untagged (system nudge / disabled)
-        mood = m.group(1).lower()
-
-        # Short human-readable context snippet, payload-blob aware.
-        if text.startswith("[NATIVE_IMAGE_PAYLOAD:"):
-            bracket_end = text.find("]")
-            context = text[bracket_end + 1:] if bracket_end != -1 else ""
-        else:
-            context = text
-        context = re.sub(r"\[Speaker:[^\]]*\]", "", context)
-        context = re.sub(r"\[Mood:[^\]]*\]", "", context).strip()
-
-        from tools.emotion_recognition import log_mood_turn
-        log_mood_turn(mood, context)
-    except Exception:
-        pass
-
-
 def _compact_context_locked(trigger: str = "manual") -> str:
     """Summarize-and-replace context compaction (shared by manual /compact and
     the auto-compact trigger). Caller MUST hold config.brain_lock.
@@ -3662,16 +3466,6 @@ def process_user_input(user_text, status_callback=None):
     if not str(user_text).startswith("[System Internal"):
         _turn_count += 1
 
-    # Embed [Mood: <state>] tag — Tier 0 text detector for typed input; voice
-    # messages are already tagged by Tier 1 at the audio capture site and pass
-    # through unchanged (the [Mood:] presence guard in _maybe_tag_text_mood).
-    user_text = _maybe_tag_text_mood(user_text)
-
-    # Log this real turn's mood for emotional-continuity tracking (Idea 3).
-    # Mirrors the _turn_count gate above — system nudges are untagged and skipped.
-    if not str(user_text).startswith("[System Internal"):
-        _log_turn_mood(user_text)
-
     discord_intent = _extract_discord_message_intent(user_text)
     # QA round 11/12: capture the pending-confirmation TARGET before this turn can mark a
     # new one (same-turn trap) and require it to match the target we are about to use.
@@ -3689,21 +3483,6 @@ def process_user_input(user_text, status_callback=None):
     # ID 8 (tool tie-break hint) decommissioned in laya-backwards-integration.md (Step 1):
     # Qwen 3.6 35B resolves schemas directly without a 300M model backseating round 0.
     _tool_hint = ""
-
-    # Idea 2 — inline ambient-action offer. For plain-text real turns only (skip
-    # system nudges, media payloads, and Discord-routing requests): when a mood is
-    # sustained during active chat, append a short [System Internal] offer so
-    # Aster's same-turn reply naturally proposes (never auto-runs) an action.
-    if (not discord_message_request
-            and not str(user_text).startswith("[System Internal")
-            and not str(user_text).startswith("[NATIVE_")):
-        try:
-            from tools import mood_actions
-            _offer = mood_actions.maybe_mood_action_nudge()
-            if _offer:
-                user_text = f"{user_text}\n\n{_offer}"
-        except Exception as e:
-            print(f"[Aster Mood] mood-action offer skipped: {e}")
 
     with config.brain_lock:
         # Auto-compaction: trimming drops old facts silently; compaction
@@ -4359,13 +4138,6 @@ def process_user_input(user_text, status_callback=None):
         elif _turn_count > 0 and _turn_count % MEMORIZE_EVERY_N_TURNS == 0:
             print(f"[Aster Internal: Auto memory consolidation (turn {_turn_count})]")
             evaluate_and_memorize(f"AUTO N-TURN CONSOLIDATION (turn {_turn_count})")
-            # Fold a mood-trend summary into memory if a flush is due (Idea 3).
-            # Self-gated on time / data / neutrality; cheap no-op when not due.
-            try:
-                from tools import mood_memory
-                mood_memory.maybe_flush_mood_summary()
-            except Exception as e:
-                print(f"[Aster Mood] mood-trend flush skipped: {e}")
 
         # Final sanitization + silence layer for TTS-safe output.
         display_response = str(final_response or "").strip()

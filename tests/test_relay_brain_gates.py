@@ -23,10 +23,9 @@ def _tool_call(name, args_json):
 
 @pytest.fixture
 def relay_env(monkeypatch):
-    """A minimal admin turn: no compaction, no mood, no ambient block, no real sends."""
+    """A minimal admin turn: no compaction, no ambient block, no real sends."""
     monkeypatch.setattr(config, "AUTO_COMPACT_ENABLED", False, raising=False)
     monkeypatch.setattr(config, "RELIABILITY_LOG_ENABLED", False, raising=False)
-    monkeypatch.setattr(brain, "_log_turn_mood", lambda t: None, raising=False)
     monkeypatch.setattr(brain.awareness, "render_context_block", lambda: None, raising=False)
     monkeypatch.setattr(brain, "trim_memory", lambda m: m, raising=False)
     monkeypatch.setattr(brain, "publish_terminal", lambda *a, **k: None, raising=False)
@@ -115,15 +114,13 @@ class TestRelayToolBlocklist:
 @pytest.fixture(autouse=True)
 def _isolate_brain_turn(tmp_path, monkeypatch):
     """QA round 8: these tests run a real admin turn, which appended to the real
-    Aster_Vault/Conversations/ and could tag the text with a mood (changing the input).
+    Aster_Vault/Conversations/.
     QA 2026-09-29: also keep tools/people and the conversation-ending store off the
     owner's real Aster_Vault files."""
     import config as _c
     import tools.conversations as conversations
     import tools.people as people
     monkeypatch.setattr(_c, "CONVERSATIONS_DIR", str(tmp_path / "Conversations"), raising=False)
-    monkeypatch.setattr(_c, "MOOD_LOG_PATH", str(tmp_path / "emotion_log.jsonl"), raising=False)
-    monkeypatch.setattr(brain, "_maybe_tag_text_mood", lambda t: t, raising=False)
     monkeypatch.setattr(people, "_PATH", str(tmp_path / "people.json"), raising=False)
     monkeypatch.setattr(conversations, "_PATH", str(tmp_path / "conv.json"), raising=False)
 

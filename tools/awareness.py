@@ -40,7 +40,6 @@ current_context: dict = {
     "presence": "unknown",          # "present" | "away" | "unknown"
     "absence_since": None,          # datetime — when presence first flipped to "away"
     "mood": "neutral",              # focused | tired | animated | terse | neutral
-    "face_mood": "neutral",         # facial emotion (Tier 2): happy|sad|frustrated|anxious|neutral
     "last_capture": None,           # datetime of most recent successful poll
     "new_observations": [],         # list[str] of unsurfaced changes (consumed by brain)
 }
@@ -273,11 +272,6 @@ def _ambient_block() -> str | None:
     if current_context.get("lighting"):
         lines.append(f"Lighting: {current_context['lighting']}")
     lines.append(f"Mood read: {current_context.get('mood', 'neutral')}")
-    if getattr(config, "FACE_EMOTION_ENABLED", False):
-        lines.append(f"Face read: {current_context.get('face_mood', 'neutral')}")
-    if getattr(config, "AMBIENT_AUDIO_ENABLED", False):
-        from tools.emotion_recognition import get_ambient_voice_mood
-        lines.append(f"Voice tone: {get_ambient_voice_mood()}")
     if current_context.get("new_observations"):
         joined = "; ".join(current_context["new_observations"])
         lines.append(f"Unsurfaced: {joined}")
@@ -538,15 +532,6 @@ def _maybe_trigger_env_nudge(prev_lighting: str | None) -> None:
     _push_nudge(nudge)
 
 
-# ── proactive mood check-in (Idea 1) ──────────────────────────────────────────
-_last_checkin_streak: int = -1
-
-# ── Google integration ambient nudges ─────────────────────────────────────────
-_last_email_checkin_count: int = 0    # highest unread count already notified about
-_last_email_checkin_time: float = 0.0
-_reauth_reminder_sent: bool = False   # latched until reauth_needed() clears (a successful re-auth)
-
-
 def _seconds_since_last_user_msg() -> float | None:
     """Seconds since Mohamed's most recent message, or None if none recorded."""
     if not _recent_user_msgs:
@@ -554,66 +539,10 @@ def _seconds_since_last_user_msg() -> float | None:
     return time.time() - _recent_user_msgs[-1][0]
 
 
-def _maybe_trigger_mood_checkin() -> None:
-    """Idea 1: a heavy (sad/anxious) or upbeat (happy) mood has been *sustained*
-    and Mohamed has now gone *quiet* — open a gentle, unsolicited check-in.
-
-    Split-by-context: this fires only after the user has been quiet for
-    ``MOOD_CHECKIN_QUIET_SECONDS`` (the inline-offer path, Idea 2, owns active
-    chat). Coordinated with Idea 2 via the shared streak-guard + touch cooldown
-    in ``tools.emotion_recognition`` so the two never double-nudge.
-    """
-    # QA round 2: gate BEFORE latching any cooldown/flag. These triggers used to
-    # advance their "already fired" state first and then let _push_nudge drop the
-    # nudge, so a deferred nudge was lost for the whole cooldown (or forever).
-    if not _good_moment_to_speak():
-        print("[Awareness] Trigger deferred — not a good moment to speak.")
-        return
-    global _last_checkin_streak
-    if not getattr(config, "MOOD_CHECKIN_ENABLED", False):
-        return
-    if not _initiative_settings().get("mood_checkin"):
-        return
-
-    try:
-        from tools import emotion_recognition as er
-    except Exception:
-        return
-
-    streak_id, mood = er.get_mood_streak()          # debounced by MOOD_SUSTAIN_TURNS
-    if mood not in ("sad", "anxious", "happy"):
-        return
-    if streak_id == _last_checkin_streak:
-        return                                       # already checked in this streak
-
-    # Quiet gate — only break in once Mohamed has gone quiet post-streak.
-    quiet_for = _seconds_since_last_user_msg()
-    if quiet_for is None or quiet_for < config.MOOD_CHECKIN_QUIET_SECONDS:
-        return
-    # Don't stack on a just-fired Idea-2 offer.
-    if er.mood_touch_recent(config.MOOD_TOUCH_COOLDOWN):
-        return
-    if not _budget_remaining():
-        return
-
-    if mood == "happy":
-        nudge = (
-            f"[System Internal: {config.OWNER_NAME} has been upbeat for a while and just went "
-            "quiet. Break in briefly, in your persona, to share the good energy — "
-            "one short, warm sentence.]"
-        )
-    else:
-        nudge = (
-            f"[System Internal: {config.OWNER_NAME} has seemed {mood} across several messages "
-            f"and has now gone quiet. Break in, in your persona, with a gentle, "
-            f"low-pressure check-in — offer to talk or just keep him company. One "
-            f"or two sentences, and don't try to fix anything.]"
-        )
-
-    _last_checkin_streak = streak_id
-    er.note_mood_touch()
-    print(f"[Awareness] Mood check-in trigger — mood={mood}, quiet={int(quiet_for)}s")
-    _push_nudge(nudge)
+# ── Google integration ambient nudges ─────────────────────────────────────────
+_last_email_checkin_count: int = 0    # highest unread count already notified about
+_last_email_checkin_time: float = 0.0
+_reauth_reminder_sent: bool = False   # latched until reauth_needed() clears (a successful re-auth)
 
 
 def _maybe_trigger_email_checkin() -> None:
@@ -635,7 +564,6 @@ def _maybe_trigger_email_checkin() -> None:
 
     try:
         from tools import gmail_tool
-        from tools import emotion_recognition as er
     except Exception:
         return
 
@@ -647,8 +575,6 @@ def _maybe_trigger_email_checkin() -> None:
         return
     if time.time() - _last_email_checkin_time < config.EMAIL_CHECKIN_COOLDOWN:
         return
-    if er.mood_touch_recent(config.MOOD_TOUCH_COOLDOWN):
-        return
     if not _budget_remaining():
         return
 
@@ -659,7 +585,6 @@ def _maybe_trigger_email_checkin() -> None:
     )
     _last_email_checkin_count = count
     _last_email_checkin_time = time.time()
-    er.note_mood_touch()
     print(f"[Awareness] Email check-in trigger — unread={count}")
     _push_nudge(nudge)
 
@@ -801,35 +726,9 @@ def awareness_daemon() -> None:
 
             prev_presence, prev_lighting = _update_state(scene)
 
-            # Tier-2 facial emotion — reuse the frame we already captured (no
-            # extra camera open). Hold/clear when Mohamed isn't in frame.
-            if getattr(config, "FACE_EMOTION_ENABLED", False):
-                try:
-                    from tools import emotion_recognition as _er
-                    if current_context.get("presence") == "away":
-                        _er.reset_face_mood()
-                        with _lock:
-                            current_context["face_mood"] = "neutral"
-                    else:
-                        # Owner gate: re-capture with face recognition and only
-                        # trust the read when Mohamed is the recognized face — a
-                        # visiting friend's / intruder's expression must not
-                        # poison the mood. On an owner-recognition miss we hold
-                        # the last read (don't adopt anyone else's), matching the
-                        # ambient-voice owner gate.
-                        from tools.vision import capture_webcam_base64
-                        face_b64, face_names = capture_webcam_base64()
-                        if isinstance(face_b64, str) and config.OWNER_NAME in face_names:
-                            face_mood = _er.detect_face_emotion(face_b64)
-                            with _lock:
-                                current_context["face_mood"] = face_mood
-                except Exception as _fe:
-                    print(f"[Awareness] Face emotion read failed: {_fe}")
-
             # Proactive triggers — gated by initiative + cooldowns.
             _maybe_trigger_env_nudge(prev_lighting)
             _maybe_trigger_compliment(prev_presence)
-            _maybe_trigger_mood_checkin()
             _maybe_trigger_email_checkin()
             _maybe_trigger_reauth_reminder()
         except Exception as e:
