@@ -1235,7 +1235,7 @@ ADMIN_TOOLS = [
                     },
                     "confirm_send": {
                         "type": "boolean",
-                        "description": "Set true ONLY after the owner confirms a form submit/send. Search boxes do not need it.",
+                        "description": "Set true if the owner explicitly commanded sending/submitting (e.g. 'tell him X', 'send X', 'submit'), OR after the owner confirms. Search boxes do not need it.",
                     }
                 },
                 "required": ["goal", "text"]
@@ -1292,9 +1292,9 @@ ADMIN_TOOLS = [
                     },
                     "confirm_send": {
                         "type": "boolean",
-                        "description": ("Set true ONLY after the owner confirms a submit/"
-                                        "destructive key press (enter/return/space/delete/"
-                                        "backspace). Never for ordinary navigation keys."),
+                        "description": ("Set true if the owner explicitly commanded sending or submitting in their prompt "
+                                        "(e.g. 'tell him X', 'send message Y', 'press enter to send'), OR after the owner "
+                                        "confirms a confirmation question. Never for ordinary navigation keys."),
                     }
                 },
                 "required": ["key"]
@@ -2415,6 +2415,23 @@ def _should_force_relay_confirm(intent, user_text: str, pending_target: str = No
     if not pending_target or not this_target or pending_target != this_target:
         return True
     return not _looks_affirmative(user_text)
+
+
+_EXPLICIT_SEND_PATTERNS = [
+    re.compile(r"\b(?:tell|message|dm|text)\s+(?:him|her|them|[A-Za-z0-9_.@-]+)\b", re.IGNORECASE),
+    re.compile(r"\bsend\s+(?:him|her|them|it|the message|to\b|[A-Za-z0-9_.@-]+|\"[^\"]+\"|'[^']+')", re.IGNORECASE),
+    re.compile(r"\b(?:press|hit)\s+enter\s+to\s+send\b", re.IGNORECASE),
+    re.compile(r"\btype\s+.*?\s+and\s+(?:send|press\s+enter|submit)\b", re.IGNORECASE),
+    re.compile(r"\b(?:submit|send)\s+(?:the\s+)?(?:form|message|query|chat)\b", re.IGNORECASE),
+]
+
+
+def _is_explicit_send_command(user_text: str) -> bool:
+    """True when the owner explicitly commands sending a message or submitting a form in their prompt."""
+    if not user_text or not isinstance(user_text, str):
+        return False
+    clean = _LEADING_TAG_RE.sub("", user_text).strip()
+    return any(pat.search(clean) for pat in _EXPLICIT_SEND_PATTERNS)
 
 
 def _as_bool(value) -> bool:
@@ -3860,6 +3877,9 @@ def process_user_input(user_text, status_callback=None):
                             if tool_name in ("research", "browse_web"):
                                 research_executed = True
                             _tool_call_count += 1
+                            if _is_explicit_send_command(user_text) and tool_name in ("press_key", "smart_type", "smart_click"):
+                                if not _as_bool(tool_arguments.get("confirm_send")):
+                                    tool_arguments["confirm_send"] = True
                             print(f'[TOOL DEBUG] Executing tool: {tool_name}')
                             print(f'[TOOL DEBUG] Tool arguments: {tool_arguments}')
                             try:
