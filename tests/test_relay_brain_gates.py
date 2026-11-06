@@ -34,6 +34,7 @@ def relay_env(monkeypatch):
     brain.messages[:] = saved
 
 
+@pytest.mark.skip(reason="Outbound bot relay send_discord_message is archived/commented out (Option B)")
 class TestRelayConfirmForcing:
     @pytest.fixture(autouse=True)
     def _pin_contacts(self, monkeypatch):
@@ -123,20 +124,10 @@ class TestRelayToolBlocklist:
             assert brain._extract_discord_message_intent(p) is None
             assert brain._is_discord_message_request(p) is False
 
-    def test_explicit_desktop_gui_turn_rejects_send_discord_message(self, monkeypatch, relay_env):
-        """If model attempts send_discord_message on an explicit desktop GUI command, it is blocked with GUI guidance."""
-        monkeypatch.setattr(
-            brain, "_execute_llm_completion",
-            lambda **k: _tool_call("send_discord_message", '{"target_name": "ob", "message": "fine"}'),
-            raising=False
-        )
-        brain.messages[:] = [brain.messages[0]]
-        brain.process_user_input("open discord and tell ob 'fine'", None)
-
-        assert any(
-            m.get("role") == "tool" and "Do NOT use send_discord_message" in str(m.get("content", ""))
-            for m in brain.messages
-        )
+    def test_send_discord_message_disabled_in_execute_tool(self):
+        """Proof that send_discord_message execution is disabled under Option B and points to GUI."""
+        res = brain.execute_tool("send_discord_message", {"target_name": "ob", "message": "fine"})
+        assert "disabled" in res and "open_application('discord')" in res
 
 
 
@@ -154,6 +145,7 @@ def _isolate_brain_turn(tmp_path, monkeypatch):
     monkeypatch.setattr(conversations, "_PATH", str(tmp_path / "conv.json"), raising=False)
 
 
+@pytest.mark.skip(reason="Outbound bot relay send_discord_message is archived/commented out (Option B)")
 class TestAffirmativePrefixFullTurn:
     def test_an_affirmative_prefixed_guess_is_forced(self, monkeypatch, relay_env):
         """QA round 11 regression: the pending marker is created in the SAME turn as the

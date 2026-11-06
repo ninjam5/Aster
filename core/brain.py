@@ -788,31 +788,35 @@ ADMIN_TOOLS = [
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "send_discord_message",
-            "description": "Sends a direct message to a known Discord contact name using the official Discord REST API and bot token. DO NOT USE when the owner asks to 'open discord' or use GUI automation — for desktop app requests, use open_application('discord'), smart_click, and press_key. An exact contact name sends immediately; a nickname or fuzzy name is resolved by the local kernel and MUST be confirmed with confirm=true (the first call returns a CONFIRM REQUIRED note and sends nothing).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "target_name": {
-                        "type": "string",
-                        "description": "The contact name from the Discord address book, e.g. 'alex' or 'sam'. A nickname or description is allowed but then requires confirm=true.",
-                    },
-                    "message": {
-                        "type": "string",
-                        "description": "The DM content to send.",
-                    },
-                    "confirm": {
-                        "type": "boolean",
-                        "description": "Set true ONLY after the owner has confirmed a fuzzy/nickname target. Ignored for an exact contact name.",
-                    }
-                },
-                "required": ["target_name", "message"],
-            },
-        },
-    },
+    # [ARCHIVED/DISABLED OUTBOUND BOT RELAY]
+    # send_discord_message is commented out in favor of Desktop GUI Automation (Option B).
+    # All outbound Discord messaging is handled visually via open_application('discord'),
+    # press_key('ctrl+k'), smart_type, and press_key('enter').
+    # {
+    #     "type": "function",
+    #     "function": {
+    #         "name": "send_discord_message",
+    #         "description": "Sends a direct message to a known Discord contact name using the official Discord REST API and bot token. DO NOT USE when the owner asks to 'open discord' or use GUI automation — for desktop app requests, use open_application('discord'), smart_click, and press_key. An exact contact name sends immediately; a nickname or fuzzy name is resolved by the local kernel and MUST be confirmed with confirm=true (the first call returns a CONFIRM REQUIRED note and sends nothing).",
+    #         "parameters": {
+    #             "type": "object",
+    #             "properties": {
+    #                 "target_name": {
+    #                     "type": "string",
+    #                     "description": "The contact name from the Discord address book, e.g. 'alex' or 'sam'. A nickname or description is allowed but then requires confirm=true.",
+    #                 },
+    #                 "message": {
+    #                     "type": "string",
+    #                     "description": "The DM content to send.",
+    #                 },
+    #                 "confirm": {
+    #                     "type": "boolean",
+    #                     "description": "Set true ONLY after the owner has confirmed a fuzzy/nickname target. Ignored for an exact contact name.",
+    #                 }
+    #             },
+    #             "required": ["target_name", "message"],
+    #         },
+    #     },
+    # },
     {
         "type": "function",
         "function": {
@@ -1869,31 +1873,38 @@ def _execute_tool_impl(tool_name, arguments):
         guide_section = f"\n\n[UI Guide — use this to navigate. Do NOT repeat to user.]\n{ui_guide}" if ui_guide else ""
         return f"[Screen state — internal navigation only, do NOT repeat to user]\n{desc}{guide_section}"
     elif tool_name == "send_discord_message":
-        target_name = arguments.get("target_name", "")
-        confirm = _as_bool(arguments.get("confirm", False))
-        # QA round 3: CRITICAL — the brain sets `assume_guess` on a non-exact relay, but
-        # this branch never forwarded it, so the tool saw a canonical key, resolved it,
-        # and sent WITHOUT confirmation. Forward it.
-        assume_guess = _as_bool(arguments.get("assume_guess", False))
-        raw_message = arguments.get("message", "").strip()
-        if not raw_message:
-            return (
-                "Error: send_discord_message requires a non-empty 'message' argument. "
-                "Craft a butler-formatted message (with a greeting and attribution to 'the Boss') "
-                "and call send_discord_message again."
-            )
-        outbound_message = _enforce_discord_honorific(target_name, raw_message)
-        result = send_discord_message(target_name, outbound_message, confirm=confirm,
-                                      assume_guess=assume_guess)
-        # Mirror into the session ONLY when it was actually delivered — a CONFIRM
-        # REQUIRED note (fuzzy target) means nothing was sent.
-        if isinstance(result, str) and result.startswith("[System Note: Message delivered"):
-            # QA round 10: the pending confirmation is consumed by a real delivery.
-            _clear_pending_relay_confirm()
-            _resolved = resolve_contact(target_name)
-            _inject_outbound_discord_message_into_session(
-                _resolved[0] if _resolved else target_name, outbound_message)
-        return result
+        # Outbound bot relay tool is commented out/disabled in favor of Desktop GUI automation (Option B).
+        return (
+            "Error: send_discord_message (outbound bot relay) is disabled. "
+            "Please drive the Discord desktop client on screen using open_application('discord'), "
+            "smart_click or press_key('ctrl+k'), smart_type, and press_key('enter')."
+        )
+        # --- ARCHIVED OUTBOUND IMPLEMENTATION (Uncomment to re-enable) ---
+        # target_name = arguments.get("target_name", "")
+        # confirm = _as_bool(arguments.get("confirm", False))
+        # # QA round 3: CRITICAL — the brain sets `assume_guess` on a non-exact relay, but
+        # # this branch never forwarded it, so the tool saw a canonical key, resolved it,
+        # # and sent WITHOUT confirmation. Forward it.
+        # assume_guess = _as_bool(arguments.get("assume_guess", False))
+        # raw_message = arguments.get("message", "").strip()
+        # if not raw_message:
+        #     return (
+        #         "Error: send_discord_message requires a non-empty 'message' argument. "
+        #         "Craft a butler-formatted message (with a greeting and attribution to 'the Boss') "
+        #         "and call send_discord_message again."
+        #     )
+        # outbound_message = _enforce_discord_honorific(target_name, raw_message)
+        # result = send_discord_message(target_name, outbound_message, confirm=confirm,
+        #                               assume_guess=assume_guess)
+        # # Mirror into the session ONLY when it was actually delivered — a CONFIRM
+        # # REQUIRED note (fuzzy target) means nothing was sent.
+        # if isinstance(result, str) and result.startswith("[System Note: Message delivered"):
+        #     # QA round 10: the pending confirmation is consumed by a real delivery.
+        #     _clear_pending_relay_confirm()
+        #     _resolved = resolve_contact(target_name)
+        #     _inject_outbound_discord_message_into_session(
+        #         _resolved[0] if _resolved else target_name, outbound_message)
+        # return result
     elif tool_name == "forward_to_owner":
         return forward_to_owner(
             arguments.get("sender_name", ""),
@@ -3589,22 +3600,22 @@ def process_user_input(user_text, status_callback=None):
     _lower_user = str(user_text).lower()
     _is_explicit_desktop_gui = _is_explicit_desktop_gui_command(user_text)
 
-    if _is_explicit_desktop_gui:
-        discord_intent = None
-        discord_message_request = False
-    else:
-        discord_intent = _extract_discord_message_intent(user_text)
-        # QA round 11/12: capture the pending-confirmation TARGET before this turn can mark a
-        # new one (same-turn trap) and require it to match the target we are about to use.
-        _relay_confirm_target = (_pending_relay_confirm.get("target")
-                                 if _pending_relay_is_fresh() else "")
-        # CACHE/COST (QA round 2): derive the boolean WITHOUT re-parsing. This used to call
-        # `_is_discord_message_request` (which parses again) and then parse a third time —
-        # up to 6 Laya passes for a plain "tell me a joke".
-        discord_message_request = discord_intent is not None
-        if not discord_message_request:
-            discord_message_request = ("discord" in _lower_user and bool(
-                re.search(r"\b(?:tell|ask|text|message|dm|send)\b", _lower_user)))
+    # [ARCHIVED/DISABLED OUTBOUND BOT RELAY - OPTION B]
+    # All outbound Discord messaging is handled via desktop GUI. Inbound DM listener remains active.
+    discord_intent = None
+    discord_message_request = False
+    # Uncomment to re-enable outbound bot relay:
+    # if _is_explicit_desktop_gui:
+    #     discord_intent = None
+    #     discord_message_request = False
+    # else:
+    #     discord_intent = _extract_discord_message_intent(user_text)
+    #     _relay_confirm_target = (_pending_relay_confirm.get("target")
+    #                              if _pending_relay_is_fresh() else "")
+    #     discord_message_request = discord_intent is not None
+    #     if not discord_message_request:
+    #         discord_message_request = ("discord" in _lower_user and bool(
+    #             re.search(r"\b(?:tell|ask|text|message|dm|send)\b", _lower_user)))
 
     # ID 8 (tool tie-break hint) decommissioned in laya-backwards-integration.md (Step 1):
     # Qwen 3.6 35B resolves schemas directly without a 300M model backseating round 0.
