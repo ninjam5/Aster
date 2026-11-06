@@ -110,6 +110,35 @@ class TestRelayToolBlocklist:
 
         assert clicked == [], "a relay turn must not drive the desktop"
 
+    def test_explicit_desktop_gui_exempts_from_relay(self, monkeypatch, relay_env):
+        """Commands like 'open discord and tell ob fine' must NOT be classified as bot relays."""
+        prompts = [
+            "open discord and tell ob 'fine'",
+            "open discord, Click on 'Ob' chat and tell him 'aloha bald human",
+            "launch discord and message ob",
+            "switch to discord and tell ob hi",
+        ]
+        for p in prompts:
+            assert brain._is_explicit_desktop_gui_command(p) is True
+            assert brain._extract_discord_message_intent(p) is None
+            assert brain._is_discord_message_request(p) is False
+
+    def test_explicit_desktop_gui_turn_rejects_send_discord_message(self, monkeypatch, relay_env):
+        """If model attempts send_discord_message on an explicit desktop GUI command, it is blocked with GUI guidance."""
+        monkeypatch.setattr(
+            brain, "_execute_llm_completion",
+            lambda **k: _tool_call("send_discord_message", '{"target_name": "ob", "message": "fine"}'),
+            raising=False
+        )
+        brain.messages[:] = [brain.messages[0]]
+        brain.process_user_input("open discord and tell ob 'fine'", None)
+
+        assert any(
+            m.get("role") == "tool" and "Do NOT use send_discord_message" in str(m.get("content", ""))
+            for m in brain.messages
+        )
+
+
 
 @pytest.fixture(autouse=True)
 def _isolate_brain_turn(tmp_path, monkeypatch):
