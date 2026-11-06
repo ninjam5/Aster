@@ -268,7 +268,7 @@ def re_examine_image(filepath: str, specific_question: str) -> str:
         ]
 
         from core.brain import _execute_llm_completion
-        answer = _execute_llm_completion(messages=one_shot_msg, temperature=0.2).get("content") or ""
+        answer = _execute_llm_completion(messages=one_shot_msg, temperature=0.2, n_predict=1500, enable_thinking=False).get("content") or ""
 
         if not answer:
             return "Error: Visual inference returned an empty response."
@@ -303,7 +303,7 @@ def start_screen_watcher(target_text: str) -> str:
                     ]
                 }]
                 from core.brain import _execute_llm_completion
-                screen_data = _execute_llm_completion(messages=screen_msgs, temperature=0.1).get("content") or ""
+                screen_data = _execute_llm_completion(messages=screen_msgs, temperature=0.1, n_predict=1500, enable_thinking=False).get("content") or ""
 
                 if not screen_data:
                     continue
@@ -601,6 +601,7 @@ def _qwen_vision_locate(goal: str, b64_img: str | None = None) -> dict | None:
             }],
             temperature=0.1,
             n_predict=1500,
+            enable_thinking=False,
         )
 
         raw = (resp.get("content") or "").strip()
@@ -651,6 +652,7 @@ def _qwen_vision_locate_boxes(goal: str, b64_img: str | None = None) -> list[dic
             }],
             temperature=0.1,
             n_predict=1500,
+            enable_thinking=False,
         )
 
         raw = (resp.get("content") or "").strip()
@@ -890,4 +892,4 @@ def verify_action_result(goal: str) -> str:
             )}
         ]
     }]
-    return _execute_llm_completion(messages=verify_msgs, temperature=0.1, n_predict=80).get("content") or ""
+    return _execute_llm_completion(messages=verify_msgs, temperature=0.1, n_predict=300, enable_thinking=False).get("content") or ""

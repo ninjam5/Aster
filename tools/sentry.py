@@ -42,7 +42,7 @@ def _analyze_frame_with_llm(img_b64: str) -> str | None:
         }]
 
         from core.brain import _execute_llm_completion
-        return _execute_llm_completion(messages=one_shot_msg, temperature=0.1, n_predict=20).get("content") or ""
+        return _execute_llm_completion(messages=one_shot_msg, temperature=0.1, n_predict=50, enable_thinking=False).get("content") or ""
     except Exception as e:
         print(f"[Sentry Vision] Vision analysis failed: {e}")
         return None

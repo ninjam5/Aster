@@ -150,6 +150,28 @@ class TestExecuteLlmCompletion:
         assert result["content"] is None
         assert result["tool_calls"] is not None
 
+    def test_enable_thinking_flag_passed_in_chat_template_kwargs(self, sample_messages):
+        """enable_thinking=False injects chat_template_kwargs into the payload."""
+        from core.brain import _execute_llm_completion
+
+        msg = {"role": "assistant", "content": "fast response"}
+        with patch("core.brain._LLM_SESSION.post", return_value=_make_mock_response(msg)) as mock_post:
+            _execute_llm_completion(messages=sample_messages, enable_thinking=False)
+
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload.get("chat_template_kwargs") == {"enable_thinking": False}
+
+    def test_enable_thinking_default_omits_chat_template_kwargs(self, sample_messages):
+        """When enable_thinking is None and chat_template_kwargs is None, payload has no chat_template_kwargs key."""
+        from core.brain import _execute_llm_completion
+
+        msg = {"role": "assistant", "content": "default response"}
+        with patch("core.brain._LLM_SESSION.post", return_value=_make_mock_response(msg)) as mock_post:
+            _execute_llm_completion(messages=sample_messages)
+
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert "chat_template_kwargs" not in sent_payload
+
 
 # ============================================================================
 # NATIVE TOOL CALL EXTRACTION TESTS

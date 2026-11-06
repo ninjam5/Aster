@@ -87,7 +87,7 @@ def _strip_think_tags(text: str) -> str:
 _LLM_SESSION = requests.Session()
 
 
-def _execute_llm_completion(messages: list[dict], temperature: float = None, n_predict: int = 1000, top_p: float = None, top_k: int = None, tools: list[dict] | None = None) -> dict:
+def _execute_llm_completion(messages: list[dict], temperature: float = None, n_predict: int = 1000, top_p: float = None, top_k: int = None, tools: list[dict] | None = None, enable_thinking: bool | None = None, chat_template_kwargs: dict | None = None) -> dict:
     """Sends messages in OpenAI chat format to llama-server /v1/chat/completions.
 
     Returns the full choices[0]["message"] dict (keys: role, content, tool_calls).
@@ -120,6 +120,12 @@ def _execute_llm_completion(messages: list[dict], temperature: float = None, n_p
     if tools is not None:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
+
+    extra_template_kwargs = dict(chat_template_kwargs or {})
+    if enable_thinking is not None:
+        extra_template_kwargs["enable_thinking"] = enable_thinking
+    if extra_template_kwargs:
+        payload["chat_template_kwargs"] = extra_template_kwargs
 
     # --- Diagnostic payload printer (gated: OFF unless /diagnostics on) ---
     _t_dbg0 = time.monotonic()
@@ -1812,10 +1818,10 @@ def _execute_tool_impl(tool_name, arguments):
                 )}
             ]
         }]
-        desc = (_execute_llm_completion(messages=screen_msgs, temperature=0.1, n_predict=800).get("content") or "")
+        desc = (_execute_llm_completion(messages=screen_msgs, temperature=0.1, n_predict=1500, enable_thinking=False).get("content") or "")
         if not desc or not desc.strip():
             # Apathy fallback: retry once at higher temperature
-            desc = (_execute_llm_completion(messages=screen_msgs, temperature=0.4, n_predict=800).get("content") or "")
+            desc = (_execute_llm_completion(messages=screen_msgs, temperature=0.4, n_predict=1500, enable_thinking=False).get("content") or "")
         if not desc or not desc.strip():
             desc = "[Screen description unavailable — proceed based on task context and visible element names.]"
         ui_guide = _get_ui_guide(desc)
@@ -1882,7 +1888,7 @@ def _execute_tool_impl(tool_name, arguments):
             ]
         }]
 
-        vision_result = (_execute_llm_completion(messages=webcam_msgs, temperature=0.2).get("content") or "")
+        vision_result = (_execute_llm_completion(messages=webcam_msgs, temperature=0.2, n_predict=1500, enable_thinking=False).get("content") or "")
         return f"[System Note: Webcam captured and analyzed successfully.]\n\nWebcam Analysis:\n{vision_result}"
     elif tool_name == "toggle_gesture_mode":
         import tools.gesture as gesture_mod
