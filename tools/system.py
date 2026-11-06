@@ -200,14 +200,34 @@ def open_application(app_name, action=None):
                             name = file[:-4].lower()
                             shortcuts[name] = os.path.join(root, file)
 
-        matches = difflib.get_close_matches(
-            app_name.lower(), list(shortcuts.keys()), n=1, cutoff=0.5
-        )
-
-        if matches:
-            os.startfile(shortcuts[matches[0]])
+        app_lower = (app_name or "").strip().lower()
+        # 1. Check Windows App Paths registry first (resolves chrome.exe, msedge.exe, etc. directly)
+        exe_name = _BROWSER_EXES.get(app_lower, f"{app_lower}.exe" if not app_lower.endswith(".exe") else app_lower)
+        app_path = _find_app_path(exe_name)
+        if app_path and os.path.exists(app_path):
+            os.startfile(app_path)
         else:
-            subprocess.Popen(f"start {app_name}", shell=True)
+            # 2. Match Start Menu shortcuts: exact -> word-boundary -> substring -> fuzzy
+            target_file = None
+            if app_lower in shortcuts:
+                target_file = shortcuts[app_lower]
+            elif any(app_lower in k.split() for k in shortcuts):
+                word_matches = [k for k in shortcuts if app_lower in k.split()]
+                word_matches.sort(key=len)
+                target_file = shortcuts[word_matches[0]]
+            elif any(app_lower in k for k in shortcuts):
+                sub_matches = [k for k in shortcuts if app_lower in k]
+                sub_matches.sort(key=len)
+                target_file = shortcuts[sub_matches[0]]
+            else:
+                fuzzy = difflib.get_close_matches(app_lower, list(shortcuts.keys()), n=1, cutoff=0.6)
+                if fuzzy:
+                    target_file = shortcuts[fuzzy[0]]
+
+            if target_file and os.path.exists(target_file):
+                os.startfile(target_file)
+            else:
+                subprocess.Popen(f"start {app_name}", shell=True)
 
         time.sleep(2.5)  # Let the window come to foreground before next tool fires
 
