@@ -792,7 +792,7 @@ ADMIN_TOOLS = [
         "type": "function",
         "function": {
             "name": "send_discord_message",
-            "description": "Sends a direct message to a known Discord contact name using the official Discord REST API and bot token. An exact contact name sends immediately; a nickname or fuzzy name is resolved by the local kernel and MUST be confirmed with confirm=true (the first call returns a CONFIRM REQUIRED note and sends nothing).",
+            "description": "Sends a direct message to a known Discord contact name using the official Discord REST API and bot token. DO NOT USE when the owner asks to 'open discord' or use GUI automation — for desktop app requests, use open_application('discord'), smart_click, and press_key. An exact contact name sends immediately; a nickname or fuzzy name is resolved by the local kernel and MUST be confirmed with confirm=true (the first call returns a CONFIRM REQUIRED note and sends nothing).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -3805,6 +3805,13 @@ def process_user_input(user_text, status_callback=None):
                         tool_result = (
                             "Error: Discord desktop parsing and GUI automation are disabled for Discord relay requests. "
                             "Use send_discord_message instead."
+                        )
+                    elif _is_explicit_desktop_gui and tool_name == "send_discord_message":
+                        tool_result = (
+                            "Error: The user explicitly commanded desktop GUI automation ('open discord'). "
+                            "Do NOT use send_discord_message. Drive the desktop app visually using "
+                            "open_application('discord'), smart_click on the contact or press_key('ctrl+k'), "
+                            "type_text, and press_key('enter')."
                         )
                     else:
                         if tool_name == "send_discord_message" and discord_intent is not None:
