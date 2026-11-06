@@ -1195,11 +1195,13 @@ ADMIN_TOOLS = [
                 "Clicks a UI element on screen. "
                 "Pass a natural language description of the element to click. "
                 "Works on buttons, links, menu items, icons, input fields, and checkboxes. "
+                "Call smart_click directly when asked to click, open, or interact with a known button, icon, or menu item — do NOT call look_at_screen first. "
+                "Set clicks=2 for double-clicking desktop icons or files. "
                 "Do NOT use for keyboard keys (Enter, Tab, Escape, etc.) — use press_key instead. "
                 "The result reports how the element was matched and the foreground window; "
                 "a result starting with FAILED means nothing was clicked. "
                 "Examples: smart_click(\"File menu\"), smart_click(\"Submit button\"), "
-                "smart_click(\"search bar at the top\")"
+                "smart_click(\"Chrome icon on taskbar\"), smart_click(\"Stremio icon on taskbar\")"
             ),
             "parameters": {
                 "type": "object",
@@ -1207,6 +1209,15 @@ ADMIN_TOOLS = [
                     "goal": {
                         "type": "string",
                         "description": "Natural language description of what to click"
+                    },
+                    "clicks": {
+                        "type": "integer",
+                        "description": "Number of clicks: 1 for single click (default), 2 for double click (e.g. to open desktop shortcuts or files)."
+                    },
+                    "button": {
+                        "type": "string",
+                        "enum": ["left", "right", "middle"],
+                        "description": "Mouse button: 'left' (default), 'right' (context menu), or 'middle'."
                     },
                     "confirm_send": {
                         "type": "boolean",
@@ -2047,9 +2058,13 @@ def _execute_tool_impl(tool_name, arguments):
                     f'FAILED — BLOCKED — could not verify that "{goal}" is safe to click '
                     f'(the send/destructive check errored). Confirm with the owner, then '
                     f're-call with confirm_send=true.')
+        clicks = int(arguments.get("clicks", 1))
+        button = str(arguments.get("button", "left")).lower()
+        if button not in ("left", "right", "middle"):
+            button = "left"
         coords = (loc["x"], loc["y"])
         pre_frame = capture_screen_small_gray()
-        pyautogui.click(coords[0], coords[1])
+        pyautogui.click(coords[0], coords[1], clicks=clicks, button=button)
         invalidate_screen_cache()
         time.sleep(0.8)
         changed = screens_differ(pre_frame, capture_screen_small_gray())
@@ -2061,7 +2076,8 @@ def _execute_tool_impl(tool_name, arguments):
             " WARNING: the screen did NOT visibly change after this click — it may have hit "
             "nothing. Do not assume it worked; verify on the screenshot or try another element."
         )
-        result_text = (f"Clicked '{goal}' at {coords} ({match_note}). "
+        action_verb = "Double-clicked" if clicks == 2 else ("Right-clicked" if button == "right" else "Clicked")
+        result_text = (f"{action_verb} '{goal}' at {coords} ({match_note}). "
                        f"Foreground window: {fg_title!r}.{change_note} "
                        f"[Check screenshot: if the target opened/is now active, this step is DONE — "
                        f"do NOT click '{goal}' again. Proceed to the next step in the task.]")

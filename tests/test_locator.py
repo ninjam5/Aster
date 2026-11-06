@@ -208,9 +208,20 @@ class TestQwenVisionGrounding:
             "score": 0.9,
         }
         with patch.object(tools.uia, "uia_locate", return_value=None), \
+             patch.object(vision, "locate_ui_elements_boxed", return_value=[]), \
              patch.object(vision, "_qwen_vision_locate", return_value=mock_result):
             res = vision.locate_ui_element_ex("search bar")
             assert res == mock_result
+
+    def test_locate_ui_element_ex_prefers_boxed(self):
+        from tools import vision
+        import tools.uia
+
+        mock_boxes = [{"box": (200, 100, 200, 100), "score": 0.9, "text": "search bar", "source": "qwen-vision"}]
+        with patch.object(tools.uia, "uia_locate", return_value=None), \
+             patch.object(vision, "locate_ui_elements_boxed", return_value=mock_boxes):
+            res = vision.locate_ui_element_ex("search bar")
+            assert res == {"x": 300, "y": 150, "source": "qwen-vision", "text": "search bar", "score": 0.9}
 
     def test_locate_ui_elements_boxed(self):
         from tools import vision
@@ -224,7 +235,7 @@ class TestQwenVisionGrounding:
              patch.object(core.brain, "_execute_llm_completion",
                           return_value={"content": '[{"label": "btn", "box_2d": [200, 100, 400, 200]}]'}):
             boxes = vision.locate_ui_elements_boxed("btn")
-            assert boxes == [{"box": (200, 100, 200, 100), "score": 0.9, "text": "btn"}]
+            assert boxes == [{"box": (200, 100, 200, 100), "score": 0.9, "text": "btn", "source": "qwen-vision"}]
 
     def test_locate_ui_elements_boxed_prefers_uia(self):
         from tools import vision
