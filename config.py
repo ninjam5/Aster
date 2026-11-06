@@ -315,7 +315,7 @@ AUTO_COMPACT_THRESHOLD = float(_cfg("runtime", "auto_compact_threshold", default
 # Screenshot width cap (px) for images sent to the vision model; 0 = full resolution.
 # Qwen's encoder tiles internally, so detail above ~1280px is largely discarded anyway --
 # capping here cuts the encode cost ~2x with no measured quality loss (2026-09-27).
-SCREENSHOT_MAX_WIDTH = int(_cfg("vision", "screenshot_max_width", default=1280))
+SCREENSHOT_MAX_WIDTH = int(_cfg("vision", "screenshot_max_width", default=0))
 
 # Minimum free system RAM (GB) required before Aster launches its own browser.
 # Launching Chrome on top of llama-server's mmap'd MoE experts has OOM'd this box

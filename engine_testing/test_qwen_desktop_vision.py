@@ -106,7 +106,7 @@ def build_grounding_prompt(goal: str, style: str = "point") -> str:
             f"You are a computer vision UI grounding model.\n"
             f"Look at the screenshot and locate the exact UI element: \"{goal}\".\n"
             f"Return ONLY a JSON object with the bounding box normalized to a 1000x1000 grid:\n"
-            f'{{"target": "{goal}", "box_2d": [ymin, xmin, ymax, xmax]}}\n'
+            f'{{"target": "{goal}", "box_2d": [xmin, ymin, xmax, ymax]}}\n'
             f"All values must be integers between 0 and 1000.\n"
             f"Do not include markdown or reasoning outside the JSON."
         )
@@ -162,14 +162,14 @@ def query_qwen_grounding(b64_img: str, prompt: str, temperature: float = 0.1) ->
 
 
 def parse_grounding_coordinates(raw_text: str) -> tuple[int, int, list[int] | None]:
-    """Extracts normalized [x, y] center (0-1000) and optional bounding box [ymin, xmin, ymax, xmax].
+    """Extracts normalized [x, y] center (0-1000) and optional bounding box [xmin, ymin, xmax, ymax].
 
     Supports:
     - {"point": [x, y]}
     - {"coordinate": [x, y]}
-    - {"box_2d": [ymin, xmin, ymax, xmax]}
-    - <|box_start|>(ymin, xmin), (ymax, xmax)<|box_end|>
-    - [x, y] or [ymin, xmin, ymax, xmax] lists
+    - {"box_2d": [xmin, ymin, xmax, ymax]}
+    - <|box_start|>(xmin, ymin), (xmax, ymax)<|box_end|>
+    - [x, y] or [xmin, ymin, xmax, ymax] lists
     """
     # 1. Check for standard JSON with "point", "point_2d", or "coordinate"
     match_point = re.search(r'["\'](?:point|point_2d|coordinate)["\']\s*:\s*\[\s*(\d+)\s*,\s*(\d+)\s*\]', raw_text)
@@ -177,34 +177,34 @@ def parse_grounding_coordinates(raw_text: str) -> tuple[int, int, list[int] | No
         x, y = int(match_point.group(1)), int(match_point.group(2))
         return x, y, None
 
-    # 2. Check for "box_2d" in JSON
-    match_box = re.search(r'["\']box_2d["\']\s*:\s*\[\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\]', raw_text)
+    # 2. Check for "box_2d" or "bbox_2d" in JSON
+    match_box = re.search(r'["\'](?:box_2d|bbox_2d|box)["\']\s*:\s*\[\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\]', raw_text)
     if match_box:
-        ymin, xmin, ymax, xmax = map(int, match_box.groups())
+        xmin, ymin, xmax, ymax = map(int, match_box.groups())
         center_x = (xmin + xmax) // 2
         center_y = (ymin + ymax) // 2
-        return center_x, center_y, [ymin, xmin, ymax, xmax]
+        return center_x, center_y, [xmin, ymin, xmax, ymax]
 
-    # 3. Check for Qwen native box tags: <|box_start|>(ymin, xmin), (ymax, xmax)<|box_end|>
+    # 3. Check for Qwen native box tags: <|box_start|>(xmin, ymin), (xmax, ymax)<|box_end|>
     match_tag = re.search(r'<\|box_start\|>\s*\((\d+)\s*,\s*(\d+)\)\s*,\s*\((\d+)\s*,\s*(\d+)\)\s*<\|box_end\|>', raw_text)
     if match_tag:
-        ymin, xmin, ymax, xmax = map(int, match_tag.groups())
+        xmin, ymin, xmax, ymax = map(int, match_tag.groups())
         center_x = (xmin + xmax) // 2
         center_y = (ymin + ymax) // 2
-        return center_x, center_y, [ymin, xmin, ymax, xmax]
+        return center_x, center_y, [xmin, ymin, xmax, ymax]
 
     # 4. Check for tool_call format: "arguments": {"action": "click", "coordinate": [x, y]}
     match_arg = re.search(r'["\']coordinate["\']\s*:\s*\[\s*(\d+)\s*,\s*(\d+)\s*\]', raw_text)
     if match_arg:
         return int(match_arg.group(1)), int(match_arg.group(2)), None
 
-    # 5. Check for 4-element integer list in text: [ymin, xmin, ymax, xmax]
+    # 5. Check for 4-element integer list in text: [xmin, ymin, xmax, ymax]
     match_4list = re.search(r'\[\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\]', raw_text)
     if match_4list:
-        ymin, xmin, ymax, xmax = map(int, match_4list.groups())
+        xmin, ymin, xmax, ymax = map(int, match_4list.groups())
         center_x = (xmin + xmax) // 2
         center_y = (ymin + ymax) // 2
-        return center_x, center_y, [ymin, xmin, ymax, xmax]
+        return center_x, center_y, [xmin, ymin, xmax, ymax]
 
     # 6. Check for 2-element list: [x, y]
     match_2list = re.search(r'\[\s*(\d+)\s*,\s*(\d+)\s*\]', raw_text)
@@ -243,7 +243,7 @@ def annotate_and_save(
 
     # Draw bounding box if present
     if box_norm:
-        ymin, xmin, ymax, xmax = box_norm
+        xmin, ymin, xmax, ymax = box_norm
         b_x1 = int((xmin / 1000.0) * phys_w)
         b_y1 = int((ymin / 1000.0) * phys_h)
         b_x2 = int((xmax / 1000.0) * phys_w)

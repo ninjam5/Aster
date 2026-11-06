@@ -394,11 +394,11 @@ def _parse_qwen_grounding(raw_text: str) -> tuple[int, int, list[int] | None] | 
 
     Supports:
       - JSON with 'point', 'point_2d', or 'coordinate': [x, y] -> (x, y, None)
-      - JSON with 'box_2d': [ymin, xmin, ymax, xmax] -> center ((xmin+xmax)//2, (ymin+ymax)//2, box)
-      - Native Qwen box tag: <|box_start|>(ymin, xmin), (ymax, xmax)<|box_end|>
-      - Standalone 4-element [ymin, xmin, ymax, xmax] or 2-element [x, y] list.
+      - JSON with 'box_2d', 'bbox_2d', or 'box': [xmin, ymin, xmax, ymax] -> center ((xmin+xmax)//2, (ymin+ymax)//2, box)
+      - Native Qwen box tag: <|box_start|>(xmin, ymin), (xmax, ymax)<|box_end|>
+      - Standalone 4-element [xmin, ymin, xmax, ymax] or 2-element [x, y] list.
 
-    Returns (center_x, center_y, box_coords) or None if not found or out of bounds.
+    Returns (center_x, center_y, [xmin, ymin, xmax, ymax]) or None if not found or out of bounds.
     """
     if not raw_text or not raw_text.strip():
         return None
@@ -430,19 +430,24 @@ def _parse_qwen_grounding(raw_text: str) -> tuple[int, int, list[int] | None] | 
                             return (x, y, None)
                     except (ValueError, TypeError):
                         pass
-            if "box_2d" in obj:
-                val = obj["box_2d"]
-                if isinstance(val, (list, tuple)) and len(val) >= 4:
-                    try:
-                        ymin, xmin, ymax, xmax = [int(v) for v in val[:4]]
-                        if (0 <= xmin <= 1000 and 0 <= xmax <= 1000 and
-                                0 <= ymin <= 1000 and 0 <= ymax <= 1000):
-                            cx = (xmin + xmax) // 2
-                            cy = (ymin + ymax) // 2
-                            if 0 <= cx <= 1000 and 0 <= cy <= 1000:
-                                return (cx, cy, [ymin, xmin, ymax, xmax])
-                    except (ValueError, TypeError):
-                        pass
+            for bkey in ("box_2d", "bbox_2d", "box"):
+                if bkey in obj:
+                    val = obj[bkey]
+                    if isinstance(val, (list, tuple)) and len(val) >= 4:
+                        try:
+                            xmin, ymin, xmax, ymax = [int(v) for v in val[:4]]
+                            if (0 <= xmin <= 1000 and 0 <= xmax <= 1000 and
+                                    0 <= ymin <= 1000 and 0 <= ymax <= 1000):
+                                if xmin > xmax:
+                                    xmin, xmax = xmax, xmin
+                                if ymin > ymax:
+                                    ymin, ymax = ymax, ymin
+                                cx = (xmin + xmax) // 2
+                                cy = (ymin + ymax) // 2
+                                if 0 <= cx <= 1000 and 0 <= cy <= 1000:
+                                    return (cx, cy, [xmin, ymin, xmax, ymax])
+                        except (ValueError, TypeError):
+                            pass
             for sub_val in obj.values():
                 if isinstance(sub_val, (dict, list, tuple)):
                     sub_res = _extract_from_obj(sub_val)
@@ -456,13 +461,17 @@ def _parse_qwen_grounding(raw_text: str) -> tuple[int, int, list[int] | None] | 
                         return sub_res
             elif len(obj) >= 4:
                 try:
-                    ymin, xmin, ymax, xmax = [int(v) for v in obj[:4]]
+                    xmin, ymin, xmax, ymax = [int(v) for v in obj[:4]]
                     if (0 <= xmin <= 1000 and 0 <= xmax <= 1000 and
                             0 <= ymin <= 1000 and 0 <= ymax <= 1000):
+                        if xmin > xmax:
+                            xmin, xmax = xmax, xmin
+                        if ymin > ymax:
+                            ymin, ymax = ymax, ymin
                         cx = (xmin + xmax) // 2
                         cy = (ymin + ymax) // 2
                         if 0 <= cx <= 1000 and 0 <= cy <= 1000:
-                            return (cx, cy, [ymin, xmin, ymax, xmax])
+                            return (cx, cy, [xmin, ymin, xmax, ymax])
                 except (ValueError, TypeError):
                     pass
             elif len(obj) >= 2:
@@ -499,19 +508,23 @@ def _parse_qwen_grounding(raw_text: str) -> tuple[int, int, list[int] | None] | 
         except Exception:
             pass
 
-    # 4. Check for Qwen box tag: <|box_start|>(ymin, xmin), (ymax, xmax)<|box_end|>
+    # 4. Check for Qwen box tag: <|box_start|>(xmin, ymin), (xmax, ymax)<|box_end|>
     box_tag_match = re.search(
         r'<\|box_start\|>\s*\(?\s*(\d{1,4})\s*,\s*(\d{1,4})\s*\)?\s*,\s*\(?\s*(\d{1,4})\s*,\s*(\d{1,4})\s*\)?\s*<\|box_end\|>',
         raw_text
     )
     if box_tag_match:
-        ymin, xmin, ymax, xmax = [int(g) for g in box_tag_match.groups()]
+        xmin, ymin, xmax, ymax = [int(g) for g in box_tag_match.groups()]
         if (0 <= xmin <= 1000 and 0 <= xmax <= 1000 and
                 0 <= ymin <= 1000 and 0 <= ymax <= 1000):
+            if xmin > xmax:
+                xmin, xmax = xmax, xmin
+            if ymin > ymax:
+                ymin, ymax = ymax, ymin
             cx = (xmin + xmax) // 2
             cy = (ymin + ymax) // 2
             if 0 <= cx <= 1000 and 0 <= cy <= 1000:
-                return (cx, cy, [ymin, xmin, ymax, xmax])
+                return (cx, cy, [xmin, ymin, xmax, ymax])
 
     # 5. Regex for key patterns if JSON was malformed
     pt_match = re.search(r'"(?:point|point_2d|coordinate)"\s*:\s*\[\s*(\d{1,4})\s*,\s*(\d{1,4})\s*\]', raw_text)
@@ -520,26 +533,34 @@ def _parse_qwen_grounding(raw_text: str) -> tuple[int, int, list[int] | None] | 
         if 0 <= x <= 1000 and 0 <= y <= 1000:
             return (x, y, None)
 
-    box_key_match = re.search(r'"box_2d"\s*:\s*\[\s*(\d{1,4})\s*,\s*(\d{1,4})\s*,\s*(\d{1,4})\s*,\s*(\d{1,4})\s*\]', raw_text)
+    box_key_match = re.search(r'"(?:box_2d|bbox_2d|box)"\s*:\s*\[\s*(\d{1,4})\s*,\s*(\d{1,4})\s*,\s*(\d{1,4})\s*,\s*(\d{1,4})\s*\]', raw_text)
     if box_key_match:
-        ymin, xmin, ymax, xmax = [int(g) for g in box_key_match.groups()]
+        xmin, ymin, xmax, ymax = [int(g) for g in box_key_match.groups()]
         if (0 <= xmin <= 1000 and 0 <= xmax <= 1000 and
                 0 <= ymin <= 1000 and 0 <= ymax <= 1000):
+            if xmin > xmax:
+                xmin, xmax = xmax, xmin
+            if ymin > ymax:
+                ymin, ymax = ymax, ymin
             cx = (xmin + xmax) // 2
             cy = (ymin + ymax) // 2
             if 0 <= cx <= 1000 and 0 <= cy <= 1000:
-                return (cx, cy, [ymin, xmin, ymax, xmax])
+                return (cx, cy, [xmin, ymin, xmax, ymax])
 
-    # 6. Standalone 4-element list: [ymin, xmin, ymax, xmax]
+    # 6. Standalone 4-element list: [xmin, ymin, xmax, ymax]
     list4_match = re.search(r'\[\s*(\d{1,4})\s*,\s*(\d{1,4})\s*,\s*(\d{1,4})\s*,\s*(\d{1,4})\s*\]', raw_text)
     if list4_match:
-        ymin, xmin, ymax, xmax = [int(g) for g in list4_match.groups()]
+        xmin, ymin, xmax, ymax = [int(g) for g in list4_match.groups()]
         if (0 <= xmin <= 1000 and 0 <= xmax <= 1000 and
                 0 <= ymin <= 1000 and 0 <= ymax <= 1000):
+            if xmin > xmax:
+                xmin, xmax = xmax, xmin
+            if ymin > ymax:
+                ymin, ymax = ymax, ymin
             cx = (xmin + xmax) // 2
             cy = (ymin + ymax) // 2
             if 0 <= cx <= 1000 and 0 <= cy <= 1000:
-                return (cx, cy, [ymin, xmin, ymax, xmax])
+                return (cx, cy, [xmin, ymin, xmax, ymax])
 
     # 7. Standalone 2-element list: [x, y]
     list2_match = re.search(r'\[\s*(\d{1,4})\s*,\s*(\d{1,4})\s*\]', raw_text)
@@ -555,7 +576,7 @@ def _qwen_vision_locate(goal: str, b64_img: str | None = None) -> dict | None:
     """Locate a UI element via direct Qwen 3.6 vision grounding."""
     try:
         if b64_img is None:
-            b64_img = capture_screen_base64()
+            b64_img = capture_screen_base64(max_width=0)
         if not b64_img:
             return None
 
@@ -605,7 +626,7 @@ def _qwen_vision_locate_boxes(goal: str, b64_img: str | None = None) -> list[dic
     """Locate all visible instances of `goal` on screen as logical-pixel boxes."""
     try:
         if b64_img is None:
-            b64_img = capture_screen_base64()
+            b64_img = capture_screen_base64(max_width=0)
         if not b64_img:
             return []
 
@@ -613,8 +634,8 @@ def _qwen_vision_locate_boxes(goal: str, b64_img: str | None = None) -> list[dic
             f'You are a computer vision UI grounding model.\n'
             f'Look at the screenshot and find all visible instances of the UI element: "{goal}".\n'
             f'Return ONLY a JSON array of objects with the bounding boxes normalized to a 1000x1000 grid:\n'
-            f'[{{"label": "{goal}", "box_2d": [ymin, xmin, ymax, xmax]}}]\n'
-            f'Where ymin, xmin, ymax, xmax are normalized to 0-1000.\n'
+            f'[{{"label": "{goal}", "box_2d": [xmin, ymin, xmax, ymax]}}]\n'
+            f'Where xmin,xmax are horizontal (0-1000, left to right) and ymin,ymax are vertical (0-1000, top to bottom).\n'
             f'If no instances are visible on the screen, return ONLY: []\n'
             f'Do not include markdown or reasoning outside the JSON.'
         )
@@ -654,13 +675,13 @@ def _qwen_vision_locate_boxes(goal: str, b64_img: str | None = None) -> list[dic
             if isinstance(parsed_json, list):
                 for item in parsed_json:
                     if isinstance(item, dict):
-                        b = item.get("box_2d") or item.get("box")
+                        b = item.get("box_2d") or item.get("bbox_2d") or item.get("box")
                         if isinstance(b, (list, tuple)) and len(b) >= 4:
                             boxes.append([int(v) for v in b[:4]])
                     elif isinstance(item, (list, tuple)) and len(item) >= 4:
                         boxes.append([int(v) for v in item[:4]])
             elif isinstance(parsed_json, dict):
-                b = parsed_json.get("box_2d") or parsed_json.get("box")
+                b = parsed_json.get("box_2d") or parsed_json.get("bbox_2d") or parsed_json.get("box")
                 if isinstance(b, (list, tuple)) and len(b) >= 4:
                     boxes.append([int(v) for v in b[:4]])
         except Exception:
@@ -668,7 +689,7 @@ def _qwen_vision_locate_boxes(goal: str, b64_img: str | None = None) -> list[dic
 
         # 2. Also regex search for box_2d or Qwen box tokens if JSON did not find any
         if not boxes:
-            for m in re.finditer(r'"box_2d"\s*:\s*\[\s*(\d{1,4})\s*,\s*(\d{1,4})\s*,\s*(\d{1,4})\s*,\s*(\d{1,4})\s*\]', raw):
+            for m in re.finditer(r'"(?:box_2d|bbox_2d|box)"\s*:\s*\[\s*(\d{1,4})\s*,\s*(\d{1,4})\s*,\s*(\d{1,4})\s*,\s*(\d{1,4})\s*\]', raw):
                 boxes.append([int(g) for g in m.groups()])
 
         if not boxes:
@@ -680,13 +701,17 @@ def _qwen_vision_locate_boxes(goal: str, b64_img: str | None = None) -> list[dic
 
         matches: list[dict] = []
         for b in boxes:
-            ymin, xmin, ymax, xmax = b
+            xmin, ymin, xmax, ymax = b
             if not (0 <= xmin <= 1000 and 0 <= xmax <= 1000 and 0 <= ymin <= 1000 and 0 <= ymax <= 1000):
                 continue
+            if xmin > xmax:
+                xmin, xmax = xmax, xmin
+            if ymin > ymax:
+                ymin, ymax = ymax, ymin
             left = int((xmin / 1000.0) * logical_w)
             top = int((ymin / 1000.0) * logical_h)
-            width = max(1, int(((xmax - xmin) / 1000.0) * logical_w))
-            height = max(1, int(((ymax - ymin) / 1000.0) * logical_h))
+            width = max(16, int(((xmax - xmin) / 1000.0) * logical_w))
+            height = max(16, int(((ymax - ymin) / 1000.0) * logical_h))
             matches.append({"box": (left, top, width, height), "score": 0.9, "text": goal})
 
         # 3. If no box_2d was found, try fallback to single grounding
@@ -695,11 +720,11 @@ def _qwen_vision_locate_boxes(goal: str, b64_img: str | None = None) -> list[dic
             if single:
                 x_norm, y_norm, box_coords = single
                 if box_coords:
-                    ymin, xmin, ymax, xmax = box_coords
+                    xmin, ymin, xmax, ymax = box_coords
                     left = int((xmin / 1000.0) * logical_w)
                     top = int((ymin / 1000.0) * logical_h)
-                    width = max(1, int(((xmax - xmin) / 1000.0) * logical_w))
-                    height = max(1, int(((ymax - ymin) / 1000.0) * logical_h))
+                    width = max(16, int(((xmax - xmin) / 1000.0) * logical_w))
+                    height = max(16, int(((ymax - ymin) / 1000.0) * logical_h))
                     matches.append({"box": (left, top, width, height), "score": 0.9, "text": goal})
                 else:
                     lx = int((x_norm / 1000.0) * logical_w)
@@ -781,9 +806,60 @@ def locate_ui_element(goal: str) -> tuple[int, int] | None:
 def locate_ui_elements_boxed(goal: str, threshold: float = 0.5) -> list[dict]:
     """Locate ALL on-screen matches for `goal`, returned as logical-pixel boxes.
 
-    Delegates directly to Direct Qwen 3.6 Vision Grounding.
-    Returns [{"box": (left, top, width, height), "score": 0.9, "text": goal}, ...].
+    First checks Track 0 (Windows UIA exact bounding rectangles) for fast,
+    pixel-accurate OS control rects. If UIA finds no strong matches, delegates
+    to Direct Qwen 3.6 Vision Grounding (`_qwen_vision_locate_boxes`).
+    Returns [{"box": (left, top, width, height), "score": ..., "text": ...}, ...].
     """
+    # Track 0: Check Windows UIA accessibility tree for exact OS rectangles first
+    try:
+        from tools.uia import uia_nodes
+        from tools.locator_common import parse_goal, score_text, spatial_weight
+        candidates, desktop_size = uia_nodes()
+        if candidates and desktop_size and desktop_size[0] > 0 and desktop_size[1] > 0:
+            desk_w, desk_h = desktop_size
+            logical_w, logical_h = pyautogui.size()
+            scale_x = logical_w / desk_w if desk_w else 1.0
+            scale_y = logical_h / desk_h if desk_h else 1.0
+            parsed = parse_goal(goal)
+            uia_threshold = max(0.75, float(threshold))
+            uia_matches: list[dict] = []
+            for cand in candidates:
+                score = score_text(cand.get("name", ""), parsed)
+                if parsed["type_hints"] and cand.get("type") in parsed["type_hints"]:
+                    score = min(1.0, score + 0.05)
+                x1, y1, x2, y2 = cand["rect"]
+                cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+                score *= spatial_weight(cx, cy, desk_w, desk_h, parsed["spatial"])
+                if score < uia_threshold:
+                    continue
+                left = int(x1 * scale_x)
+                top = int(y1 * scale_y)
+                width = max(8, int((x2 - x1) * scale_x))
+                height = max(8, int((y2 - y1) * scale_y))
+                # Ignore giant container panes covering more than half the screen
+                if width > logical_w * 0.6 and height > logical_h * 0.6:
+                    continue
+                uia_matches.append({
+                    "box": (left, top, width, height),
+                    "score": round(score, 2),
+                    "text": cand.get("name", goal),
+                })
+            if uia_matches:
+                uia_matches.sort(key=lambda m: m["score"], reverse=True)
+                deduped_uia: list[dict] = []
+                for m in uia_matches:
+                    mcx = m["box"][0] + m["box"][2] / 2
+                    mcy = m["box"][1] + m["box"][3] / 2
+                    if any(abs(mcx - (d["box"][0] + d["box"][2] / 2)) < 10
+                           and abs(mcy - (d["box"][1] + d["box"][3] / 2)) < 10 for d in deduped_uia):
+                        continue
+                    deduped_uia.append(m)
+                print(f"[Locator] boxed (UIA): {len(deduped_uia)} match(es) for {goal!r}")
+                return deduped_uia
+    except Exception as e:
+        print(f"[Locator] UIA boxed track unavailable: {e}")
+
     return _qwen_vision_locate_boxes(goal)
 
 

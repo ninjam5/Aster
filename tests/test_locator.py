@@ -134,13 +134,13 @@ class TestQwenVisionGrounding:
 
     def test_parse_qwen_grounding_box_2d(self):
         from tools import vision
-        res = vision._parse_qwen_grounding('{"box_2d": [40, 100, 80, 200]}')
-        assert res == (150, 60, [40, 100, 80, 200])
+        res = vision._parse_qwen_grounding('{"box_2d": [100, 40, 200, 80]}')
+        assert res == (150, 60, [100, 40, 200, 80])
 
     def test_parse_qwen_grounding_box_tags(self):
         from tools import vision
-        res = vision._parse_qwen_grounding('<|box_start|>(40, 100), (80, 200)<|box_end|>')
-        assert res == (150, 60, [40, 100, 80, 200])
+        res = vision._parse_qwen_grounding('<|box_start|>(100, 40), (200, 80)<|box_end|>')
+        assert res == (150, 60, [100, 40, 200, 80])
 
     def test_parse_qwen_grounding_invalid_or_not_found(self):
         from tools import vision
@@ -214,15 +214,30 @@ class TestQwenVisionGrounding:
 
     def test_locate_ui_elements_boxed(self):
         from tools import vision
+        import tools.uia
         import core.brain
         import pyautogui
 
-        with patch.object(vision, "capture_screen_base64", return_value="fakeb64"), \
+        with patch.object(tools.uia, "uia_nodes", return_value=([], (0, 0))), \
+             patch.object(vision, "capture_screen_base64", return_value="fakeb64"), \
              patch.object(pyautogui, "size", return_value=(1000, 1000)), \
              patch.object(core.brain, "_execute_llm_completion",
-                          return_value={"content": '[{"label": "btn", "box_2d": [100, 200, 200, 400]}]'}):
+                          return_value={"content": '[{"label": "btn", "box_2d": [200, 100, 400, 200]}]'}):
             boxes = vision.locate_ui_elements_boxed("btn")
             assert boxes == [{"box": (200, 100, 200, 100), "score": 0.9, "text": "btn"}]
+
+    def test_locate_ui_elements_boxed_prefers_uia(self):
+        from tools import vision
+        import tools.uia
+        import pyautogui
+
+        fake_cands = [{"name": "Submit Button", "type": "ButtonControl", "rect": (100, 200, 220, 240)}]
+        with patch.object(tools.uia, "uia_nodes", return_value=(fake_cands, (1920, 1080))), \
+             patch.object(pyautogui, "size", return_value=(1920, 1080)):
+            boxes = vision.locate_ui_elements_boxed("Submit Button")
+            assert len(boxes) == 1
+            assert boxes[0]["box"] == (100, 200, 120, 40)
+            assert boxes[0]["text"] == "Submit Button"
 
     def test_invalidate_screen_cache_no_error(self):
         from tools import vision

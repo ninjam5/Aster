@@ -63,14 +63,31 @@ def _run_overlay(boxes, duration):
             except Exception:
                 pass
 
-        root.bind("<Key>", _dismiss)
-        root.bind("<Button>", _dismiss)
+        # Make the overlay click-through on Windows so the user can interact with
+        # the highlighted element or take screenshots (Win+Shift+S / Snipping Tool)
+        # without the overlay intercepting clicks or immediately destroying itself.
+        try:
+            import ctypes
+            root.update_idletasks()
+            hwnd = ctypes.windll.user32.GetParent(root.winfo_id()) or root.winfo_id()
+            GWL_EXSTYLE = -20
+            WS_EX_LAYERED = 0x00080000
+            WS_EX_TRANSPARENT = 0x00000020
+            WS_EX_NOACTIVATE = 0x08000000
+            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            ctypes.windll.user32.SetWindowLongW(
+                hwnd, GWL_EXSTYLE, style | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE
+            )
+        except Exception:
+            pass
+
+        # Only dismiss on Escape (not arbitrary keys like Win+Shift+S or PrtScn)
+        root.bind("<Escape>", _dismiss)
         root.after(int(duration * 1000), _dismiss)
 
         with _lock:
             _active_root = root
 
-        root.focus_force()
         root.mainloop()
     except Exception as e:
         print(f"[Assist] Overlay error: {e}")
