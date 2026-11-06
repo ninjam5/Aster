@@ -2437,31 +2437,6 @@ _EXPLICIT_SEND_PATTERNS = [
 ]
 
 
-_EXPLICIT_DESKTOP_GUI_PATTERNS = [
-    re.compile(r"\b(?:open|launch|start|switch to|go to|bring up|focus)\s+(?:up\s+)?(?:the\s+)?discord\b", re.IGNORECASE),
-    re.compile(r"\b(?:in|on)\s+(?:the\s+)?discord\s+(?:app|desktop|window)\b", re.IGNORECASE),
-    re.compile(r"\b(?:click|smart_click|ui navigation|on desktop|on screen|desktop app)\b", re.IGNORECASE),
-]
-
-_EXPLICIT_DESKTOP_GUI_KEYWORDS = (
-    "open discord", "open up discord", "launch discord", "start discord",
-    "switch to discord", "go to discord", "bring up discord", "focus discord",
-    "desktop discord", "discord desktop", "discord app",
-    "click on", "click", "smart_click", "ui navigation", "gui",
-    "on screen", "on desktop",
-)
-
-
-def _is_explicit_desktop_gui_command(text: str) -> bool:
-    """True when user text commands interacting with Discord or an app via desktop GUI."""
-    if not isinstance(text, str):
-        return False
-    lowered = text.lower()
-    if any(kw in lowered for kw in _EXPLICIT_DESKTOP_GUI_KEYWORDS):
-        return True
-    return any(p.search(lowered) for p in _EXPLICIT_DESKTOP_GUI_PATTERNS)
-
-
 def _is_explicit_send_command(user_text: str) -> bool:
     """True when the owner explicitly commands sending a message or submitting a form in their prompt."""
     if not user_text or not isinstance(user_text, str):
@@ -2513,10 +2488,6 @@ def _extract_discord_message_intent(user_text: str) -> dict | None:
     text = re.sub(r"^\s*(?:\[(?:Speaker|Ambient|Image|System)[^\]]*\]\s*)+", "", user_text)
     text = re.sub(r"\s+", " ", text.strip())
     if not text:
-        return None
-
-    # Explicit desktop GUI instructions are NOT bot relay requests.
-    if _is_explicit_desktop_gui_command(text):
         return None
 
     match = re.match(
@@ -2617,8 +2588,6 @@ def _laya_relay_intent(text: str) -> bool:
 
 def _is_discord_message_request(user_text: str) -> bool:
     if not isinstance(user_text, str):
-        return False
-    if _is_explicit_desktop_gui_command(user_text):
         return False
     if _extract_discord_message_intent(user_text) is not None:
         return True
@@ -3598,7 +3567,6 @@ def process_user_input(user_text, status_callback=None):
         _turn_count += 1
 
     _lower_user = str(user_text).lower()
-    _is_explicit_desktop_gui = _is_explicit_desktop_gui_command(user_text)
 
     # [ARCHIVED/DISABLED OUTBOUND BOT RELAY - OPTION B]
     # All outbound Discord messaging is handled via desktop GUI. Inbound DM listener remains active.
@@ -3755,13 +3723,6 @@ def process_user_input(user_text, status_callback=None):
                 if _tool_hint and tool_round == 0:
                     eval_msgs.append({"role": "system", "content": _tool_hint})
 
-                if _is_explicit_desktop_gui and tool_round == 0:
-                    eval_msgs.append({"role": "system", "content": (
-                        "[DESKTOP GUI AUTOMATION: The user explicitly commanded desktop GUI interaction (e.g. 'open discord', 'click', 'UI navigation'). "
-                        "Do NOT call send_discord_message or any background API tools. "
-                        "Drive the application visually on the desktop screen: launch/focus it using open_application, check playbooks with get_ui_playbook, navigate using smart_click or press_key('ctrl+k'), type text with smart_type, and submit with press_key('enter').]"
-                    )})
-
                 if discord_message_request and discord_intent and tool_round == 0:
                     _relay_target = discord_intent["target"]
                     _relay_payload = discord_intent["payload"]
@@ -3838,13 +3799,6 @@ def process_user_input(user_text, status_callback=None):
                         tool_result = (
                             "Error: Discord desktop parsing and GUI automation are disabled for Discord relay requests. "
                             "Use send_discord_message instead."
-                        )
-                    elif _is_explicit_desktop_gui and tool_name == "send_discord_message":
-                        tool_result = (
-                            "Error: The user explicitly commanded desktop GUI automation ('open discord'). "
-                            "Do NOT use send_discord_message. Drive the desktop app visually using "
-                            "open_application('discord'), smart_click on the contact or press_key('ctrl+k'), "
-                            "type_text, and press_key('enter')."
                         )
                     else:
                         if tool_name == "send_discord_message" and discord_intent is not None:
