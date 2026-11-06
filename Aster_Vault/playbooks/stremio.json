@@ -1,0 +1,85 @@
+{
+  "id": "stremio",
+  "tier": "desktop",
+  "name": "Stremio",
+  "match": {
+    "process_names": ["stremio.exe", "Stremio.exe"],
+    "title_keywords": ["stremio"],
+    "domains": ["web.stremio.com"]
+  },
+  "metadata": {
+    "version": "1.0",
+    "source": "preseed",
+    "created_at": "2026-11-06",
+    "last_verified": "2026-11-06",
+    "consecutive_failures": 0,
+    "usage_count": 0
+  },
+  "layout_summary": "Left navigation sidebar: Home, Discover, Library, Calendar, Addons, Settings. Top center: global Search or paste link bar. On media detail pages: poster/synopsis on left, season/episode list or stream source cards in the right-side panel.",
+  "avoid_traps": [
+    "After clicking a movie/series poster, you must select an episode (for series) and then click a specific stream source card on the right panel to start playback.",
+    "Do NOT click the top-right window controls when trying to toggle fullscreen — press 'f' inside the video player."
+  ],
+  "actions": {
+    "search": {
+      "shortcut": "",
+      "primary": "smart_type('search bar at top', query, submit=true)",
+      "visual_fallback": "smart_click('Search or paste link bar at top center') -> type_text(query) -> press_key('enter')",
+      "verify": "Search results grid for Movies and Series is displayed"
+    },
+    "select_episode": {
+      "shortcut": "",
+      "primary": "smart_click('episode item in right-side panel on details page')",
+      "visual_fallback": "smart_click('Season dropdown at top of right panel')",
+      "verify": "Right panel transitions from episode list to available stream sources"
+    },
+    "select_stream": {
+      "shortcut": "",
+      "primary": "smart_click('stream source card on right panel')",
+      "visual_fallback": "smart_click('first 1080p or 4K stream entry on the right panel')",
+      "verify": "Video player opens and begins loading the stream"
+    },
+    "play_pause": {
+      "shortcut": "space",
+      "primary": "press_key('space')",
+      "visual_fallback": "smart_click('Play or Pause icon at bottom-left of video player')",
+      "verify": "Video playback toggles between playing and paused"
+    },
+    "fullscreen": {
+      "shortcut": "f",
+      "primary": "press_key('f')",
+      "visual_fallback": "smart_click('Fullscreen icon at bottom-right of video player')",
+      "verify": "Video player toggles fullscreen mode"
+    },
+    "exit_player": {
+      "shortcut": "escape",
+      "primary": "press_key('escape')",
+      "visual_fallback": "smart_click('Back arrow at top-left of player')",
+      "verify": "Exits fullscreen or returns to the media details page"
+    },
+    "toggle_subtitles": {
+      "shortcut": "s",
+      "primary": "press_key('s')",
+      "visual_fallback": "smart_click('Subtitles icon on bottom player bar')",
+      "verify": "Subtitles menu opens or toggles"
+    },
+    "audio_tracks": {
+      "shortcut": "a",
+      "primary": "press_key('a')",
+      "visual_fallback": "smart_click('Audio tracks speaker/waveform icon on bottom player bar')",
+      "verify": "Audio track selection menu opens"
+    },
+    "seek_forward": {
+      "shortcut": "right",
+      "primary": "press_key('right')",
+      "visual_fallback": "smart_click('timeline scrubber bar ahead of current position')",
+      "verify": "Playback jumps forward"
+    },
+    "seek_backward": {
+      "shortcut": "left",
+      "primary": "press_key('left')",
+      "visual_fallback": "smart_click('timeline scrubber bar behind current position')",
+      "verify": "Playback jumps backward"
+    }
+  }
+}

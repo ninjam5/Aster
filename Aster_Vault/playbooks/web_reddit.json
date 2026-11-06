@@ -1,0 +1,61 @@
+{
+  "id": "web_reddit",
+  "tier": "web",
+  "name": "Reddit",
+  "match": {
+    "process_names": [],
+    "title_keywords": ["reddit"],
+    "domains": ["reddit.com"]
+  },
+  "metadata": {
+    "version": "1.0",
+    "source": "preseed",
+    "created_at": "2026-11-06",
+    "last_verified": "2026-11-06",
+    "consecutive_failures": 0,
+    "usage_count": 0
+  },
+  "layout_summary": "Top header: Reddit logo on left, centered rounded 'Search Reddit' bar, 'Create' post button, notifications, and profile on right. Left sidebar: Home, Popular, All, Recent communities. Center column: feed of posts with upvote/downvote arrows and comment counts. Right sidebar: subreddit info and rules.",
+  "avoid_traps": [
+    "Do NOT click 'Get App' or 'Log In' promotional banners if browsing a public thread.",
+    "Clicking an external link thumbnail opens an external site instead of the Reddit comments — click the post title or comments pill to view the discussion."
+  ],
+  "actions": {
+    "search": {
+      "shortcut": "/",
+      "primary": "press_key('/') -> type_text(query) -> press_key('enter')",
+      "visual_fallback": "smart_type('Search Reddit bar at top center', query, submit=true)",
+      "verify": "Reddit search results page loads"
+    },
+    "next_post": {
+      "shortcut": "j",
+      "primary": "press_key('j')",
+      "visual_fallback": "scroll_screen('down', 4)",
+      "verify": "Focus moves down to the next post in the feed"
+    },
+    "prev_post": {
+      "shortcut": "k",
+      "primary": "press_key('k')",
+      "visual_fallback": "scroll_screen('up', 4)",
+      "verify": "Focus moves up to the previous post in the feed"
+    },
+    "upvote": {
+      "shortcut": "a",
+      "primary": "press_key('a')",
+      "visual_fallback": "smart_click('Upvote arrow button on post')",
+      "verify": "Post upvote arrow turns orange-red"
+    },
+    "downvote": {
+      "shortcut": "z",
+      "primary": "press_key('z')",
+      "visual_fallback": "smart_click('Downvote arrow button on post')",
+      "verify": "Post downvote arrow turns periwinkle blue"
+    },
+    "open_comments": {
+      "shortcut": "c",
+      "primary": "press_key('c')",
+      "visual_fallback": "smart_click('comments button below post')",
+      "verify": "Post comment thread opens"
+    }
+  }
+}

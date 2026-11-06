@@ -1,0 +1,43 @@
+{
+  "id": "web_github",
+  "tier": "web",
+  "name": "GitHub",
+  "match": {
+    "process_names": [],
+    "title_keywords": ["github"],
+    "domains": ["github.com"]
+  },
+  "metadata": {
+    "version": "1.0",
+    "source": "preseed",
+    "created_at": "2026-11-06",
+    "last_verified": "2026-11-06",
+    "consecutive_failures": 0,
+    "usage_count": 0
+  },
+  "layout_summary": "Top navigation bar: hamburger menu, repository breadcrumb path, 'Type / to search' bar at top-right, '+' create menu, Issues/PRs icons, user avatar. Below header on repo pages: Code, Issues, Pull requests, Actions, Security, Insights tabs. Main area: file tree and README.md below.",
+  "avoid_traps": [
+    "Do NOT manually click through nested folders in a repository when looking for a specific file — press 't' to open the instant file finder.",
+    "Only use single-key shortcuts ('/', 's', 't') when no text input is currently focused."
+  ],
+  "actions": {
+    "search": {
+      "shortcut": "/",
+      "primary": "press_key('/') -> type_text(query) -> press_key('enter')",
+      "visual_fallback": "smart_type('Type / to search bar at top', query, submit=true)",
+      "verify": "GitHub search modal opens and submits search query"
+    },
+    "find_file": {
+      "shortcut": "t",
+      "primary": "press_key('t') -> type_text(filename) -> press_key('enter')",
+      "visual_fallback": "smart_type('Go to file input on repo page', filename, submit=true)",
+      "verify": "Repository file finder filters and opens the matching file"
+    },
+    "command_palette": {
+      "shortcut": "ctrl+k",
+      "primary": "press_key('ctrl+k')",
+      "visual_fallback": "press_key('alt+k')",
+      "verify": "GitHub Command Palette modal opens"
+    }
+  }
+}

@@ -27,6 +27,8 @@ nul
 Aster_Vault/*
 !Aster_Vault/System_Prompts/jarvis.md
 !Aster_Vault/System_Prompts/_shared_tool_laws.md
+!Aster_Vault/playbooks/
+!Aster_Vault/playbooks/*.json
 
 # ----------------------------------------------------------------------------
 # Python

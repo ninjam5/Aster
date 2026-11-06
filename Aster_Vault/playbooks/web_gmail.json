@@ -1,0 +1,49 @@
+{
+  "id": "web_gmail",
+  "tier": "web",
+  "name": "Gmail",
+  "match": {
+    "process_names": [],
+    "title_keywords": ["gmail", " - mail - "],
+    "domains": ["mail.google.com"]
+  },
+  "metadata": {
+    "version": "1.0",
+    "source": "preseed",
+    "created_at": "2026-11-06",
+    "last_verified": "2026-11-06",
+    "consecutive_failures": 0,
+    "usage_count": 0
+  },
+  "layout_summary": "Top header: Gmail logo at left, centered 'Search mail' input bar, settings/apps/profile icons at top-right. Left sidebar: prominent 'Compose' button at top-left, followed by Inbox, Starred, Snoozed, Sent, Drafts folders. Center pane: email thread list or open email conversation with Reply/Forward buttons at bottom.",
+  "avoid_traps": [
+    "In the compose modal, pressing 'enter' inside the message body inserts a newline rather than sending — use ctrl+enter or click the blue 'Send' button at bottom-left of the compose pane.",
+    "Single-key shortcuts ('c', 'r', 'e') require Gmail keyboard shortcuts to be active or no text input focused; always fall back to smart_click if the compose/reply box does not appear."
+  ],
+  "actions": {
+    "search_mail": {
+      "shortcut": "/",
+      "primary": "press_key('/') -> type_text(query) -> press_key('enter')",
+      "visual_fallback": "smart_type('Search mail box at top center', query, submit=true)",
+      "verify": "Email list updates to show matching messages"
+    },
+    "compose": {
+      "shortcut": "c",
+      "primary": "smart_click('Compose button at top-left')",
+      "visual_fallback": "press_key('c')",
+      "verify": "New Message compose window opens at bottom-right"
+    },
+    "reply": {
+      "shortcut": "r",
+      "primary": "smart_click('Reply button at bottom of email')",
+      "visual_fallback": "press_key('r')",
+      "verify": "Reply editor box opens at the bottom of the email thread"
+    },
+    "archive": {
+      "shortcut": "e",
+      "primary": "press_key('e')",
+      "visual_fallback": "smart_click('Archive box with down arrow icon in top action bar')",
+      "verify": "Conversation is archived from the Inbox"
+    }
+  }
+}

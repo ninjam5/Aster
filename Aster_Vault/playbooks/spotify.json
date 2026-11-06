@@ -1,0 +1,73 @@
+{
+  "id": "spotify",
+  "tier": "desktop",
+  "name": "Spotify",
+  "match": {
+    "process_names": ["Spotify.exe"],
+    "title_keywords": ["spotify"],
+    "domains": ["open.spotify.com"]
+  },
+  "metadata": {
+    "version": "1.0",
+    "source": "preseed",
+    "created_at": "2026-11-06",
+    "last_verified": "2026-11-06",
+    "consecutive_failures": 0,
+    "usage_count": 0
+  },
+  "layout_summary": "Top bar: Home icon and centered 'What do you want to play?' search bar. Left sidebar: Your Library (playlists, artists, albums). Center pane: browse/search results or active playlist tracklist. Bottom bar: current track info on left, playback controls (Shuffle, Previous, Play/Pause, Next, Repeat) in center, volume slider at bottom-right.",
+  "avoid_traps": [
+    "Do NOT click the track title at bottom-left when trying to pause — press 'space' or click the center Play/Pause circle button.",
+    "After searching with ctrl+k or ctrl+l, press enter or click the green Play button on hover over the top result to actually start playing."
+  ],
+  "actions": {
+    "play_pause": {
+      "shortcut": "space",
+      "primary": "press_key('space')",
+      "visual_fallback": "smart_click('Play or Pause circle button at bottom center')",
+      "verify": "Playback toggles between playing and paused"
+    },
+    "next_track": {
+      "shortcut": "ctrl+right",
+      "primary": "press_key('ctrl+right')",
+      "visual_fallback": "smart_click('Next track skip forward icon at bottom center')",
+      "verify": "Skips to the next song"
+    },
+    "prev_track": {
+      "shortcut": "ctrl+left",
+      "primary": "press_key('ctrl+left')",
+      "visual_fallback": "smart_click('Previous track skip back icon at bottom center')",
+      "verify": "Restarts current song or returns to the previous song"
+    },
+    "volume_up": {
+      "shortcut": "ctrl+up",
+      "primary": "press_key('ctrl+up')",
+      "visual_fallback": "smart_click('volume slider bar at bottom-right')",
+      "verify": "Spotify playback volume increases"
+    },
+    "volume_down": {
+      "shortcut": "ctrl+down",
+      "primary": "press_key('ctrl+down')",
+      "visual_fallback": "smart_click('volume slider bar at bottom-right')",
+      "verify": "Spotify playback volume decreases"
+    },
+    "search": {
+      "shortcut": "ctrl+k",
+      "primary": "press_key('ctrl+l') -> type_text(query) -> press_key('enter')",
+      "visual_fallback": "smart_type('What do you want to play search bar at top', query, submit=true)",
+      "verify": "Search results for songs, artists, and playlists load in main pane"
+    },
+    "toggle_shuffle": {
+      "shortcut": "ctrl+s",
+      "primary": "press_key('ctrl+s')",
+      "visual_fallback": "smart_click('Shuffle crossed arrows icon at bottom center')",
+      "verify": "Shuffle indicator toggles green"
+    },
+    "toggle_repeat": {
+      "shortcut": "ctrl+r",
+      "primary": "press_key('ctrl+r')",
+      "visual_fallback": "smart_click('Repeat loop arrows icon at bottom center')",
+      "verify": "Repeat mode cycles (Off / Repeat All / Repeat One)"
+    }
+  }
+}

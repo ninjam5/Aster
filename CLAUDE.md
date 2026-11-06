@@ -229,7 +229,19 @@ Speaker identification via SpeechBrain ECAPA-TDNN (`speechbrain/spkrec-ecapa-vox
 
 ### GUI Automation (active)
 
-`smart_click`, `smart_type`, `smart_scroll`, `press_key` are registered in `ADMIN_TOOLS` and dispatched in `execute_tool()` — `pyautogui` calls live directly in `brain.py`'s dispatch, on top of the three-track locator + deterministic verification described under **Vision & UI Automation** above (UIA tree → Direct Qwen 3.6 Vision Grounding; pre/post screen diff, foreground-title ground truth, UIA focus check before Ctrl+A, `FAILED —` results on every miss, repeat-click warning from the 3rd identical goal per turn). **Important:** keyboard keys (Enter/Tab/Esc) must use `press_key`, NOT `smart_click` (clicking the word "Enter" found by OCR is a known past bug). `tools/gui.py` still has `ui_type`/`ui_press_key` wrappers but the file is **not imported** anywhere.
+`smart_click`, `smart_type`, `smart_scroll`, `press_key`, `get_ui_playbook` are registered in `ADMIN_TOOLS` and dispatched in `execute_tool()` — `pyautogui` calls live directly in `brain.py`'s dispatch, on top of the three-track locator + deterministic verification described under **Vision & UI Automation** above (UIA tree → Direct Qwen 3.6 Vision Grounding; pre/post screen diff, foreground-title ground truth, UIA focus check before Ctrl+A, `FAILED —` results on every miss, repeat-click warning from the 3rd identical goal per turn). **`press_key` supports both single keys (`enter`, `tab`, `escape`, `space`, `f`, `k`, `/`) and hotkey combinations joined with `+` (`ctrl+t`, `ctrl+l`, `ctrl+w`, `ctrl+shift+t`, `ctrl+k`, `ctrl+shift+m`, `alt+left`, `win+a`, `ctrl+shift+esc`) via `pyautogui.hotkey(*parts)`.** **Important:** keyboard keys and hotkeys must use `press_key`, NOT `smart_click` (clicking the word "Enter" found by OCR is a known past bug). `tools/gui.py` still has `ui_type`/`ui_press_key` wrappers but the file is **not imported** anywhere.
+
+### Two-Tier UI Playbooks & Gemini 3.8 Flash Self-Healing (`tools/playbooks.py`, `Aster_Vault/playbooks/`)
+
+Persistent, self-learning UI navigation memory (`Aster_Vault/playbooks/<slug>.yaml`) organized in a **Two-Tier Playbook Architecture**:
+- **Tier 1 — Desktop App Playbooks** (`kind: desktop_app`): native/Electron desktop apps (`chrome`, `discord`, `spotify`, `stremio`, `steam`, `epic_games`, `riot_client`, `league_of_legends`, `vscode`, `explorer`, `windows_system`).
+- **Tier 2 — Web Domain Playbooks** (`kind: web_domain`): web applications and domains (`youtube`, `gmail`, `reddit`, `github`, `whatsapp_web`). When a browser window is in focus and its title/description matches a known web domain (e.g. `"YouTube - Google Chrome"`), `resolve_active_playbook()` combines the browser shell shortcuts with the active web domain's shortcuts, tasks, and `AVOID` traps.
+- **Automatic Active-Window Hint Injection:** `_get_ui_guide()` (in `look_at_screen`) and `_attach_action_screenshot()` (after every `smart_click`, `smart_type`, `type_text`, `press_key`, `smart_scroll`) call `get_active_playbook_hint()` to inject a compact `[UI Playbook: ...]` block with top shortcuts and `AVOID` rules for the foreground window.
+- **`get_ui_playbook(app_or_site, task="", failed_step="")` admin tool:**
+  - Looks up the local YAML playbook in `Aster_Vault/playbooks/`.
+  - **Dynamic Learning via Gemini 3.8 Flash (`config.GEMINI_MODEL = "gemini-3.8-flash"`):** if the app/site or requested `task` is missing from the local vault (and `config.GEMINI_AVAILABLE` is true via `gemini.api_key` in `secrets.yaml`), queries the Gemini REST API to generate structured `shortcuts`, `tasks`, `landmarks`, and `avoid` rules, then merges and saves them permanently to `Aster_Vault/playbooks/<slug>.yaml`.
+  - **Multimodal Self-Healing (`failed_step`):** when a UI step fails because an app updated its layout or a modal/popup blocked the target, passing `failed_step` captures a live screenshot (`capture_screen_base64()`) and sends it with the existing playbook to `gemini-3.8-flash` to diagnose the failure and patch the YAML playbook on disk.
+  - **Fail-closed offline fallback:** if `gemini.api_key` is unset or the API call errors, `get_ui_playbook` degrades gracefully to local playbooks / generic UIA+vision guidance without raising.
 
 ### Sentry Mode (`tools/sentry.py`)
 
@@ -356,6 +368,7 @@ Main thread runs the CLI loop. Daemon threads: Telegram `infinity_polling`, Disc
 | `tools/sentry.py` | Webcam intruder daemon |
 | `tools/intervention.py` | Intervention Mode — foreground-window focus daemon; `classify_window()`, toggle/snooze/close, brain-routed in-persona delivery |
 | `tools/assist.py` | Assist Mode — stdlib-tkinter dim overlay (`highlight_regions()`) that highlights located screen elements; backed by `locate_ui_elements_boxed()` (`_qwen_vision_locate_boxes`) in `tools/vision.py` |
+| `tools/playbooks.py` / `Aster_Vault/playbooks/*.yaml` | Two-Tier UI Playbook engine (Desktop Apps + Web Domains), active-window `[UI Playbook: ...]` hint formatter, `get_ui_playbook` tool, and Gemini 3.8 Flash (`gemini-3.8-flash`) dynamic playbook learning & multimodal self-healing |
 | `tools/discord_listener.py` `tools/discord_api.py` | Discord inbound / outbound |
 | `tools/google_auth.py` | Shared Gmail + Calendar OAuth/token management, tier gating (`tier_allows`, `send_policy`), shared pending-approval slot |
 | `tools/gmail_tool.py` | Gmail read/modify/reply tools; draft-then-send with autonomous-tier guardrail |

@@ -60,6 +60,9 @@ from tools.gmail_tool import (
 from tools.google_calendar import (
     list_upcoming_events, create_calendar_event, update_calendar_event, respond_to_invite,
 )
+from tools.playbooks import (
+    get_ui_playbook, get_active_playbook_hint, record_playbook_outcome,
+)
 
 # Reasoning-scaffold stripping (hygiene item, reliability campaign). Paired
 # <think>/<thinking> blocks only — an unterminated leading tag is left intact
@@ -1285,11 +1288,14 @@ ADMIN_TOOLS = [
         "function": {
             "name": "press_key",
             "description": (
-                "Press a keyboard key. Use this for Enter, Tab, Escape, Backspace, Space, "
-                "arrow keys, function keys, etc. "
+                "Press a single keyboard key OR a hotkey combination joined with '+'. "
+                "Use this for Enter, Tab, Escape, Backspace, Space, arrow keys, function keys, "
+                "and app/browser shortcuts like 'ctrl+t', 'ctrl+l', 'ctrl+w', 'ctrl+shift+t', "
+                "'ctrl+k', 'ctrl+shift+m', 'alt+left', 'win+a', 'ctrl+shift+esc'. "
                 "Do NOT use smart_click for keyboard keys — use press_key. "
                 "Examples: press_key('enter'), press_key('tab'), press_key('escape'), "
-                "press_key('backspace'), press_key('space'), press_key('up'), press_key('down')"
+                "press_key('space'), press_key('f'), press_key('k'), press_key('/'), "
+                "press_key('ctrl+t'), press_key('ctrl+l'), press_key('ctrl+shift+m')"
             ),
             "parameters": {
                 "type": "object",
@@ -1297,9 +1303,11 @@ ADMIN_TOOLS = [
                     "key": {
                         "type": "string",
                         "description": (
-                            "Key name in pyautogui format: 'enter', 'tab', 'escape', "
-                            "'backspace', 'delete', 'space', 'up', 'down', 'left', 'right', "
-                            "'home', 'end', 'pageup', 'pagedown', 'f1'-'f12', 'ctrl', 'alt', etc."
+                            "Single key name OR hotkey combination joined with '+' in pyautogui format: "
+                            "single keys ('enter', 'tab', 'escape', 'backspace', 'delete', 'space', "
+                            "'up', 'down', 'left', 'right', 'home', 'end', 'pageup', 'pagedown', "
+                            "'f1'-'f12', 'f', 'k', '/') or combinations ('ctrl+t', 'ctrl+l', 'ctrl+w', "
+                            "'ctrl+shift+t', 'ctrl+k', 'ctrl+shift+m', 'alt+left', 'win+a', 'ctrl+shift+esc')."
                         )
                     },
                     "confirm_send": {
@@ -1335,6 +1343,39 @@ ADMIN_TOOLS = [
                     }
                 },
                 "required": ["goal"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_ui_playbook",
+            "description": (
+                "Retrieves or dynamically learns the step-by-step UI navigation playbook (keyboard "
+                "shortcuts, visual landmarks, layout, and traps to avoid) for any desktop application "
+                "or website (e.g. 'chrome', 'youtube', 'stremio', 'discord', 'steam', 'epic games', "
+                "'riot client', 'league of legends', or any unfamiliar app/site). "
+                "If the playbook or task is not cached locally, Aster automatically queries Gemini 3.8 Flash "
+                "to learn and save it. If a UI step failed because the app's UI changed or a popup blocked it, "
+                "pass `failed_step` to trigger multimodal self-healing."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "app_or_site": {
+                        "type": "string",
+                        "description": "Name of the desktop application or website domain (e.g. 'chrome', 'youtube.com', 'stremio', 'league of legends', 'blender')."
+                    },
+                    "task": {
+                        "type": "string",
+                        "description": "Optional specific UI task or goal (e.g. 'open new tab', 'search for video', 'queue ARAM match')."
+                    },
+                    "failed_step": {
+                        "type": "string",
+                        "description": "Optional description of a UI step that just failed on screen — triggers multimodal self-healing via Gemini 3.8 Flash using a live screenshot."
+                    }
+                },
+                "required": ["app_or_site"]
             }
         }
     },
@@ -1711,6 +1752,15 @@ _APP_GUIDE_MAP = [
 
 def _get_ui_guide(screen_description: str) -> str:
     """Return the UI guide for the active app, or empty string if no guide exists."""
+    try:
+        hint = get_active_playbook_hint(
+            window_title=get_foreground_window_title(),
+            screen_description=screen_description or "",
+        )
+        if hint:
+            return hint
+    except Exception:
+        pass
     if not screen_description:
         return ""
     desc_lower = screen_description.lower()
@@ -2224,13 +2274,24 @@ def _execute_tool_impl(tool_name, arguments):
                     return tool_fail(
                         "FAILED — BLOCKED — could not verify that this key press is safe "
                         "(the check errored). Re-call with confirm_send=true.")
-        pyautogui.press(key)
+        if "+" in key:
+            parts = [p.strip() for p in key.split("+") if p.strip()]
+            pyautogui.hotkey(*parts)
+        else:
+            pyautogui.press(key)
         invalidate_screen_cache()
         time.sleep(0.5)
         fg_title = get_foreground_window_title()
         result_text = (f"Pressed '{key}'. Foreground window: {fg_title!r}. "
                        f"[Verify silently — continue with next action.]")
         return _attach_action_screenshot(result_text, action="press_key")
+    elif tool_name == "get_ui_playbook":
+        app_or_site = str(arguments.get("app_or_site", "")).strip()
+        if not app_or_site:
+            return "Error: app_or_site parameter is required."
+        task = str(arguments.get("task", "") or "").strip()
+        failed_step = str(arguments.get("failed_step", "") or "").strip()
+        return get_ui_playbook(app_or_site=app_or_site, task=task, failed_step=failed_step)
     elif tool_name == "highlight_on_screen":
         goal = arguments.get("goal", "")
         if not goal:
@@ -2802,8 +2863,17 @@ def _attach_action_screenshot(result_text: str, action: str):
 
     Laya ID 1 screenshot suppression was retired in laya-backwards-integration.md
     because omitting post-action screenshots blinded the model to physical window
-    occlusions and focus misalignments.
+    occlusions and focus misalignments. Also injects a compact active-window UI
+    playbook hint when the foreground window matches a known playbook.
     """
+    try:
+        fg_title = get_foreground_window_title()
+        if fg_title:
+            hint = get_active_playbook_hint(window_title=fg_title)
+            if hint and "[UI Playbook:" not in (result_text or ""):
+                result_text = f"{result_text}\n{hint}"
+    except Exception:
+        pass
     post_b64 = capture_screen_base64()
     if post_b64:
         return {"text": result_text, "ui_screenshot_b64": post_b64}

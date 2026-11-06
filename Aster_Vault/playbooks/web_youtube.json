@@ -1,0 +1,80 @@
+{
+  "id": "web_youtube",
+  "tier": "web",
+  "name": "YouTube",
+  "match": {
+    "process_names": [],
+    "title_keywords": ["youtube"],
+    "domains": ["youtube.com", "youtu.be"]
+  },
+  "metadata": {
+    "version": "1.0",
+    "source": "preseed",
+    "created_at": "2026-11-06",
+    "last_verified": "2026-11-06",
+    "consecutive_failures": 0,
+    "usage_count": 0
+  },
+  "layout_summary": "Top header: YouTube logo on left, centered 'Search' input bar with magnifying glass button and voice search microphone icon, profile/notifications on right. On home/search: grid or vertical feed of video thumbnails and titles. On watch page: video player on left/center, title/channel/Subscribe/Like below player, Up Next recommendations on right.",
+  "avoid_traps": [
+    "Do NOT click the microphone icon next to the search bar (triggers browser voice permission prompt).",
+    "Do NOT click the top-left hamburger menu to search.",
+    "Use press_key('k') instead of 'space' to play/pause so the page does not accidentally scroll down when the player isn't focused."
+  ],
+  "actions": {
+    "search": {
+      "shortcut": "/",
+      "primary": "press_key('/') -> type_text(query) -> press_key('enter')",
+      "visual_fallback": "smart_type('YouTube search box', query, submit=true)",
+      "verify": "YouTube search results feed loads for the query"
+    },
+    "play_pause": {
+      "shortcut": "k",
+      "primary": "press_key('k')",
+      "visual_fallback": "smart_click('Play or Pause button at bottom-left of video player')",
+      "verify": "Video playback toggles between playing and paused"
+    },
+    "fullscreen": {
+      "shortcut": "f",
+      "primary": "press_key('f')",
+      "visual_fallback": "smart_click('Full screen button at bottom-right of video player')",
+      "verify": "Video player enters or exits fullscreen"
+    },
+    "mute": {
+      "shortcut": "m",
+      "primary": "press_key('m')",
+      "visual_fallback": "smart_click('Mute speaker icon at bottom-left of video player')",
+      "verify": "Video audio mutes or unmutes"
+    },
+    "seek_forward_10s": {
+      "shortcut": "l",
+      "primary": "press_key('l')",
+      "visual_fallback": "press_key('right')",
+      "verify": "Video skips forward 10 seconds"
+    },
+    "seek_backward_10s": {
+      "shortcut": "j",
+      "primary": "press_key('j')",
+      "visual_fallback": "press_key('left')",
+      "verify": "Video rewinds 10 seconds"
+    },
+    "toggle_captions": {
+      "shortcut": "c",
+      "primary": "press_key('c')",
+      "visual_fallback": "smart_click('Subtitles/closed captions CC button on video player bar')",
+      "verify": "Closed captions toggle on or off"
+    },
+    "next_video": {
+      "shortcut": "shift+n",
+      "primary": "press_key('shift+n')",
+      "visual_fallback": "smart_click('Next video button next to Play on player bar')",
+      "verify": "Navigates to the next video in playlist or Up Next"
+    },
+    "dismiss_popups": {
+      "shortcut": "",
+      "primary": "smart_click('Skip or Skip Ads or No thanks or Reject all or Accept all button')",
+      "visual_fallback": "press_key('escape')",
+      "verify": "Ad overlay or consent/premium prompt is dismissed"
+    }
+  }
+}

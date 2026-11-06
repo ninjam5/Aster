@@ -1,0 +1,49 @@
+{
+  "id": "telegram",
+  "tier": "desktop",
+  "name": "Telegram Desktop",
+  "match": {
+    "process_names": ["Telegram.exe"],
+    "title_keywords": ["telegram"],
+    "domains": ["web.telegram.org"]
+  },
+  "metadata": {
+    "version": "1.0",
+    "source": "preseed",
+    "created_at": "2026-11-06",
+    "last_verified": "2026-11-06",
+    "consecutive_failures": 0,
+    "usage_count": 0
+  },
+  "layout_summary": "Left column: hamburger menu and 'Search' input at top-left, scrollable chat list below. Right pane: top header showing contact/group name (clicking opens profile info panel), message history in center, and 'Write a message...' input bar at bottom with attachment paperclip, emoji, and microphone/send icon.",
+  "avoid_traps": [
+    "Pressing 'escape' closes the currently open chat and unfocuses the message input — only press 'escape' when you want to close a modal or leave the current chat.",
+    "Clicking the contact name in the top header opens the User Info sidebar rather than focusing the chat box."
+  ],
+  "actions": {
+    "search_chat": {
+      "shortcut": "ctrl+f",
+      "primary": "press_key('ctrl+f') -> type_text(contact_or_query) -> press_key('enter')",
+      "visual_fallback": "smart_type('Search input at top-left', contact_or_query, submit=true)",
+      "verify": "Left sidebar filters to matching chats and contacts"
+    },
+    "send_message": {
+      "shortcut": "enter",
+      "primary": "smart_type('Write a message... input at bottom', message_text, submit=true)",
+      "visual_fallback": "smart_click('Write a message... at bottom') -> type_text(message_text) -> press_key('enter')",
+      "verify": "Message bubble is sent and appears at bottom of conversation"
+    },
+    "close_or_back": {
+      "shortcut": "escape",
+      "primary": "press_key('escape')",
+      "visual_fallback": "smart_click('Back or close button')",
+      "verify": "Closes active media preview, profile sidebar, or current chat"
+    },
+    "up_down_chats": {
+      "shortcut": "alt+down",
+      "primary": "press_key('alt+down')",
+      "visual_fallback": "press_key('alt+up')",
+      "verify": "Switches to the next or previous chat in the left list"
+    }
+  }
+}

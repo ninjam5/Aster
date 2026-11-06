@@ -1,0 +1,67 @@
+{
+  "id": "steam",
+  "tier": "desktop",
+  "name": "Steam",
+  "match": {
+    "process_names": ["steam.exe", "steamwebhelper.exe"],
+    "title_keywords": ["steam"],
+    "domains": ["store.steampowered.com", "steamcommunity.com"]
+  },
+  "metadata": {
+    "version": "1.0",
+    "source": "preseed",
+    "created_at": "2026-11-06",
+    "last_verified": "2026-11-06",
+    "consecutive_failures": 0,
+    "usage_count": 0
+  },
+  "layout_summary": "Top header bar: STORE, LIBRARY, COMMUNITY, and user profile tabs. In LIBRARY view: left sidebar has 'Search by name' filter and installed games list; main pane shows selected game hero banner with large green 'PLAY' (or blue 'INSTALL') button. Bottom bar: 'Add a Game', 'Manage Downloads' (center), 'Friends & Chat' (bottom-right).",
+  "avoid_traps": [
+    "Do NOT confuse the Store search bar (top-right inside Store tab) with the Library search filter (top of left sidebar inside Library tab).",
+    "Clicking a game in the left Library list only opens its details page — you must then click the green 'PLAY' button in the main pane to launch it."
+  ],
+  "actions": {
+    "open_library": {
+      "shortcut": "",
+      "primary": "smart_click('LIBRARY in top header bar')",
+      "visual_fallback": "smart_click('LIBRARY tab next to STORE at top')",
+      "verify": "Steam switches to Library view with games list on the left"
+    },
+    "open_store": {
+      "shortcut": "",
+      "primary": "smart_click('STORE in top header bar')",
+      "visual_fallback": "smart_click('STORE tab at top-left')",
+      "verify": "Steam Store front page loads"
+    },
+    "search_library": {
+      "shortcut": "",
+      "primary": "smart_type('Search by name input at top of left sidebar', game_name, submit=false)",
+      "visual_fallback": "smart_click('Search by name box in left sidebar') -> type_text(game_name)",
+      "verify": "Left sidebar game list filters to matching titles"
+    },
+    "search_store": {
+      "shortcut": "",
+      "primary": "smart_type('search box at top-right of Store page', query, submit=true)",
+      "visual_fallback": "smart_click('search box at top-right of Store') -> type_text(query) -> press_key('enter')",
+      "verify": "Steam Store search results load"
+    },
+    "launch_game": {
+      "shortcut": "",
+      "primary": "smart_click('green PLAY button on game page')",
+      "visual_fallback": "smart_click('game title in left sidebar') -> smart_click('green PLAY button')",
+      "verify": "Button changes to 'STOP' or 'RUNNING' and the game window launches"
+    },
+    "open_downloads": {
+      "shortcut": "",
+      "primary": "smart_click('Downloads bar at bottom center')",
+      "visual_fallback": "smart_click('Manage Downloads at bottom of window')",
+      "verify": "Downloads manager view opens showing active and queued updates"
+    },
+    "open_friends": {
+      "shortcut": "",
+      "primary": "smart_click('Friends & Chat at bottom-right')",
+      "visual_fallback": "smart_click('Friends menu in very top bar')",
+      "verify": "Friends List window opens"
+    }
+  }
+}

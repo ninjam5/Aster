@@ -1,0 +1,67 @@
+{
+  "id": "file_explorer",
+  "tier": "desktop",
+  "name": "Windows File Explorer",
+  "match": {
+    "process_names": ["explorer.exe"],
+    "title_keywords": ["file explorer", "this pc", "downloads", "documents", "pictures", "local disk"],
+    "domains": []
+  },
+  "metadata": {
+    "version": "1.0",
+    "source": "preseed",
+    "created_at": "2026-11-06",
+    "last_verified": "2026-11-06",
+    "consecutive_failures": 0,
+    "usage_count": 0
+  },
+  "layout_summary": "Top strip: folder tabs with '+' button. Below tabs: Back, Forward, Up arrow, long breadcrumb Address Bar in center, and 'Search' box at top-right. Below navigation: command toolbar (New, Cut, Copy, Paste, Rename, Delete, Sort, View). Left pane: Quick Access / This PC navigation tree. Main pane: files and folders grid/list.",
+  "avoid_traps": [
+    "Clicking the middle of the breadcrumb address bar may click a folder segment button instead of allowing text entry — always use press_key('ctrl+l') or press_key('alt+d') to focus the address bar as editable text.",
+    "Single-clicking a folder in the main pane only selects it; press 'enter' after selecting or use ctrl+l to navigate directly by path."
+  ],
+  "actions": {
+    "focus_address_bar": {
+      "shortcut": "ctrl+l",
+      "primary": "press_key('ctrl+l')",
+      "visual_fallback": "press_key('alt+d')",
+      "verify": "Address bar highlights full folder path for typing"
+    },
+    "search_folder": {
+      "shortcut": "ctrl+f",
+      "primary": "press_key('ctrl+f') -> type_text(query) -> press_key('enter')",
+      "visual_fallback": "smart_type('Search box at top-right', query, submit=true)",
+      "verify": "File Explorer searches current directory for matching files"
+    },
+    "new_folder": {
+      "shortcut": "ctrl+shift+n",
+      "primary": "press_key('ctrl+shift+n')",
+      "visual_fallback": "smart_click('New button in top command bar') -> smart_click('Folder')",
+      "verify": "New folder is created with editable name highlighted"
+    },
+    "rename_item": {
+      "shortcut": "f2",
+      "primary": "press_key('f2')",
+      "visual_fallback": "smart_click('Rename icon in top command bar')",
+      "verify": "Selected file or folder name becomes an editable text box"
+    },
+    "parent_folder": {
+      "shortcut": "alt+up",
+      "primary": "press_key('alt+up')",
+      "visual_fallback": "smart_click('Up arrow button left of address bar')",
+      "verify": "Navigates up one directory level"
+    },
+    "go_back": {
+      "shortcut": "alt+left",
+      "primary": "press_key('alt+left')",
+      "visual_fallback": "smart_click('Back arrow button at top-left')",
+      "verify": "Navigates back to the previously visited folder"
+    },
+    "close_window": {
+      "shortcut": "alt+f4",
+      "primary": "press_key('alt+f4')",
+      "visual_fallback": "press_key('ctrl+w')",
+      "verify": "File Explorer window or tab closes"
+    }
+  }
+}

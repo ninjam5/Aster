@@ -1,0 +1,49 @@
+{
+  "id": "riot_client",
+  "tier": "desktop",
+  "name": "Riot Client",
+  "match": {
+    "process_names": ["RiotClientUx.exe", "RiotClientServices.exe"],
+    "title_keywords": ["riot client"],
+    "domains": []
+  },
+  "metadata": {
+    "version": "1.0",
+    "source": "preseed",
+    "created_at": "2026-11-06",
+    "last_verified": "2026-11-06",
+    "consecutive_failures": 0,
+    "usage_count": 0
+  },
+  "layout_summary": "When signed out: left white panel has USERNAME, PASSWORD inputs and red arrow submit button; right side is artwork. When signed in: left vertical sidebar has All Games grid icon and game icons (League of Legends, VALORANT, Teamfight Tactics); selected game page has a prominent red/blue 'PLAY' (or 'UPDATE') button at bottom-left and profile avatar at top-right.",
+  "avoid_traps": [
+    "Once League of Legends is launched from Riot Client, a separate 'League of Legends' client window opens — switch to the league_of_legends playbook for lobby/queue actions.",
+    "Do NOT click background promotional banners in the center — click the big 'PLAY' button at bottom-left."
+  ],
+  "actions": {
+    "select_game": {
+      "shortcut": "",
+      "primary": "smart_click('game icon on left sidebar or game card for League of Legends / VALORANT / Teamfight Tactics')",
+      "visual_fallback": "smart_click('All Games grid icon at top-left') -> smart_click('target game card')",
+      "verify": "The selected game splash screen with the PLAY button is displayed"
+    },
+    "launch_game": {
+      "shortcut": "",
+      "primary": "smart_click('big red or blue PLAY button at bottom-left')",
+      "visual_fallback": "smart_click('PLAY button on selected game page')",
+      "verify": "Game client launches or PLAY button changes to 'Game is Running'"
+    },
+    "open_settings": {
+      "shortcut": "",
+      "primary": "smart_click('profile icon at top-right')",
+      "visual_fallback": "smart_click('avatar button at top-right corner') -> smart_click('Settings')",
+      "verify": "Account menu or Settings modal opens"
+    },
+    "sign_in": {
+      "shortcut": "enter",
+      "primary": "smart_type('USERNAME input in left login panel', username, submit=false) -> smart_type('PASSWORD input in left login panel', password, submit=true)",
+      "visual_fallback": "smart_click('red arrow login button at bottom of left panel')",
+      "verify": "Riot Client logs in and transitions to the games home view"
+    }
+  }
+}

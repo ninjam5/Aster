@@ -1,0 +1,108 @@
+{
+  "id": "league_of_legends",
+  "tier": "desktop",
+  "name": "League of Legends",
+  "match": {
+    "process_names": [
+      "LeagueClientUx.exe",
+      "League of Legends.exe"
+    ],
+    "title_keywords": [
+      "league of legends"
+    ],
+    "domains": []
+  },
+  "metadata": {
+    "version": "1.0",
+    "source": "preseed",
+    "created_at": "2026-11-06",
+    "last_verified": "2026-11-06",
+    "consecutive_failures": 0,
+    "usage_count": 1
+  },
+  "layout_summary": "Client UI: top-left has blue 'PLAY' button; top bar has HOME, TFT, CLASH, and right-side icons for Profile, Collection (backpack), Loot (Hextech chest), Store (coins); right sidebar is Friends & Social list; bottom-center has 'CONFIRM' / 'FIND MATCH' button in lobbies. In-Game UI: champion abilities at bottom-center, minimap at bottom-right, shop via 'P'.",
+  "avoid_traps": [
+    "In mode selection, clicking a mode card (Summoner's Rift / ARAM / TFT) does NOT enter the lobby until you also click 'CONFIRM' at the bottom-center.",
+    "In-game uses a hardware cursor/DirectX surface where UIA is blind — always prefer keyboard hotkeys (P for shop, B for recall, Tab for scoreboard, Y for camera lock)."
+  ],
+  "actions": {
+    "play_lobby": {
+      "shortcut": "",
+      "primary": "smart_click('PLAY button at top-left of client')",
+      "visual_fallback": "smart_click('blue PLAY emblem at top-left corner')",
+      "verify": "Game mode selection screen (PVP / Co-op vs AI / Training) opens"
+    },
+    "select_mode": {
+      "shortcut": "",
+      "primary": "smart_click('game mode card (Summoner\\'s Rift / ARAM / TFT)') -> smart_click('CONFIRM button at bottom-center')",
+      "visual_fallback": "smart_click('CONFIRM button at bottom-center')",
+      "verify": "Enters party lobby with FIND MATCH button at bottom-center"
+    },
+    "find_match": {
+      "shortcut": "",
+      "primary": "smart_click('FIND MATCH button at bottom-center')",
+      "visual_fallback": "smart_click('blue FIND MATCH button at bottom')",
+      "verify": "Queue timer starts counting up"
+    },
+    "accept_match": {
+      "shortcut": "",
+      "primary": "smart_click('ACCEPT! button in center popup')",
+      "visual_fallback": "smart_click('ACCEPT button in match found circle')",
+      "verify": "Match is accepted and transitions to Champion Select"
+    },
+    "open_collection": {
+      "shortcut": "",
+      "primary": "smart_click('backpack Collection icon in top bar')",
+      "visual_fallback": "smart_click('Collection icon left of Loot chest in top bar')",
+      "verify": "Champions / Skins / Runes / Spells collection view opens"
+    },
+    "open_loot": {
+      "shortcut": "",
+      "primary": "smart_click('chest Loot icon in top bar')",
+      "visual_fallback": "smart_click('Hextech crafting chest icon in top navigation bar')",
+      "verify": "Loot and Hextech Crafting inventory opens"
+    },
+    "open_store": {
+      "shortcut": "",
+      "primary": "smart_click('coins Store icon in top bar')",
+      "visual_fallback": "smart_click('stack of gold coins icon in top navigation bar')",
+      "verify": "League Store page opens"
+    },
+    "in_game_shop": {
+      "shortcut": "p",
+      "primary": "press_key('p')",
+      "visual_fallback": "smart_click('gold coins button at bottom-center')",
+      "verify": "In-game item shop opens or closes"
+    },
+    "in_game_scoreboard": {
+      "shortcut": "tab",
+      "primary": "press_key('tab')",
+      "visual_fallback": "press_key('o')",
+      "verify": "In-game scoreboard overlay appears"
+    },
+    "in_game_chat": {
+      "shortcut": "enter",
+      "primary": "press_key('enter') -> type_text(message) -> press_key('enter')",
+      "visual_fallback": "press_key('shift+enter') -> type_text(message) -> press_key('enter')",
+      "verify": "In-game chat input opens, types message, and sends"
+    },
+    "in_game_recall": {
+      "shortcut": "b",
+      "primary": "press_key('b')",
+      "visual_fallback": "smart_click('Recall icon at bottom-center HUD')",
+      "verify": "Champion begins 8-second recall channel back to base"
+    },
+    "in_game_center_camera": {
+      "shortcut": "space",
+      "primary": "press_key('space')",
+      "visual_fallback": "press_key('f1')",
+      "verify": "Camera centers on the player's champion"
+    },
+    "in_game_lock_camera": {
+      "shortcut": "y",
+      "primary": "press_key('y')",
+      "visual_fallback": "smart_click('camera lock icon next to minimap')",
+      "verify": "Camera toggles between locked and unlocked mode"
+    }
+  }
+}

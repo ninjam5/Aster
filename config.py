@@ -535,11 +535,19 @@ VOICES_DIR       = str(_cfg("paths", "voices_dir", default=os.path.join(VAULT_DI
 FACES_DIR        = str(_cfg("paths", "faces_dir", default=os.path.join(VAULT_DIR, "Faces")))
 DISCORD_CONTACTS_FILE = str(_cfg("paths", "discord_contacts", default=os.path.join(VAULT_DIR, "discord_contacts.json")))
 SYSTEM_PROMPTS_DIR = str(_cfg("paths", "system_prompts_dir", default=os.path.join(VAULT_DIR, "System_Prompts")))
+PLAYBOOKS_DIR      = os.path.join(VAULT_DIR, "playbooks")
 CUSTOM_VOICES_DIR  = str(_cfg("paths", "custom_voices_dir",  default=os.path.join(VAULT_DIR, "TTS-Voices")))
 CONVERSATIONS_DIR  = str(_cfg("paths", "conversations_dir",  default=os.path.join(VAULT_DIR, "Conversations")))
 
 # Reliability-campaign instrumentation log (RELIABILITY_LOG_ENABLED above).
 RELIABILITY_LOG_PATH       = os.path.join(VAULT_DIR, "reliability_log.jsonl")
+
+# ============================================================================
+# GEMINI FRONTIER MODEL — UI Playbook generation & self-healing
+# ============================================================================
+GEMINI_API_KEY = str(_secret("gemini", "api_key", default="") or "").strip()
+GEMINI_AVAILABLE = bool(GEMINI_API_KEY)
+GEMINI_MODEL = str(_cfg("automation", "gemini_model", default="gemini-3.8-flash") or "gemini-3.8-flash").strip()
 
 # ============================================================================
 # GOOGLE (GMAIL + CALENDAR) — tiered account access
@@ -590,6 +598,7 @@ if not os.path.exists(VAULT_DIR):
     os.makedirs(VAULT_DIR)
 os.makedirs(VOICES_DIR, exist_ok=True)
 os.makedirs(SYSTEM_PROMPTS_DIR, exist_ok=True)
+os.makedirs(PLAYBOOKS_DIR, exist_ok=True)
 os.makedirs(CUSTOM_VOICES_DIR, exist_ok=True)
 os.makedirs(CONVERSATIONS_DIR, exist_ok=True)
 

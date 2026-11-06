@@ -1,0 +1,97 @@
+{
+  "id": "chrome",
+  "tier": "desktop",
+  "name": "Google Chrome",
+  "match": {
+    "process_names": ["chrome.exe", "msedge.exe", "brave.exe"],
+    "title_keywords": ["google chrome", "chrome", "microsoft edge", "brave"],
+    "domains": []
+  },
+  "metadata": {
+    "version": "1.0",
+    "source": "preseed",
+    "created_at": "2026-11-06",
+    "last_verified": "2026-11-06",
+    "consecutive_failures": 0,
+    "usage_count": 0
+  },
+  "layout_summary": "Top strip: open tabs with '+' button immediately to the right of the last tab. Below tabs: Back, Forward, Refresh, centered Address/URL bar, extensions, and three-dots menu at far right.",
+  "avoid_traps": [
+    "Do NOT click the three vertical dots (kebab menu) at top-right to open a new tab — use press_key('ctrl+t') or click the '+' button on the tab bar.",
+    "Do NOT click the current tab title to type a URL — use press_key('ctrl+l') to focus the address bar."
+  ],
+  "actions": {
+    "new_tab": {
+      "shortcut": "ctrl+t",
+      "primary": "press_key('ctrl+t')",
+      "visual_fallback": "smart_click('the + button on the tab bar')",
+      "verify": "A new tab opens and the address bar is focused"
+    },
+    "close_tab": {
+      "shortcut": "ctrl+w",
+      "primary": "press_key('ctrl+w')",
+      "visual_fallback": "smart_click('the x close button on the active tab')",
+      "verify": "The active tab closes"
+    },
+    "reopen_closed_tab": {
+      "shortcut": "ctrl+shift+t",
+      "primary": "press_key('ctrl+shift+t')",
+      "visual_fallback": "press_key('ctrl+h')",
+      "verify": "The most recently closed tab is restored"
+    },
+    "focus_address_bar": {
+      "shortcut": "ctrl+l",
+      "primary": "press_key('ctrl+l')",
+      "visual_fallback": "smart_click('address and search bar at top')",
+      "verify": "The URL/address bar text is highlighted and ready for typing"
+    },
+    "navigate_to_url": {
+      "shortcut": "ctrl+l",
+      "primary": "press_key('ctrl+l') -> type_text(url) -> press_key('enter')",
+      "visual_fallback": "smart_type('address and search bar at top', url, submit=true)",
+      "verify": "The browser navigates to the target URL or search query"
+    },
+    "next_tab": {
+      "shortcut": "ctrl+tab",
+      "primary": "press_key('ctrl+tab')",
+      "visual_fallback": "smart_click('next tab on the top tab strip')",
+      "verify": "The next tab to the right becomes active"
+    },
+    "prev_tab": {
+      "shortcut": "ctrl+shift+tab",
+      "primary": "press_key('ctrl+shift+tab')",
+      "visual_fallback": "smart_click('previous tab on the top tab strip')",
+      "verify": "The previous tab to the left becomes active"
+    },
+    "find_on_page": {
+      "shortcut": "ctrl+f",
+      "primary": "press_key('ctrl+f')",
+      "visual_fallback": "press_key('f3')",
+      "verify": "Find bar popup appears at top-right of the page"
+    },
+    "downloads": {
+      "shortcut": "ctrl+j",
+      "primary": "press_key('ctrl+j')",
+      "visual_fallback": "smart_click('Downloads icon in top-right toolbar')",
+      "verify": "Downloads page or bubble opens"
+    },
+    "history": {
+      "shortcut": "ctrl+h",
+      "primary": "press_key('ctrl+h')",
+      "visual_fallback": "press_key('ctrl+l') -> type_text('chrome://history') -> press_key('enter')",
+      "verify": "Browser history tab opens"
+    },
+    "refresh": {
+      "shortcut": "f5",
+      "primary": "press_key('f5')",
+      "visual_fallback": "smart_click('Reload circular arrow button left of address bar')",
+      "verify": "Current page reloads"
+    },
+    "back": {
+      "shortcut": "alt+left",
+      "primary": "press_key('alt+left')",
+      "visual_fallback": "smart_click('Back arrow button at top-left')",
+      "verify": "Browser navigates back to previous page"
+    }
+  }
+}

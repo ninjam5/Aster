@@ -1,0 +1,79 @@
+{
+  "id": "windows_shell",
+  "tier": "desktop",
+  "name": "Windows Desktop & Shell",
+  "match": {
+    "process_names": ["ShellExperienceHost.exe", "SearchHost.exe", "StartMenuExperienceHost.exe"],
+    "title_keywords": ["program manager", "windows", "taskbar", "start", "search"],
+    "domains": []
+  },
+  "metadata": {
+    "version": "1.0",
+    "source": "preseed",
+    "created_at": "2026-11-06",
+    "last_verified": "2026-11-06",
+    "consecutive_failures": 0,
+    "usage_count": 0
+  },
+  "layout_summary": "Desktop surface with shortcut icons. Bottom taskbar: centered or left-aligned Start button (Windows logo), Search box/icon, Task View, pinned/running app icons, and bottom-right System Tray (hidden icons chevron, Wi-Fi/Network, Volume speaker, Battery, Clock/Notifications).",
+  "avoid_traps": [
+    "Prefer open_app(name) or press_key('win+s') over hunting for small desktop shortcut icons.",
+    "Use win+a to open Quick Settings (Wi-Fi, Bluetooth, Volume, Brightness) directly rather than clicking tiny system tray icons."
+  ],
+  "actions": {
+    "start_menu": {
+      "shortcut": "win",
+      "primary": "press_key('win')",
+      "visual_fallback": "smart_click('Start Windows logo button on taskbar')",
+      "verify": "Windows Start menu popup opens"
+    },
+    "windows_search": {
+      "shortcut": "win+s",
+      "primary": "press_key('win+s') -> type_text(app_or_query) -> press_key('enter')",
+      "visual_fallback": "smart_click('Search box on taskbar')",
+      "verify": "Windows Search flyout opens with search input focused"
+    },
+    "quick_settings_volume_wifi": {
+      "shortcut": "win+a",
+      "primary": "press_key('win+a')",
+      "visual_fallback": "smart_click('Wi-Fi and Volume icons at bottom-right system tray')",
+      "verify": "Quick Settings flyout (Wi-Fi, Bluetooth, Volume slider) opens at bottom-right"
+    },
+    "open_file_explorer": {
+      "shortcut": "win+e",
+      "primary": "press_key('win+e')",
+      "visual_fallback": "smart_click('File Explorer yellow folder icon on taskbar')",
+      "verify": "A new Windows File Explorer window opens"
+    },
+    "show_desktop": {
+      "shortcut": "win+d",
+      "primary": "press_key('win+d')",
+      "visual_fallback": "press_key('win+m')",
+      "verify": "All open windows minimize to reveal the desktop"
+    },
+    "open_settings": {
+      "shortcut": "win+i",
+      "primary": "press_key('win+i')",
+      "visual_fallback": "press_key('win+s') -> type_text('Settings') -> press_key('enter')",
+      "verify": "Windows Settings app opens"
+    },
+    "task_manager": {
+      "shortcut": "ctrl+shift+esc",
+      "primary": "press_key('ctrl+shift+esc')",
+      "visual_fallback": "press_key('win+x') -> smart_click('Task Manager')",
+      "verify": "Task Manager window opens"
+    },
+    "run_dialog": {
+      "shortcut": "win+r",
+      "primary": "press_key('win+r')",
+      "visual_fallback": "press_key('win+x') -> smart_click('Run')",
+      "verify": "Windows Run dialog box opens at bottom-left"
+    },
+    "switch_window": {
+      "shortcut": "alt+tab",
+      "primary": "press_key('alt+tab')",
+      "visual_fallback": "press_key('win+tab')",
+      "verify": "Switches focus to the previous active window"
+    }
+  }
+}
