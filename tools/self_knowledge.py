@@ -92,7 +92,7 @@ def list_my_capabilities() -> str:
         "vision": {
             "screen_capture": True,
             "webcam": True,
-            "ui_element_locator": "DOM motor (ARIA/CDP + UIA, opt-in) + UIA + pytesseract + OmniParser v2 pixel fallback (flag-gated)",
+            "ui_element_locator": "DOM motor (ARIA/CDP + UIA, opt-in) + UIA + Qwen 3.6 native vision grounding",
             "image_re_examination": True,
             "cold_storage": _safe_get(cfg, "paths", "cold_storage_images", default="Aster_Vault/images"),
             "face_recognition": True,
@@ -120,7 +120,6 @@ def list_my_capabilities() -> str:
             "window_management": True,
             "ui_automation": ["smart_click", "smart_type", "smart_scroll", "press_key", "highlight_on_screen"],
             "dom_motor": bool(getattr(config, "USE_DOM_MOTOR", False)),
-            "pixel_fallback": bool(getattr(config, "USE_PIXEL_FALLBACK", True)),
             "system1_kernel": bool(getattr(config, "USE_LAYA_KERNEL", False)),
         },
         "integrations": {

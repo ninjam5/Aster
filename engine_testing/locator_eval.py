@@ -1,8 +1,7 @@
 """Locator eval harness — measure the GUI locator tracks on YOUR screens.
 
 This is how locator-tuning decisions get made with data instead of launch-blog
-claims: OCR vs OmniParser/YOLO hit rates, captioner choice, and the Stage-2
-`--no-pixel` A/B that measures coverage lost when the pixel fallback is demoted.
+claims: Direct Qwen 3.6 Vision Grounding hit rates and latency.
 
 Usage (from the repo root):
 
@@ -10,13 +9,11 @@ Usage (from the repo root):
       Screenshot the primary monitor into engine_testing/locator_cases/<name>.png.
       Then add one or more entries for it to cases.json (see below).
 
-  python engine_testing/locator_eval.py run [--captions] [--no-pixel]
-      Score Track 1 (OCR) and Track 2 (YOLO) on every labeled case.
-      --captions also exercises the icon captioner (needs llama-server up).
-      --no-pixel skips Track 2 entirely (the USE_PIXEL_FALLBACK=false A/B).
+  python engine_testing/locator_eval.py run
+      Score Direct Qwen 3.6 Vision Grounding on every labeled case.
 
   python engine_testing/locator_eval.py live "<goal>"
-      Run the FULL three-track locate (including UIA, which needs the live
+      Run the FULL locate (including UIA, which needs the live
       tree and can't run on stored images) against the current screen.
       Moves the mouse to the match as visual proof — never clicks.
 
@@ -68,24 +65,18 @@ def _point_in_box(pt: tuple, box: list) -> bool:
     return l <= pt[0] <= l + w and t <= pt[1] <= t + h
 
 
-def cmd_run(with_captions: bool, with_pixel: bool = True) -> None:
+def cmd_run(with_captions: bool = False, with_pixel: bool = True) -> None:
+    import base64
     import cv2
+    import pyautogui
 
-    from tools.locator_common import parse_goal
-    from tools.vision import _extract_ocr_lines, _ocr_best_line, _yolo_track, _release_omniparser
-    import config
-
-    if not with_captions:
-        config.ICON_CAPTIONER = "off"  # don't require llama-server for the base run
+    from tools.vision import _qwen_vision_locate
 
     cases = _load_cases()
     if not cases:
         return
 
-    stats = {"ocr": [0, 0, 0.0]}  # hits, total, seconds
-    if with_pixel:
-        stats["yolo"] = [0, 0, 0.0]
-    ocr_lines_cache: dict[str, tuple] = {}
+    stats = {"qwen_vision": [0, 0, 0.0]}  # hits, total, seconds
 
     for case in cases:
         img_path = os.path.join(CASES_DIR, case["image"])
@@ -94,50 +85,37 @@ def cmd_run(with_captions: bool, with_pixel: bool = True) -> None:
             print(f"SKIP {case['image']}: unreadable")
             continue
         h, w = frame.shape[:2]
-        parsed = parse_goal(case["goal"])
 
-        # Track 1 — OCR (lines cached per image across its cases)
-        if case["image"] not in ocr_lines_cache:
+        ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+        if not ok:
+            print(f"SKIP {case['image']}: failed to encode JPEG")
+            continue
+        b64 = base64.b64encode(buf.tobytes()).decode("utf-8")
+
+        # Mock pyautogui.size to the image dimensions for offline eval so returned (x, y) is in image pixel space
+        orig_size = pyautogui.size
+        pyautogui.size = lambda: (w, h)
+        try:
             t0 = time.time()
-            lines = _extract_ocr_lines(frame, w, h)
-            ocr_lines_cache[case["image"]] = (lines, time.time() - t0)
-        lines, ocr_dt = ocr_lines_cache[case["image"]]
+            r = _qwen_vision_locate(case["goal"], b64_img=b64)
+            dt = time.time() - t0
+        finally:
+            pyautogui.size = orig_size
 
-        t0 = time.time()
-        r = _ocr_best_line(lines, parsed, w, h, 1.0, 1.0)
-        dt = (time.time() - t0) + ocr_dt / max(1, sum(1 for c in cases if c["image"] == case["image"]))
-        stats["ocr"][1] += 1
-        stats["ocr"][2] += dt
-        ocr_hit = bool(r and _point_in_box((r["x"], r["y"]), case["expected_box"]))
-        stats["ocr"][0] += ocr_hit
+        stats["qwen_vision"][1] += 1
+        stats["qwen_vision"][2] += dt
+        hit = bool(r and _point_in_box((r["x"], r["y"]), case["expected_box"]))
+        stats["qwen_vision"][0] += hit
+        loc_str = f" -> ({r['x']},{r['y']})" if r else " -> None"
+        print(f"{case['image']:24s} {case['goal']!r:36s} "
+              f"Qwen: {'HIT ' if hit else 'miss'} ({dt:.2f}s){loc_str}")
 
-        # Track 2 — YOLO (+ optional captions); skipped entirely with --no-pixel
-        if with_pixel:
-            t0 = time.time()
-            r2 = _yolo_track(frame, parsed, w, h, 1.0, 1.0, lines)
-            dt2 = time.time() - t0
-            stats["yolo"][1] += 1
-            stats["yolo"][2] += dt2
-            yolo_hit = bool(r2 and _point_in_box((r2["x"], r2["y"]), case["expected_box"]))
-            stats["yolo"][0] += yolo_hit
-            print(f"{case['image']:24s} {case['goal']!r:36s} "
-                  f"OCR: {'HIT ' if ocr_hit else 'miss'} ({dt:.1f}s)  "
-                  f"YOLO: {'HIT ' if yolo_hit else 'miss'} ({dt2:.1f}s)")
-        else:
-            print(f"{case['image']:24s} {case['goal']!r:36s} "
-                  f"OCR: {'HIT ' if ocr_hit else 'miss'} ({dt:.1f}s)  "
-                  f"YOLO: skipped (--no-pixel)")
-
-    if with_pixel:
-        _release_omniparser()
     print("\n=== Results ===")
-    for track, (hits, total, secs) in stats.items():
-        if total:
-            print(f"{track:6s}: {hits}/{total} hits ({100 * hits / total:.0f}%), "
-                  f"avg {secs / total:.1f}s per case")
+    hits, total, secs = stats["qwen_vision"]
+    if total:
+        print(f"Qwen Vision: {hits}/{total} hits ({100 * hits / total:.0f}%), "
+              f"avg {secs / total:.2f}s per case")
     print("\nNote: UIA (Track 0) needs a live tree — use `live \"<goal>\"` to test it.")
-    if not with_captions:
-        print("Captioner was OFF; re-run with --captions (llama-server up) to score icon captioning.")
 
 
 def cmd_live(goal: str) -> None:

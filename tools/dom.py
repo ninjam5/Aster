@@ -11,7 +11,7 @@ narrow a page down. This module does exactly three deterministic things:
 A System-1 model (Laya, see core/system1.py) may later pick among ambiguous
 shortlists and the LLM remains the planner; neither is imported here. Public
 functions never raise: every failure returns None/[] so callers fall through
-to the existing OCR/YOLO tracks.
+to the UIA / Qwen vision tracks.
 
 Safety contract:
 - Model output is never turned into selectors, JavaScript, or coordinates.
@@ -20,7 +20,7 @@ Safety contract:
   explicitly passes confirm_send=True (DOM_MOTOR_SEND_POLICY).
 - Web actions only run on a page whose window actually has OS focus; if the
   attached browser is in the background the motor returns None so the
-  foreground-based UIA/OCR tracks handle the click instead.
+  foreground-based UIA / Qwen vision tracks handle the click instead.
 - All Playwright work runs on one dedicated worker thread: the sync API is
   thread-affine and execute_tool runs on whichever surface thread owns the turn.
 - The owner's real browser profile is NEVER driven or copied: Chrome >=136

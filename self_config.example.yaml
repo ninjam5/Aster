@@ -78,15 +78,14 @@ automation:
   browser_min_free_ram_gb: 1.5
   # DOM-first perception motor (tools/dom.py). When enabled, web tasks are
   # driven through the attached browser's accessibility tree (Playwright over
-  # CDP) and Windows tasks through a UIA shortlist before the OCR/YOLO
+  # CDP) and Windows tasks through a UIA shortlist before the UIA / Qwen vision grounding
   # fallbacks are consulted. Default OFF — promoted only after the stage QA
   # gates pass (.claude/skills + engine_testing/qa/).
   dom_motor: false
   browser_cdp_port: 9222         # attach-only: the browser must be started with --remote-debugging-port (open_application adds it when the motor is on). Close the browser to close the port.
   dom_motor_send_policy: confirm  # confirm | allow — send/submit/destructive web clicks are refused until the owner confirms (re-call with confirm_send=true)
   dom_motor_shortlist_k: 18      # shortlist ceiling handed to the decision step; System-1 choice accuracy degrades past ~20 options
-  dom_motor_min_score: 0.55      # below this the motor falls through to the OCR/YOLO tracks
-  pixel_fallback: true           # Stage-2 rollback flag: OmniParser/YOLO Track 2. false = demoted (OCR Track 1 still runs)
+  dom_motor_min_score: 0.55      # below this the motor falls through to the UIA / Qwen vision grounding tracks
   # Live web browsing (browse_web tool): opens a URL or site+query and returns page text.
   web_browse: true               # set false to hide the browse_web tool
   own_browser: true              # if CDP attach fails (e.g. your Chrome is already running without the debug port), launch Aster's own real Chrome/Edge with a dedicated profile
@@ -118,9 +117,6 @@ discord_conversation:
   hostility_margin: 0.75         # Laya margin required to count a strike
 
 vision:
-  # Track-2 icon captioner for the pixel fallback. "llm" = resident model,
-  # zero extra VRAM; "off" = match only OCR-readable boxes (no captioner call).
-  icon_captioner: llm
   # Max width (px) for screenshots sent to the vision model; 0 = full resolution.
   screenshot_max_width: 1280
 

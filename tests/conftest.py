@@ -18,7 +18,6 @@ def _force_automation_defaults(monkeypatch):
     import config
     monkeypatch.setattr(config, "USE_DOM_MOTOR", False, raising=False)
     monkeypatch.setattr(config, "USE_LAYA_KERNEL", False, raising=False)
-    monkeypatch.setattr(config, "USE_PIXEL_FALLBACK", True, raising=False)
     monkeypatch.setattr(config, "BROWSER_USE_REAL_PROFILE", False, raising=False)
     monkeypatch.setattr(config, "BROWSER_HUMAN_SEARCH", False, raising=False)
     # Pin every automation knob tests assert on, so the suite is independent of

@@ -311,12 +311,6 @@ STRUCTURED_TOOL_RESULTS = bool(_cfg("runtime", "structured_tool_results", defaul
 AUTO_COMPACT_ENABLED   = bool(_cfg("runtime", "auto_compact", default=True))
 AUTO_COMPACT_THRESHOLD = float(_cfg("runtime", "auto_compact_threshold", default=0.75))
 
-# Icon captioner for the GUI locator's Track-2 fallback (YOLO icon boxes with
-# no readable text). "llm" (default) captions crops with the resident main
-# LLM via llama-server — zero extra VRAM. "off" disables captioning (Track 2
-# then matches OCR-readable boxes only). The Florence-2 icon_caption experiment
-# was dropped (never wired).
-ICON_CAPTIONER = str(_cfg("vision", "icon_captioner", default="llm")).lower()
 
 # Screenshot width cap (px) for images sent to the vision model; 0 = full resolution.
 # Qwen's encoder tiles internally, so detail above ~1280px is largely discarded anyway --
@@ -334,7 +328,7 @@ BROWSER_MIN_FREE_RAM_GB = float(_cfg("automation", "browser_min_free_ram_gb", de
 # ============================================================================
 # USE_DOM_MOTOR gates the DOM-first perception motor: web tasks go through the
 # attached browser's accessibility tree (Playwright over CDP), Windows tasks
-# through a richer UIA shortlist, before the OCR/YOLO tracks are consulted.
+# through a richer UIA shortlist, before the UIA / Qwen vision tracks are consulted.
 # Default OFF — promoted only after the stage QA gates pass.
 USE_DOM_MOTOR = bool(_cfg("automation", "dom_motor", default=False))
 
@@ -360,11 +354,6 @@ DOM_MOTOR_SHORTLIST_K = int(_cfg("automation", "dom_motor_shortlist_k", default=
 
 # Minimum score for the motor to auto-act without the System-1 kernel.
 DOM_MOTOR_MIN_SCORE = float(_cfg("automation", "dom_motor_min_score", default=0.55))
-
-# Stage-2 rollback flag for the OmniParser/YOLO Track-2 pixel fallback. Kept
-# TRUE until the locator eval shows DOM coverage; flipping it off demotes the
-# pixel track (OCR Track 1 still covers text-only surfaces).
-USE_PIXEL_FALLBACK = bool(_cfg("automation", "pixel_fallback", default=True))
 
 # If the CDP attach fails because the owner's browser is already running without
 # the debug port, the motor can launch its OWN Playwright Chromium instead. This

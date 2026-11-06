@@ -81,8 +81,7 @@ dispatch branch without a schema.
 - `annoying-aster-prompt.txt` (16 KB), `WhatsApp Chat with George Da Homie.txt`
   (272 KB), `Bugs.txt`, `ideas-for-backend.md` — unreferenced.
 - Empty dirs: `Aster_Models/`, `Chat-template/`.
-- `yolov8n.pt` (6.5 MB) — unreferenced; the live Track-2 YOLO loads
-  `microsoft/OmniParser-v2.0/icon_detect/model.pt` from the HF cache.
+- `yolov8n.pt` (6.5 MB) — **[RESOLVED / REMOVED]** deleted alongside OmniParser v2 in the Direct Qwen 3.6 Vision Grounding migration.
 - `.roo/` (4 Roo-agent rule files) — dead if Roo is no longer used.
 
 **Judgment calls (do NOT delete blindly):**
@@ -118,11 +117,20 @@ disk, but confirm nothing external depends on them first.
 - `main.py:51` still prints "Failed to load **llama-cpp-python** engine".
 - `_discord_hostility` comment (brain.py:3227–3229) — see §1.
 
+## Resolved Cleanups (Direct Qwen 3.6 Vision Grounding Migration)
+
+The GUI locator was overhauled from the legacy multi-track (UIA/OCR/YOLO+caption) architecture to a streamlined Track 0 UIA → Track 1 Direct Qwen 3.6 Vision Grounding architecture:
+- **`yolov8n.pt`** (6.5 MB) — deleted from repo root.
+- **PyTesseract OCR** — all `pytesseract` calls, 2× upscale, OCR line clustering, and Tesseract binary prerequisite completely stripped.
+- **OmniParser v2 / YOLOv8** — `_yolo_track`, `_caption_crop`, and HuggingFace download dependencies stripped from `tools/vision.py`.
+- **Dead config flags removed** — `USE_PIXEL_FALLBACK` and `ICON_CAPTIONER` removed from `config.py` and `self_config.yaml`.
+- **Test suite updates** — `tests/test_automation_flags.py` removed; `tests/test_locator.py` overhauled to test UIA + Direct Qwen 3.6 Vision Grounding.
+
 ## 8. Suggested cleanup order
 
 1. **Zero-risk:** `_RELAY_HINT_RE`, the unused imports (§3), `LIVEKIT_ROOM_NAME`,
    the `main.py:51` message, `MODEL_NAME` / `RAG_STALE_DAYS`,
-   `index.html`, `yolov8n.pt`.
+   `index.html` (`yolov8n.pt` resolved).
 2. **Low-risk:** `tools/gui.py`, `verify_action_result`, `_hostility_margin`,
    `pronoun_for`, `reset_session`, `_ANIMATED_KEYS`, `_WEB_LOCK`, `answer_margin`,
    `publish_telemetry`, `_is_discord_message_request`, the missing `ui_guides` map

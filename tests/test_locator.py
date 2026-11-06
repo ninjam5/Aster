@@ -1,17 +1,13 @@
 """
-GUI Locator Test Suite — the three-track locate_ui_element rework.
+GUI Locator Test Suite — UIA + Direct Qwen 3.6 Vision Grounding.
 
 Per-feature test classes (Mohamed's standing preference):
   Feature 1 — UIA Track 0 + shared goal parsing/scoring (tools/locator_common, tools/uia)
   Feature 2 — deterministic action verification (screen diff, FAILED strings, focus safety)
-  Feature 3 — Track 2 rework (cached-OCR box labels, pluggable icon captioner)
-  Feature 4 — locator quality (filler stripping, spatial hints, OCR cache invalidation)
-  Feature 5 — regression guards (false-positive threshold)
+  Feature 3 — Qwen 3.6 native vision grounding pipeline (tools/vision)
 
 Run: pytest tests/test_locator.py -v
-No llama-server, no live screen interaction — captioner and capture are mocked
-or exercised on synthetic data. tools/uia live-tree functions are only smoke-
-tested for graceful behavior, not asserted against desktop state (flaky).
+No llama-server, no live screen interaction — screen capture and LLM completions are mocked.
 """
 import os
 import sys
@@ -29,7 +25,7 @@ from tools.locator_common import parse_goal, score_text, spatial_weight
 # Feature 1 — UIA Track 0 + shared goal parsing/scoring
 # ============================================================================
 
-class TestGoalParsing:
+class TestGoalParsingAndUIA:
     def test_filler_words_stripped(self):
         p = parse_goal("the search bar at the top")
         assert p["tokens"] == {"search"}
@@ -117,108 +113,117 @@ class TestActionVerification:
 
 
 # ============================================================================
-# Feature 3 — Track 2: cached-OCR box labels + pluggable captioner
+# Feature 3 — Direct Qwen 3.6 Vision Grounding
 # ============================================================================
 
-class TestTrack2:
-    def test_texts_in_box_intersection(self):
-        """Line centers (2x-upscaled px) inside a physical-px YOLO box."""
-        from tools.vision import _texts_in_box
-
-        lines = [
-            {"text": "play", "box": (200, 200, 240, 220)},    # center (110,105) physical
-            {"text": "elsewhere", "box": (1000, 1000, 1100, 1020)},
-        ]
-        assert _texts_in_box(lines, (100, 95, 130, 120)) == "play"
-        assert _texts_in_box(lines, (0, 0, 50, 50)) == ""
-        assert _texts_in_box(None, (0, 0, 50, 50)) == ""
-
-    def test_caption_crop_off_switch(self):
-        import config
-        from tools.vision import _caption_crop
-
-        crop = np.zeros((32, 32, 3), dtype=np.uint8)
-        with patch.object(config, "ICON_CAPTIONER", "off"):
-            assert _caption_crop(crop) == ""
-
-    def test_caption_crop_uses_llm_and_lowercases(self):
-        import config
-        import core.brain
-        from tools.vision import _caption_crop
-
-        crop = np.zeros((32, 32, 3), dtype=np.uint8)
-        with patch.object(config, "ICON_CAPTIONER", "llm"), \
-             patch.object(core.brain, "_execute_llm_completion",
-                          return_value={"role": "assistant", "content": "  Settings Gear \n"}) as mock_llm:
-            assert _caption_crop(crop) == "settings gear"
-        sent = mock_llm.call_args.kwargs["messages"][0]["content"]
-        assert any(blk.get("type") == "image_url" for blk in sent)
-
-    def test_caption_crop_survives_llm_failure(self):
-        import config
-        import core.brain
-        from tools.vision import _caption_crop
-
-        crop = np.zeros((32, 32, 3), dtype=np.uint8)
-        with patch.object(config, "ICON_CAPTIONER", "llm"), \
-             patch.object(core.brain, "_execute_llm_completion", side_effect=RuntimeError("server down")):
-            assert _caption_crop(crop) == ""
-
-
-# ============================================================================
-# Feature 4 — locator quality: OCR cache
-# ============================================================================
-
-class TestOcrCache:
-    def test_invalidate_clears_cache(self):
+class TestQwenVisionGrounding:
+    def test_parse_qwen_grounding_point(self):
         from tools import vision
+        res = vision._parse_qwen_grounding('{"found": true, "target": "Start", "point": [335, 965]}')
+        assert res == (335, 965, None)
 
-        with vision._SCREEN_CACHE_LOCK:
-            vision._SCREEN_CACHE["ts"] = 9e12
-            vision._SCREEN_CACHE["frame"] = np.zeros((4, 4, 3), dtype=np.uint8)
-            vision._SCREEN_CACHE["lines"] = [{"text": "x", "box": (0, 0, 1, 1)}]
+    def test_parse_qwen_grounding_point_2d(self):
+        from tools import vision
+        res = vision._parse_qwen_grounding('[{"point_2d": [520, 965], "label": "Chrome"}]')
+        assert res == (520, 965, None)
+
+    def test_parse_qwen_grounding_computer_use(self):
+        from tools import vision
+        raw = '{"name": "computer_use", "arguments": {"action": "click", "coordinate": [985, 18]}}'
+        assert vision._parse_qwen_grounding(raw) == (985, 18, None)
+
+    def test_parse_qwen_grounding_box_2d(self):
+        from tools import vision
+        res = vision._parse_qwen_grounding('{"box_2d": [40, 100, 80, 200]}')
+        assert res == (150, 60, [40, 100, 80, 200])
+
+    def test_parse_qwen_grounding_box_tags(self):
+        from tools import vision
+        res = vision._parse_qwen_grounding('<|box_start|>(40, 100), (80, 200)<|box_end|>')
+        assert res == (150, 60, [40, 100, 80, 200])
+
+    def test_parse_qwen_grounding_invalid_or_not_found(self):
+        from tools import vision
+        assert vision._parse_qwen_grounding('{"found": false}') is None
+        assert vision._parse_qwen_grounding('') is None
+        assert vision._parse_qwen_grounding('{"point": [1500, 200]}') is None
+
+    def test_qwen_vision_locate_success(self):
+        from tools import vision
+        import core.brain
+        import pyautogui
+
+        with patch.object(vision, "capture_screen_base64", return_value="fakeb64"), \
+             patch.object(pyautogui, "size", return_value=(1920, 1080)), \
+             patch.object(core.brain, "_execute_llm_completion",
+                          return_value={"content": '{"found": true, "point": [500, 500]}'}):
+            res = vision._qwen_vision_locate("search bar")
+            assert res == {
+                "x": 960,
+                "y": 540,
+                "source": "qwen-vision",
+                "text": "search bar",
+                "score": 0.9,
+            }
+
+    def test_qwen_vision_locate_reasoning_fallback(self):
+        from tools import vision
+        import core.brain
+        import pyautogui
+
+        with patch.object(vision, "capture_screen_base64", return_value="fakeb64"), \
+             patch.object(pyautogui, "size", return_value=(1920, 1080)), \
+             patch.object(core.brain, "_execute_llm_completion",
+                          return_value={"content": "", "reasoning_content": '{"found": true, "point": [500, 500]}'}):
+            res = vision._qwen_vision_locate("search bar")
+            assert res == {
+                "x": 960,
+                "y": 540,
+                "source": "qwen-vision",
+                "text": "search bar",
+                "score": 0.9,
+            }
+
+    def test_qwen_vision_locate_not_found_or_exception(self):
+        from tools import vision
+        import core.brain
+
+        with patch.object(vision, "capture_screen_base64", return_value="fakeb64"), \
+             patch.object(core.brain, "_execute_llm_completion",
+                          return_value={"content": '{"found": false}'}):
+            assert vision._qwen_vision_locate("search bar") is None
+
+        with patch.object(vision, "capture_screen_base64", side_effect=RuntimeError("capture failed")):
+            assert vision._qwen_vision_locate("search bar") is None
+
+    def test_locate_ui_element_ex_fallthrough(self):
+        from tools import vision
+        import tools.uia
+
+        mock_result = {
+            "x": 960,
+            "y": 540,
+            "source": "qwen-vision",
+            "text": "search bar",
+            "score": 0.9,
+        }
+        with patch.object(tools.uia, "uia_locate", return_value=None), \
+             patch.object(vision, "_qwen_vision_locate", return_value=mock_result):
+            res = vision.locate_ui_element_ex("search bar")
+            assert res == mock_result
+
+    def test_locate_ui_elements_boxed(self):
+        from tools import vision
+        import core.brain
+        import pyautogui
+
+        with patch.object(vision, "capture_screen_base64", return_value="fakeb64"), \
+             patch.object(pyautogui, "size", return_value=(1000, 1000)), \
+             patch.object(core.brain, "_execute_llm_completion",
+                          return_value={"content": '[{"label": "btn", "box_2d": [100, 200, 200, 400]}]'}):
+            boxes = vision.locate_ui_elements_boxed("btn")
+            assert boxes == [{"box": (200, 100, 200, 100), "score": 0.9, "text": "btn"}]
+
+    def test_invalidate_screen_cache_no_error(self):
+        from tools import vision
         vision.invalidate_screen_cache()
-        with vision._SCREEN_CACHE_LOCK:
-            assert vision._SCREEN_CACHE["frame"] is None
-            assert vision._SCREEN_CACHE["lines"] is None
-            assert vision._SCREEN_CACHE["ts"] == 0.0
-
-    def test_ocr_best_line_threshold_and_coords(self):
-        from tools.vision import _ocr_best_line
-
-        parsed = parse_goal("File menu")
-        lines = [{"text": "file", "box": (80, 40, 120, 60)}]  # 2x-upscaled px
-        r = _ocr_best_line(lines, parsed, 1920, 1080, 1.0, 1.0)
-        assert r is not None and r["source"] == "ocr"
-        assert (r["x"], r["y"]) == (50, 25)  # /2 upscale correction
-
-        assert _ocr_best_line([{"text": "zzz", "box": (0, 0, 10, 10)}],
-                              parsed, 1920, 1080, 1.0, 1.0) is None
-
-
-# ============================================================================
-# Feature 5 — regression guards
-# ============================================================================
-
-class TestRegressionGuards:
-    def test_nonsense_goal_stays_below_yolo_threshold(self):
-        """Live-observed false positive (2026-07-11): goal 'zorblatt
-        frobnicator' fuzzy-matched '© agent router' at 0.41 under the old
-        0.3 threshold. The threshold is now 0.45 and must stay above this
-        pairing's score."""
-        from tools.vision import _YOLO_SCORE_THRESHOLD
-
-        score = score_text("© agent router", parse_goal("zorblatt frobnicator"))
-        assert score < _YOLO_SCORE_THRESHOLD
-
-    def test_legit_icon_captions_clear_the_threshold(self):
-        from tools.vision import _YOLO_SCORE_THRESHOLD
-
-        pairs = [
-            ("settings gear icon", "settings"),
-            ("close window", "close button"),
-            ("play button", "play"),
-            ("volume control", "the volume icon"),
-        ]
-        for caption, goal in pairs:
-            assert score_text(caption, parse_goal(goal)) >= _YOLO_SCORE_THRESHOLD, (caption, goal)

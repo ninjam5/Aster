@@ -1,6 +1,5 @@
 import base64
 import cv2
-import difflib
 import face_recognition
 import json
 import os
@@ -8,34 +7,17 @@ import re
 import threading
 import time
 import importlib
-import requests
 from typing import Any
 
 import numpy as np
+import pyautogui
 
 import config
-from tools.locator_common import parse_goal, score_text, spatial_weight
 
 try:
     mss = importlib.import_module("mss")
 except Exception:
     mss = None
-
-try:
-    import pytesseract
-    # Resolve Tesseract executable — check env override then common Windows install paths
-    _tess_candidates = [
-        os.getenv("TESSERACT_CMD", "").strip(),
-        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
-        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
-    ]
-    for _tess_path in _tess_candidates:
-        if _tess_path and os.path.exists(_tess_path):
-            pytesseract.pytesseract.tesseract_cmd = _tess_path
-            print(f"[Tesseract] Using executable: {_tess_path}")
-            break
-except Exception:
-    pytesseract = None
 
 
 # --- FACIAL RECOGNITION INITIALIZATION ---
@@ -159,7 +141,7 @@ def _downscale_bgr(frame_bgr, max_width: int):
 def capture_screen_base64(max_width: int | None = None) -> str | None:
     """Captures the primary monitor and returns raw base64 for multimodal injection.
 
-    Bypasses YOLOv8/pytesseract — the raw screenshot is sent to the mmproj.
+    The raw screenshot is sent directly to the mmproj.
     Downscales to `config.SCREENSHOT_MAX_WIDTH` (default 1280) before JPEG encoding;
     pass `max_width=0` to keep the full physical resolution (e.g. a user-facing
     screenshot artifact rather than an LLM input).
@@ -360,147 +342,11 @@ def start_screen_watcher(target_text: str) -> str:
 
 
 # ============================================================================
-# OMNIPARSER V2 UI LOCATOR — icon_detect (YOLO) + OCR fuzzy match
+# SCREEN CACHE BACKWARD COMPATIBILITY
 # ============================================================================
-_omniparser_model = None
-_omniparser_lock = threading.Lock()
-
-
-def _get_omniparser():
-    global _omniparser_model
-    with _omniparser_lock:
-        if _omniparser_model is None:
-            print('[OmniParser] Loading icon_detect model...')
-            try:
-                from ultralytics import YOLO
-                from huggingface_hub import hf_hub_download
-                weights_path = hf_hub_download(
-                    repo_id='microsoft/OmniParser-v2.0',
-                    filename='icon_detect/model.pt',
-                )
-                _omniparser_model = YOLO(weights_path)
-                _omniparser_model.to('cuda')
-                print('[OmniParser] icon_detect loaded.')
-            except Exception as e:
-                print(f'[OmniParser] Failed to load icon_detect: {e}')
-    return _omniparser_model
-
-
-def _release_omniparser() -> None:
-    """Release the OmniParser YOLO model from VRAM immediately after use.
-
-    Track 2 is a rare fallback; holding the model resident wastes ~200 MB VRAM
-    between invocations. Released just like the Kokoro pipeline in tools/audio.py.
-    """
-    global _omniparser_model
-    import gc
-    with _omniparser_lock:
-        if _omniparser_model is not None:
-            _omniparser_model = None
-            gc.collect()
-            try:
-                import torch
-                torch.cuda.empty_cache()
-            except Exception:
-                pass
-            print('[OmniParser] icon_detect released from VRAM.')
-
-
-# ============================================================================
-# SCREEN OCR CACHE + ACTION-DIFF HELPERS
-# ============================================================================
-_SCREEN_CACHE_LOCK = threading.Lock()
-_SCREEN_CACHE: dict = {"ts": 0.0, "frame": None, "lines": None}
-_SCREEN_CACHE_TTL = 4.0
-
-
 def invalidate_screen_cache() -> None:
-    """Drop the cached screenshot + OCR pass. Called by every GUI action in
-    core/brain.py — a click/keypress/scroll changes the screen, so the next
-    locate must re-capture instead of matching against a stale frame."""
-    with _SCREEN_CACHE_LOCK:
-        _SCREEN_CACHE["ts"] = 0.0
-        _SCREEN_CACHE["frame"] = None
-        _SCREEN_CACHE["lines"] = None
-
-
-def _extract_ocr_lines(frame_bgr: np.ndarray, physical_w: int, physical_h: int) -> list[dict]:
-    """Two full-screen tesseract passes (normal + inverted for dark UIs, on a
-    2× upscale), words grouped into lines. Returns [{"text", "box"}] with
-    boxes in UPSCALED (2×) physical pixels."""
-    from collections import defaultdict
-
-    if pytesseract is None:
-        return []
-
-    upscaled = cv2.resize(frame_bgr, (physical_w * 2, physical_h * 2), interpolation=cv2.INTER_CUBIC)
-    gray = cv2.cvtColor(upscaled, cv2.COLOR_BGR2GRAY)
-
-    out: list[dict] = []
-    for gray_v in (gray, cv2.bitwise_not(gray)):
-        try:
-            data = pytesseract.image_to_data(
-                gray_v,
-                output_type=pytesseract.Output.DICT,
-                config='--oem 3 --psm 11',
-            )
-        except Exception as e:
-            print(f'[Locator] OCR error: {e}')
-            continue
-
-        lines: dict = defaultdict(list)
-        for i, text in enumerate(data['text']):
-            if not text.strip():
-                continue
-            try:
-                conf = int(data['conf'][i])
-            except (ValueError, TypeError):
-                conf = -1
-            if conf < 5:
-                continue
-            key = (data['block_num'][i], data['par_num'][i], data['line_num'][i])
-            lines[key].append(i)
-
-        for idxs in lines.values():
-            words = [data['text'][i].strip().lower() for i in idxs]
-            line_text = ' '.join(w for w in words if w)
-            if not line_text.strip():
-                continue
-            x1 = min(data['left'][i] for i in idxs)
-            x2 = max(data['left'][i] + data['width'][i] for i in idxs)
-            y1 = min(data['top'][i] for i in idxs)
-            y2 = max(data['top'][i] + data['height'][i] for i in idxs)
-            out.append({'text': line_text, 'box': (x1, y1, x2, y2)})
-    return out
-
-
-def _get_screen_ocr() -> tuple | None:
-    """Capture the screen and OCR it, with a short-TTL cache so consecutive
-    locates on an unchanged screen (e.g. click then type) skip the 2-4s
-    tesseract pass. Returns (frame_bgr, physical_w, physical_h, lines)."""
-    with _SCREEN_CACHE_LOCK:
-        if _SCREEN_CACHE["frame"] is not None and time.time() - _SCREEN_CACHE["ts"] < _SCREEN_CACHE_TTL:
-            frame = _SCREEN_CACHE["frame"]
-            return frame, frame.shape[1], frame.shape[0], _SCREEN_CACHE["lines"]
-
-    b64 = capture_screen_base64()
-    if not b64:
-        print('[Locator] Screen capture failed.')
-        return None
-    np_arr = np.frombuffer(base64.b64decode(b64), dtype=np.uint8)
-    frame_bgr = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-    if frame_bgr is None:
-        print('[Locator] Failed to decode screenshot.')
-        return None
-
-    physical_h, physical_w = frame_bgr.shape[:2]
-    lines = _extract_ocr_lines(frame_bgr, physical_w, physical_h)
-
-    with _SCREEN_CACHE_LOCK:
-        _SCREEN_CACHE["ts"] = time.time()
-        _SCREEN_CACHE["frame"] = frame_bgr
-        _SCREEN_CACHE["lines"] = lines
-    return frame_bgr, physical_w, physical_h, lines
+    """No-op kept for caller/test backward compatibility."""
+    pass
 
 
 def capture_screen_small_gray(width: int = 240) -> np.ndarray | None:
@@ -539,209 +385,356 @@ def screens_differ(before: np.ndarray | None, after: np.ndarray | None,
     return bool(blocks.max() > threshold)
 
 
-def _yolo_candidates(frame_bgr: np.ndarray) -> list[dict]:
-    """Run OmniParser icon_detect → [{"bbox": (x1,y1,x2,y2), "conf": float}]
-    in physical pixels. Empty list when the model is unavailable."""
-    model = _get_omniparser()
-    if model is None:
-        return []
-    elements = []
-    results = model.predict(source=frame_bgr, conf=0.05, device=0, verbose=False)
-    for result in results:
-        boxes = result.boxes
-        if boxes is None:
-            continue
-        xyxy = boxes.xyxy.detach().cpu().numpy()
-        confs = boxes.conf.detach().cpu().numpy()
-        for box, conf in zip(xyxy, confs):
-            x1, y1, x2, y2 = [int(v) for v in box.tolist()]
-            if x2 > x1 and y2 > y1:
-                elements.append({'bbox': (x1, y1, x2, y2), 'conf': float(conf)})
-    return elements
+# ============================================================================
+# DIRECT QWEN 3.6 VISION GROUNDING
+# ============================================================================
 
+def _parse_qwen_grounding(raw_text: str) -> tuple[int, int, list[int] | None] | None:
+    """Parse normalized 0..1000 coordinates from Qwen vision output.
 
-_OCR_SCORE_THRESHOLD = 0.5
+    Supports:
+      - JSON with 'point', 'point_2d', or 'coordinate': [x, y] -> (x, y, None)
+      - JSON with 'box_2d': [ymin, xmin, ymax, xmax] -> center ((xmin+xmax)//2, (ymin+ymax)//2, box)
+      - Native Qwen box tag: <|box_start|>(ymin, xmin), (ymax, xmax)<|box_end|>
+      - Standalone 4-element [ymin, xmin, ymax, xmax] or 2-element [x, y] list.
 
-
-def _ocr_best_line(lines: list[dict] | None, parsed: dict, physical_w: int, physical_h: int,
-                   scale_x: float, scale_y: float) -> dict | None:
-    """Track 1 scoring: best OCR line for a parsed goal, or None below
-    threshold. Line boxes are 2×-upscaled physical px; output is logical px."""
-    best_line: dict | None = None
-    best_score = 0.0
-    for line in lines or []:
-        score = score_text(line['text'], parsed)
-        x1, y1, x2, y2 = line['box']               # upscaled 2× physical px
-        cx_p, cy_p = (x1 + x2) / 4, (y1 + y2) / 4  # ÷2 upscale → physical px
-        score *= spatial_weight(cx_p, cy_p, physical_w, physical_h, parsed['spatial'])
-        if score > best_score:
-            best_score = score
-            best_line = {'x': int(cx_p * scale_x), 'y': int(cy_p * scale_y), 'text': line['text']}
-    if best_line and best_score >= _OCR_SCORE_THRESHOLD:
-        print(f'[Locator] OCR match: {best_line["text"]!r} score={best_score:.2f} '
-              f'-> ({best_line["x"]},{best_line["y"]})')
-        return {'x': best_line['x'], 'y': best_line['y'], 'source': 'ocr',
-                'text': best_line['text'], 'score': round(best_score, 2)}
-    print(f'[Locator] OCR track: no match (best={best_score:.2f})')
-    return None
-
-
-def _texts_in_box(lines: list[dict] | None, bbox: tuple) -> str:
-    """Text label for a YOLO box, read from the CACHED full-screen OCR lines
-    (centers falling inside the box) instead of a fresh per-crop tesseract
-    call — the old per-crop approach cost ~0.4 s × N boxes (~45 s on a busy
-    screen). Line boxes are 2×-upscaled physical px; bbox is physical px."""
-    x1, y1, x2, y2 = bbox
-    parts = []
-    for line in lines or []:
-        lx1, ly1, lx2, ly2 = line['box']
-        cx, cy = (lx1 + lx2) / 4, (ly1 + ly2) / 4
-        if x1 <= cx <= x2 and y1 <= cy <= y2:
-            parts.append(line['text'])
-    return ' '.join(parts).strip()
-
-
-# Cap on how many text-less icon crops get sent to the captioner per locate —
-# each caption is one multimodal completion (~1-2 s on llama-server).
-_CAPTION_MAX_CROPS = 8
-
-
-def _caption_crop(crop_bgr: np.ndarray) -> str:
-    """Describe an icon crop's FUNCTION using the configured captioner.
-
-    Captioner is the resident main LLM (config.ICON_CAPTIONER = "llm") —
-    crop is a far easier task than full-screen grounding. "off" disables
-    captioning. (The Florence-2 icon_caption experiment was dropped —
-    never wired.)"""
-    import config as _config
-    mode = getattr(_config, 'ICON_CAPTIONER', 'llm')
-    if mode == 'off':
-        return ''
-    try:
-        h, w = crop_bgr.shape[:2]
-        if max(h, w) < 96:  # tiny icons: upscale so the vision encoder sees detail
-            s = 96 / max(h, w)
-            crop_bgr = cv2.resize(crop_bgr, (max(1, int(w * s)), max(1, int(h * s))),
-                                  interpolation=cv2.INTER_CUBIC)
-        ok, buf = cv2.imencode('.jpg', crop_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
-        if not ok:
-            return ''
-        b64 = base64.b64encode(buf.tobytes()).decode()
-        from core.brain import _execute_llm_completion
-        msgs = [{
-            'role': 'user',
-            'content': [
-                {'type': 'image_url', 'image_url': {'url': f'data:image/jpeg;base64,{b64}'}},
-                {'type': 'text', 'text': (
-                    'This is a small icon or button cropped from a computer screen. '
-                    'In at most 6 words, what is its function? Answer with only the '
-                    "function, e.g. 'close window', 'settings', 'play button'."
-                )},
-            ],
-        }]
-        raw = _execute_llm_completion(messages=msgs, temperature=0.1, n_predict=24)
-        return (raw.get('content') or '').strip().lower()
-    except Exception as e:
-        print(f'[Locator] caption error: {e}')
-        return ''
-
-
-_YOLO_SCORE_THRESHOLD = 0.45  # 0.3 let nonsense goals fuzzy-match random elements
-
-
-def _pixel_fallback_enabled() -> bool:
-    """Stage-2 rollback flag for the OmniParser/YOLO Track-2 pixel fallback.
-
-    True (default) = current behavior. False (demoted) = Track 2 never loads
-    its model; OCR Track 1 and the DOM motor still cover text/DOM surfaces.
+    Returns (center_x, center_y, box_coords) or None if not found or out of bounds.
     """
-    try:
-        import config as _config
-        return bool(getattr(_config, 'USE_PIXEL_FALLBACK', True))
-    except Exception:
-        return True
-
-
-def _yolo_track(frame_bgr: np.ndarray, parsed: dict, physical_w: int, physical_h: int,
-                scale_x: float, scale_y: float, lines: list[dict] | None) -> dict | None:
-    """Track 2: OmniParser icon detection.
-
-    Boxes with OCR-readable text (from the cached full-screen pass) are
-    matched on that text. When none match, the most confident TEXT-LESS boxes
-    (actual icons) are captioned by the multimodal engine and matched on
-    their function descriptions — the path that finds a gear icon for goal
-    "settings"."""
-    elements = _yolo_candidates(frame_bgr)
-    print(f'[Locator] YOLO: {len(elements)} elements detected')
-    if not elements:
+    if not raw_text or not raw_text.strip():
         return None
 
-    scored: list[tuple[float, tuple, str, str]] = []
-    textless: list[dict] = []
-    for elem in elements:
-        text = _texts_in_box(lines, elem['bbox'])
-        if not text:
-            textless.append(elem)
-            continue
-        x1, y1, x2, y2 = elem['bbox']
-        score = score_text(text, parsed)
-        score *= spatial_weight((x1 + x2) / 2, (y1 + y2) / 2, physical_w, physical_h, parsed['spatial'])
-        scored.append((score, elem['bbox'], text, 'yolo-ocr'))
+    lowered = raw_text.lower()
+    if ('"found": false' in lowered or '"found":false' in lowered or
+            "'found': false" in lowered or "'found':false" in lowered):
+        return None
+    if re.search(r'["\']found["\']\s*:\s*false', raw_text, re.IGNORECASE):
+        return None
 
-    scored.sort(key=lambda s: s[0], reverse=True)
+    def _extract_from_obj(obj: Any) -> tuple[int, int, list[int] | None] | None:
+        if isinstance(obj, dict):
+            if obj.get("found") is False or str(obj.get("found")).lower() == "false":
+                return None
+            for key in ("point", "point_2d", "coordinate"):
+                val = obj.get(key)
+                if isinstance(val, (list, tuple)) and len(val) >= 2:
+                    try:
+                        x, y = int(val[0]), int(val[1])
+                        if 0 <= x <= 1000 and 0 <= y <= 1000:
+                            return (x, y, None)
+                    except (ValueError, TypeError):
+                        pass
+                elif isinstance(val, dict) and "x" in val and "y" in val:
+                    try:
+                        x, y = int(val["x"]), int(val["y"])
+                        if 0 <= x <= 1000 and 0 <= y <= 1000:
+                            return (x, y, None)
+                    except (ValueError, TypeError):
+                        pass
+            if "box_2d" in obj:
+                val = obj["box_2d"]
+                if isinstance(val, (list, tuple)) and len(val) >= 4:
+                    try:
+                        ymin, xmin, ymax, xmax = [int(v) for v in val[:4]]
+                        if (0 <= xmin <= 1000 and 0 <= xmax <= 1000 and
+                                0 <= ymin <= 1000 and 0 <= ymax <= 1000):
+                            cx = (xmin + xmax) // 2
+                            cy = (ymin + ymax) // 2
+                            if 0 <= cx <= 1000 and 0 <= cy <= 1000:
+                                return (cx, cy, [ymin, xmin, ymax, xmax])
+                    except (ValueError, TypeError):
+                        pass
+            for sub_val in obj.values():
+                if isinstance(sub_val, (dict, list, tuple)):
+                    sub_res = _extract_from_obj(sub_val)
+                    if sub_res is not None:
+                        return sub_res
+        elif isinstance(obj, (list, tuple)):
+            if obj and isinstance(obj[0], (dict, list, tuple)):
+                for item in obj:
+                    sub_res = _extract_from_obj(item)
+                    if sub_res is not None:
+                        return sub_res
+            elif len(obj) >= 4:
+                try:
+                    ymin, xmin, ymax, xmax = [int(v) for v in obj[:4]]
+                    if (0 <= xmin <= 1000 and 0 <= xmax <= 1000 and
+                            0 <= ymin <= 1000 and 0 <= ymax <= 1000):
+                        cx = (xmin + xmax) // 2
+                        cy = (ymin + ymax) // 2
+                        if 0 <= cx <= 1000 and 0 <= cy <= 1000:
+                            return (cx, cy, [ymin, xmin, ymax, xmax])
+                except (ValueError, TypeError):
+                    pass
+            elif len(obj) >= 2:
+                try:
+                    x, y = int(obj[0]), int(obj[1])
+                    if 0 <= x <= 1000 and 0 <= y <= 1000:
+                        return (x, y, None)
+                except (ValueError, TypeError):
+                    pass
+        return None
 
-    if not scored or scored[0][0] < _YOLO_SCORE_THRESHOLD:
-        # No labeled box matched — caption real icons. Skip huge boxes (panels,
-        # images): icons are small.
-        area_cap = 0.15 * physical_w * physical_h
-        textless = [e for e in textless
-                    if (e['bbox'][2] - e['bbox'][0]) * (e['bbox'][3] - e['bbox'][1]) < area_cap]
-        textless.sort(key=lambda e: e['conf'], reverse=True)
-        for elem in textless[:_CAPTION_MAX_CROPS]:
-            x1, y1, x2, y2 = elem['bbox']
-            crop = frame_bgr[y1:y2, x1:x2]
-            if crop.size == 0:
-                continue
-            caption = _caption_crop(crop)
-            if not caption:
-                continue
-            score = score_text(caption, parsed)
-            score *= spatial_weight((x1 + x2) / 2, (y1 + y2) / 2, physical_w, physical_h, parsed['spatial'])
-            print(f'[Locator] icon caption: {caption!r} score={score:.2f}')
-            scored.append((score, elem['bbox'], caption, 'yolo-caption'))
-        scored.sort(key=lambda s: s[0], reverse=True)
+    # 1. Clean markdown code fences if present
+    clean = raw_text.strip()
+    if clean.startswith("```"):
+        clean = re.sub(r"^```(?:json)?\s*", "", clean, flags=re.IGNORECASE)
+        clean = re.sub(r"\s*```$", "", clean)
 
-    if scored and scored[0][0] >= _YOLO_SCORE_THRESHOLD:
-        best_score, bbox, text, source = scored[0]
-        x1, y1, x2, y2 = bbox
-        cx = int(((x1 + x2) / 2) * scale_x)
-        cy = int(((y1 + y2) / 2) * scale_y)
-        print(f'[Locator] YOLO match: {text!r} ({source}) score={best_score:.2f} -> ({cx},{cy})')
-        return {'x': cx, 'y': cy, 'source': source, 'text': text, 'score': round(best_score, 2)}
+    # 2. Try JSON parsing
+    try:
+        parsed = json.loads(clean)
+        res = _extract_from_obj(parsed)
+        if res is not None:
+            return res
+    except Exception:
+        pass
 
-    print('[Locator] YOLO track: no match')
+    # 3. Look for JSON objects inside raw_text
+    for m in re.finditer(r'\{[^{}]*\}', raw_text):
+        try:
+            parsed = json.loads(m.group(0))
+            res = _extract_from_obj(parsed)
+            if res is not None:
+                return res
+        except Exception:
+            pass
+
+    # 4. Check for Qwen box tag: <|box_start|>(ymin, xmin), (ymax, xmax)<|box_end|>
+    box_tag_match = re.search(
+        r'<\|box_start\|>\s*\(?\s*(\d{1,4})\s*,\s*(\d{1,4})\s*\)?\s*,\s*\(?\s*(\d{1,4})\s*,\s*(\d{1,4})\s*\)?\s*<\|box_end\|>',
+        raw_text
+    )
+    if box_tag_match:
+        ymin, xmin, ymax, xmax = [int(g) for g in box_tag_match.groups()]
+        if (0 <= xmin <= 1000 and 0 <= xmax <= 1000 and
+                0 <= ymin <= 1000 and 0 <= ymax <= 1000):
+            cx = (xmin + xmax) // 2
+            cy = (ymin + ymax) // 2
+            if 0 <= cx <= 1000 and 0 <= cy <= 1000:
+                return (cx, cy, [ymin, xmin, ymax, xmax])
+
+    # 5. Regex for key patterns if JSON was malformed
+    pt_match = re.search(r'"(?:point|point_2d|coordinate)"\s*:\s*\[\s*(\d{1,4})\s*,\s*(\d{1,4})\s*\]', raw_text)
+    if pt_match:
+        x, y = int(pt_match.group(1)), int(pt_match.group(2))
+        if 0 <= x <= 1000 and 0 <= y <= 1000:
+            return (x, y, None)
+
+    box_key_match = re.search(r'"box_2d"\s*:\s*\[\s*(\d{1,4})\s*,\s*(\d{1,4})\s*,\s*(\d{1,4})\s*,\s*(\d{1,4})\s*\]', raw_text)
+    if box_key_match:
+        ymin, xmin, ymax, xmax = [int(g) for g in box_key_match.groups()]
+        if (0 <= xmin <= 1000 and 0 <= xmax <= 1000 and
+                0 <= ymin <= 1000 and 0 <= ymax <= 1000):
+            cx = (xmin + xmax) // 2
+            cy = (ymin + ymax) // 2
+            if 0 <= cx <= 1000 and 0 <= cy <= 1000:
+                return (cx, cy, [ymin, xmin, ymax, xmax])
+
+    # 6. Standalone 4-element list: [ymin, xmin, ymax, xmax]
+    list4_match = re.search(r'\[\s*(\d{1,4})\s*,\s*(\d{1,4})\s*,\s*(\d{1,4})\s*,\s*(\d{1,4})\s*\]', raw_text)
+    if list4_match:
+        ymin, xmin, ymax, xmax = [int(g) for g in list4_match.groups()]
+        if (0 <= xmin <= 1000 and 0 <= xmax <= 1000 and
+                0 <= ymin <= 1000 and 0 <= ymax <= 1000):
+            cx = (xmin + xmax) // 2
+            cy = (ymin + ymax) // 2
+            if 0 <= cx <= 1000 and 0 <= cy <= 1000:
+                return (cx, cy, [ymin, xmin, ymax, xmax])
+
+    # 7. Standalone 2-element list: [x, y]
+    list2_match = re.search(r'\[\s*(\d{1,4})\s*,\s*(\d{1,4})\s*\]', raw_text)
+    if list2_match:
+        x, y = int(list2_match.group(1)), int(list2_match.group(2))
+        if 0 <= x <= 1000 and 0 <= y <= 1000:
+            return (x, y, None)
+
     return None
+
+
+def _qwen_vision_locate(goal: str, b64_img: str | None = None) -> dict | None:
+    """Locate a UI element via direct Qwen 3.6 vision grounding."""
+    try:
+        if b64_img is None:
+            b64_img = capture_screen_base64()
+        if not b64_img:
+            return None
+
+        prompt = (
+            f'You are a computer vision UI grounding model.\n'
+            f'Look at the screenshot and find the exact UI element: "{goal}".\n'
+            f'If the element is NOT visible on the screen, return ONLY: {{"found": false}}\n'
+            f'If visible, return ONLY a JSON object with the center coordinate normalized to a 1000x1000 grid:\n'
+            f'{{"found": true, "target": "{goal}", "point": [x, y]}}\n'
+            f'Where x is the horizontal coordinate (0-1000, left to right) and y is the vertical coordinate (0-1000, top to bottom).\n'
+            f'Do not include markdown or reasoning outside the JSON.'
+        )
+
+        from core.brain import _execute_llm_completion
+        resp = _execute_llm_completion(
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}},
+                    {"type": "text", "text": prompt},
+                ],
+            }],
+            temperature=0.1,
+            n_predict=1500,
+        )
+
+        raw = (resp.get("content") or "").strip()
+        if not raw:
+            raw = (resp.get("reasoning_content") or "").strip()
+
+        parsed = _parse_qwen_grounding(raw)
+        if parsed is None:
+            return None
+
+        x_norm, y_norm, _ = parsed
+        logical_w, logical_h = pyautogui.size()
+        lx = int((x_norm / 1000.0) * logical_w)
+        ly = int((y_norm / 1000.0) * logical_h)
+        print(f'[Locator] Qwen vision match: {goal!r} -> ({lx},{ly})')
+        return {"x": lx, "y": ly, "source": "qwen-vision", "text": goal, "score": 0.9}
+    except Exception as e:
+        print(f'[Locator] Qwen vision grounding failed: {e}')
+        return None
+
+
+def _qwen_vision_locate_boxes(goal: str, b64_img: str | None = None) -> list[dict]:
+    """Locate all visible instances of `goal` on screen as logical-pixel boxes."""
+    try:
+        if b64_img is None:
+            b64_img = capture_screen_base64()
+        if not b64_img:
+            return []
+
+        prompt = (
+            f'You are a computer vision UI grounding model.\n'
+            f'Look at the screenshot and find all visible instances of the UI element: "{goal}".\n'
+            f'Return ONLY a JSON array of objects with the bounding boxes normalized to a 1000x1000 grid:\n'
+            f'[{{"label": "{goal}", "box_2d": [ymin, xmin, ymax, xmax]}}]\n'
+            f'Where ymin, xmin, ymax, xmax are normalized to 0-1000.\n'
+            f'If no instances are visible on the screen, return ONLY: []\n'
+            f'Do not include markdown or reasoning outside the JSON.'
+        )
+
+        from core.brain import _execute_llm_completion
+        resp = _execute_llm_completion(
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}},
+                    {"type": "text", "text": prompt},
+                ],
+            }],
+            temperature=0.1,
+            n_predict=1500,
+        )
+
+        raw = (resp.get("content") or "").strip()
+        if not raw:
+            raw = (resp.get("reasoning_content") or "").strip()
+
+        if not raw:
+            return []
+
+        logical_w, logical_h = pyautogui.size()
+
+        boxes: list[list[int]] = []
+
+        # 1. Try parsing JSON array directly or clean markdown fences
+        clean = raw
+        if clean.startswith("```"):
+            clean = re.sub(r"^```(?:json)?\s*", "", clean, flags=re.IGNORECASE)
+            clean = re.sub(r"\s*```$", "", clean)
+
+        try:
+            parsed_json = json.loads(clean)
+            if isinstance(parsed_json, list):
+                for item in parsed_json:
+                    if isinstance(item, dict):
+                        b = item.get("box_2d") or item.get("box")
+                        if isinstance(b, (list, tuple)) and len(b) >= 4:
+                            boxes.append([int(v) for v in b[:4]])
+                    elif isinstance(item, (list, tuple)) and len(item) >= 4:
+                        boxes.append([int(v) for v in item[:4]])
+            elif isinstance(parsed_json, dict):
+                b = parsed_json.get("box_2d") or parsed_json.get("box")
+                if isinstance(b, (list, tuple)) and len(b) >= 4:
+                    boxes.append([int(v) for v in b[:4]])
+        except Exception:
+            pass
+
+        # 2. Also regex search for box_2d or Qwen box tokens if JSON did not find any
+        if not boxes:
+            for m in re.finditer(r'"box_2d"\s*:\s*\[\s*(\d{1,4})\s*,\s*(\d{1,4})\s*,\s*(\d{1,4})\s*,\s*(\d{1,4})\s*\]', raw):
+                boxes.append([int(g) for g in m.groups()])
+
+        if not boxes:
+            for m in re.finditer(
+                r'<\|box_start\|>\s*\(?\s*(\d{1,4})\s*,\s*(\d{1,4})\s*\)?\s*,\s*\(?\s*(\d{1,4})\s*,\s*(\d{1,4})\s*\)?\s*<\|box_end\|>',
+                raw
+            ):
+                boxes.append([int(g) for g in m.groups()])
+
+        matches: list[dict] = []
+        for b in boxes:
+            ymin, xmin, ymax, xmax = b
+            if not (0 <= xmin <= 1000 and 0 <= xmax <= 1000 and 0 <= ymin <= 1000 and 0 <= ymax <= 1000):
+                continue
+            left = int((xmin / 1000.0) * logical_w)
+            top = int((ymin / 1000.0) * logical_h)
+            width = max(1, int(((xmax - xmin) / 1000.0) * logical_w))
+            height = max(1, int(((ymax - ymin) / 1000.0) * logical_h))
+            matches.append({"box": (left, top, width, height), "score": 0.9, "text": goal})
+
+        # 3. If no box_2d was found, try fallback to single grounding
+        if not matches:
+            single = _parse_qwen_grounding(raw)
+            if single:
+                x_norm, y_norm, box_coords = single
+                if box_coords:
+                    ymin, xmin, ymax, xmax = box_coords
+                    left = int((xmin / 1000.0) * logical_w)
+                    top = int((ymin / 1000.0) * logical_h)
+                    width = max(1, int(((xmax - xmin) / 1000.0) * logical_w))
+                    height = max(1, int(((ymax - ymin) / 1000.0) * logical_h))
+                    matches.append({"box": (left, top, width, height), "score": 0.9, "text": goal})
+                else:
+                    lx = int((x_norm / 1000.0) * logical_w)
+                    ly = int((y_norm / 1000.0) * logical_h)
+                    left = max(0, lx - 30)
+                    top = max(0, ly - 18)
+                    matches.append({"box": (left, top, 60, 36), "score": 0.9, "text": goal})
+
+        # Deduplicate boxes whose centers are within 10 logical px
+        deduped: list[dict] = []
+        for m in matches:
+            cx = m['box'][0] + m['box'][2] / 2
+            cy = m['box'][1] + m['box'][3] / 2
+            if any(abs(cx - (d['box'][0] + d['box'][2] / 2)) < 10
+                   and abs(cy - (d['box'][1] + d['box'][3] / 2)) < 10 for d in deduped):
+                continue
+            deduped.append(m)
+
+        print(f'[Locator] boxed: {len(deduped)} match(es) for {repr(goal)}')
+        return deduped
+    except Exception as e:
+        print(f'[Locator] Qwen vision locate boxes failed: {e}')
+        return []
 
 
 def locate_ui_element_ex(goal: str) -> dict | None:
-    """Locate a UI element by natural language description — three tracks.
+    """Locate a UI element by natural language description — DOM, UIA, or Qwen Vision Grounding.
 
-    Track 0 — Windows UI Automation accessibility tree (tools/uia.py): exact
-              element names/rects straight from the OS. Deterministic, fast,
-              zero GPU. Covers native apps, the taskbar, and (after a warm-up
-              walk) Chromium/Electron apps.
-    Track 1 — full-screen pytesseract (2 OCR calls, short-TTL cached): text
-              in canvas-rendered surfaces UIA can't see.
-    Track 2 — OmniParser YOLO icon_detect + icon captioning: unlabeled icons.
+    Track -1 — DOM motor (Stage 1): role-aware UIA shortlist.
+    Track 0  — Windows UI Automation accessibility tree (tools/uia.py).
+    Track 1  — Direct Qwen 3.6 Vision Grounding.
 
-    Returns {"x", "y", "source", "text", "score", ...} in logical pixels, or
-    None. `source` is one of dom-win | uia | ocr | yolo-ocr | yolo-caption —
-    callers surface it in tool results so the model knows the match provenance.
+    Returns {"x", "y", "source", "text", "score", ...} in logical pixels, or None.
+    `source` is one of dom-win | uia | qwen-vision.
     """
-    import pyautogui
-
-    parsed = parse_goal(goal)
-
     # Track -1 (DOM motor, Stage 1): role-aware UIA shortlist + exact-match
     # fallback over ONE shared walk. Off by default; on a miss the exact-match
     # pass reuses the same candidates so Track 0 never walks the tree twice.
@@ -775,27 +768,8 @@ def locate_ui_element_ex(goal: str) -> dict | None:
         except Exception as e:
             print(f'[Locator] UIA track unavailable: {e}')
 
-    cap = _get_screen_ocr()
-    if cap is None:
-        return None
-    frame_bgr, physical_w, physical_h, lines = cap
-    logical_w, logical_h = pyautogui.size()
-    scale_x = logical_w / physical_w
-    scale_y = logical_h / physical_h
-
-    # Track 1: full-screen OCR lines (cached)
-    result = _ocr_best_line(lines, parsed, physical_w, physical_h, scale_x, scale_y)
-    if result:
-        return result
-
-    # Track 2: YOLO icon detection + captioning (demoted by USE_PIXEL_FALLBACK)
-    if not _pixel_fallback_enabled():
-        print('[Locator] Track 2 (OmniParser/YOLO) demoted — USE_PIXEL_FALLBACK is off')
-        return None
-    print('[Locator] Falling back to YOLO icon track...')
-    yolo_result = _yolo_track(frame_bgr, parsed, physical_w, physical_h, scale_x, scale_y, lines)
-    _release_omniparser()  # free VRAM immediately after each fallback use
-    return yolo_result
+    # Track 1: Direct Qwen 3.6 Vision Grounding
+    return _qwen_vision_locate(goal)
 
 
 def locate_ui_element(goal: str) -> tuple[int, int] | None:
@@ -807,71 +781,10 @@ def locate_ui_element(goal: str) -> tuple[int, int] | None:
 def locate_ui_elements_boxed(goal: str, threshold: float = 0.5) -> list[dict]:
     """Locate ALL on-screen matches for `goal`, returned as logical-pixel boxes.
 
-    Unlike locate_ui_element (which returns a single centre point), this keeps
-    every match above `threshold` and exposes the full bounding box — used by
-    Assist Mode to draw highlight rectangles. Track 1 (pytesseract, cached via
-    _get_screen_ocr) handles all text labels; Track 2 (YOLO icon_detect, OCR
-    text only — no captioning, highlights need to stay fast) is the fallback
-    when Track 1 finds nothing. Each item: {"box": (l, t, w, h), "score", "text"}.
+    Delegates directly to Direct Qwen 3.6 Vision Grounding.
+    Returns [{"box": (left, top, width, height), "score": 0.9, "text": goal}, ...].
     """
-    import pyautogui
-
-    cap = _get_screen_ocr()
-    if cap is None:
-        return []
-    frame_bgr, physical_w, physical_h, lines = cap
-    logical_w, logical_h = pyautogui.size()
-    scale_x = logical_w / physical_w
-    scale_y = logical_h / physical_h
-
-    parsed = parse_goal(goal)
-    matches: list[dict] = []
-
-    # Track 1: cached full-screen OCR — collect every line scoring >= threshold
-    for line in lines or []:
-        score = score_text(line['text'], parsed)
-        x1, y1, x2, y2 = line['box']  # upscaled 2× physical px
-        score *= spatial_weight((x1 + x2) / 4, (y1 + y2) / 4, physical_w, physical_h, parsed['spatial'])
-        if score < threshold:
-            continue
-        # /2: OCR ran on a 2× upscaled image
-        left = int(x1 / 2 * scale_x)
-        top = int(y1 / 2 * scale_y)
-        width = int((x2 - x1) / 2 * scale_x)
-        height = int((y2 - y1) / 2 * scale_y)
-        matches.append({'box': (left, top, width, height), 'score': score, 'text': line['text']})
-
-    # Track 2: YOLO icon detection — only if OCR found nothing (demoted by flag)
-    if not matches and _pixel_fallback_enabled():
-        for elem in _yolo_candidates(frame_bgr):
-            text = _texts_in_box(lines, elem['bbox'])
-            if not text:
-                continue
-            x1, y1, x2, y2 = elem['bbox']
-            score = score_text(text, parsed)
-            score *= spatial_weight((x1 + x2) / 2, (y1 + y2) / 2, physical_w, physical_h, parsed['spatial'])
-            if score < _YOLO_SCORE_THRESHOLD:
-                continue
-            matches.append({
-                'box': (int(x1 * scale_x), int(y1 * scale_y),
-                        int((x2 - x1) * scale_x), int((y2 - y1) * scale_y)),
-                'score': score, 'text': text,
-            })
-        _release_omniparser()  # free VRAM immediately after each fallback use
-
-    # Dedup near-identical boxes (centres within ~10px) — keep the higher score
-    matches.sort(key=lambda m: m['score'], reverse=True)
-    deduped: list[dict] = []
-    for m in matches:
-        cx = m['box'][0] + m['box'][2] / 2
-        cy = m['box'][1] + m['box'][3] / 2
-        if any(abs(cx - (d['box'][0] + d['box'][2] / 2)) < 10
-               and abs(cy - (d['box'][1] + d['box'][3] / 2)) < 10 for d in deduped):
-            continue
-        deduped.append(m)
-
-    print(f'[Locator] boxed: {len(deduped)} match(es) for {repr(goal)}')
-    return deduped
+    return _qwen_vision_locate_boxes(goal)
 
 
 

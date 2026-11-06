@@ -32,8 +32,7 @@
 | Discord Bot | **discord.py** (listener) + raw **requests** REST API (sender) |
 | Spotify Control | **Spotipy** (OAuth2, `SpotifyOAuth`) |
 | Vision | **Qwen 3.6 mmproj** (native vision via `/v1/chat/completions`, **served on the GPU** — primary), **face_recognition** (fallback), **OpenCV** |
-| OCR | **pytesseract** (ACTIVE — full-screen `image_to_data` two-track locator, see Section 2.6.1) |
-| UI Detection | **DOM motor** (`tools/dom.py`; ARIA/CDP + UIA shortlist, opt-in) → UIA → pytesseract → **OmniParser v2** (icon_detect YOLOv8 via `ultralytics` + `huggingface_hub`; flag-gated pixel fallback) |
+| UI Detection | **DOM motor** (`tools/dom.py`; ARIA/CDP + UIA shortlist, opt-in) → **UIA** (`tools/uia.py`) → **Qwen 3.6 Native Vision Grounding** (`tools/vision.py`) |
 | Screen Capture | **mss** |
 | GUI Automation | **pyautogui** (ACTIVE — `smart_click`, `smart_type`, `type_text`, `smart_scroll`, `press_key`, see Section 2.7) |
 | System Monitoring | **psutil** |
@@ -323,30 +322,25 @@ Also available via Telegram: `/note <text>` and `/find <thing>` (unchanged).
 
 **`look_at_screen`** (vision model): `capture_screen_base64()` grabs primary monitor via `mss` → Base64 JPEG → `_execute_llm_completion()` with `image_url`, temperature 0.2, prompt asking for full screen description.
 
-**`locate_ui_element_ex(goal)`** — the core for `smart_click`, `smart_type`. Three-track architecture (2026-07-11 rework); returns `{"x","y","source","text","score",...}` in logical pixels — `locate_ui_element` is the `(x, y)` back-compat wrapper. Goal parsing/scoring shared across all tracks via `tools/locator_common.py`: `parse_goal` strips filler words ("the search bar at the top" → tokens `{search}`), extracts **spatial hints** (top/bottom/left/right/center → soft position prior, ×0.8 on contradiction) and **control-type hints** ("button" → ButtonControl); `score_text` = `max(SequenceMatcher ratio, token overlap × 0.85, substring 0.9-0.95)`.
+**`locate_ui_element_ex(goal)`** — the core for `smart_click`, `smart_type`. Streamlined pipeline; returns `{"x","y","source","text","score",...}` in logical pixels — `locate_ui_element` is the `(x, y)` back-compat wrapper. PyTesseract OCR and OmniParser v2 YOLOv8 + crop captioning were completely stripped in favor of UIA + native Qwen 3.6 vision grounding:
+
+**Track -1 — DOM motor (`tools/dom.py`, opt-in):**
+When `USE_DOM_MOTOR` is enabled, Playwright ARIA snapshot (web) or UIA shortlist (Windows) resolves interactive elements with role/lexical scoring and send-policy gates before falling back to desktop vision.
 
 **Track 0 — Windows UI Automation accessibility tree (`tools/uia.py`, primary, ~0.1-2s, zero GPU):**
 1. Walks the foreground top-level window (2.0s budget) + taskbar (0.8s budget) via the `uiautomation` package, collecting visible named controls (Name, ControlTypeName, BoundingRectangle)
 2. Chromium/Electron apps enable accessibility lazily — the walk itself is the wake-up call; a sparse result (<12 named controls) triggers one retry after 0.8s (verified live: 27 controls cold → 1035 warm)
-3. Fuzzy scoring + type-hint bonus (+0.05) + spatial prior; threshold **0.70**
+3. Fuzzy scoring + type-hint bonus (+0.05) + spatial prior via `tools/locator_common.py`; threshold **0.70**
 4. UIA rects are physical desktop px, scaled by `pyautogui.size() / root-rect` for DPI safety
 5. Per-thread COM init (`UIAutomationInitializerInThread`) since `execute_tool` runs on CLI/Telegram/LiveKit threads. Any failure → `None` → fall through (never crashes the brain). Limits: elevated windows unreadable from a non-elevated process; secure desktop off-limits.
 
-**Track 1 — Full-screen OCR (~2-4s, cached):**
-1. Screenshot decoded to BGR via OpenCV, `cv2.resize` 2× upscale
-2. `pytesseract.image_to_data(..., '--oem 3 --psm 11')` × 2 (normal + inverted for dark UIs), words grouped into lines by `(block_num, par_num, line_num)`
-3. Best line ≥ **0.5** returned; DPI corrected (÷2 upscale × logical/physical)
-4. The capture+OCR pass is cached ~4s (`_get_screen_ocr`); **every GUI action calls `invalidate_screen_cache()`** so consecutive locates on an unchanged screen are free but post-action locates re-capture
+**Track 1 — Direct Qwen 3.6 Vision Grounding (`_qwen_vision_locate`, ~0.5–2s):**
+1. When UIA misses, `tools/vision.py` captures the desktop screen (`capture_screen_base64()`) and sends it directly to llama-server via native multimodal chat completions.
+2. Employs Qwen 3.6 native vision grounding on a `1000x1000` normalized coordinate grid (`{"point": [ymin, xmin]}`).
+3. The normalized coordinates are parsed and scaled directly into logical desktop pixels (`x = x_norm * screen_width / 1000`, `y = y_norm * screen_height / 1000`).
+4. Replaces the legacy PyTesseract OCR and OmniParser v2 YOLOv8 pipelines with zero additional model weight or VRAM overhead (uses the resident Qwen 3.6 mmproj vision adapter on GPU).
 
-**Track 2 — OmniParser v2 YOLO + icon captioning (last resort):**
-1. `microsoft/OmniParser-v2.0` icon_detect YOLOv8 (via `huggingface_hub` + `ultralytics`, CUDA, released from VRAM after each use) detects element boxes
-2. Boxes get text labels by intersecting the **cached Track-1 OCR lines** (`_texts_in_box`) — the old one-tesseract-call-per-crop approach cost ~0.4s × N boxes (~45s on a busy screen)
-3. If no labeled box scores ≥ **0.45** (`_YOLO_SCORE_THRESHOLD`; the old 0.3 let nonsense goals match random elements — regression-tested), the top-8 most-confident **text-less** boxes (≤15% screen area — real icons) are captioned by `_caption_crop` and matched on function descriptions ("settings gear" ↔ goal "settings")
-4. Track 2 is demoted by `config.USE_PIXEL_FALLBACK` (default true; false never loads the YOLO model). Captioner via `config.ICON_CAPTIONER` (`vision.icon_captioner` in self_config.yaml): `"llm"` (default — resident model, zero extra VRAM, ~1-2s/crop) / `"off"`. The Florence-2 experiment was dropped (never wired).
-
-Tesseract executable configured at module import time from `C:\Program Files\Tesseract-OCR\tesseract.exe` (env override → default paths → fail gracefully). The old `parse_screen()` / `UI_ELEMENT_COORDS` / YOLO coordinate pipeline was deleted in the Qwen swap (2026-09-27).
-
-**Eval harness (`engine_testing/locator_eval.py`):** `capture <name>` saves labeled screenshots to `locator_cases/`, `run [--captions]` scores Tracks 1/2 offline against `cases.json` (`expected_box` hit-testing, per-track hit-rate + latency), `live "<goal>"` runs the full three-track locate on the live screen and moves the mouse to the match (never clicks). Threshold/captioner decisions are made here, with data; `run --no-pixel` measures the demoted-Track-2 A/B.
+**Eval harness (`engine_testing/locator_eval.py`):** `capture <name>` saves labeled screenshots to `locator_cases/`, `run` scores offline against `cases.json` (`expected_box` hit-testing, hit-rate + latency), `live "<goal>"` runs the full locate on the live screen and moves the mouse to the match (never clicks).
 
 #### 2.6.2 Webcam Capture (`capture_webcam_base64()`)
 - Captures frame, detects faces, identifies known persons from vault
@@ -380,12 +374,10 @@ Tesseract executable configured at module import time from `C:\Program Files\Tes
 - **Purpose:** When the user asks *where* something is on screen, Aster dims the
   whole display and highlights the located item(s) — a visual "point at it" aid.
 - **`locate_ui_elements_boxed(goal, threshold=0.5)`** (`tools/vision.py`) — a
-  multi-match, box-returning sibling of `locate_ui_element`. Reuses the same
-  capture/scale preamble and two-track pipeline: Track 1 (pytesseract) collects
-  **every** line scoring ≥ threshold; Track 2 (YOLO `icon_detect`) runs only as a
-  fallback when Track 1 finds nothing. Boxes are DPI-corrected to logical pixels
-  (Track 1 keeps the `/2` for the 2× OCR upscale; Track 2 does not). Near-identical
-  boxes (centres within ~10 px) are deduped. Returns `[{box:(l,t,w,h), score, text}]`.
+  multi-match, box-returning sibling of `locate_ui_element`. Backed by
+  `_qwen_vision_locate_boxes(goal)` using Qwen 3.6 normalized `box_2d` grounding
+  (`[ymin, xmin, ymax, xmax]`), scaled from the `1000x1000` grid to logical desktop
+  pixels. Returns `[{box:(l,t,w,h), score, text}]`.
 - **`highlight_regions(boxes, duration=6.0)`** (`tools/assist.py`) — spawns a
   stdlib-`tkinter` overlay on a dedicated daemon thread (tkinter is not
   thread-safe, so the window *and* its `mainloop` run on that one thread). The
@@ -405,25 +397,25 @@ Tesseract executable configured at module import time from `C:\Program Files\Tes
 
 | Tool | Parameters | Behaviour |
 |---|---|---|
-| `smart_click` | `goal: str`, `confirm_send: bool?` | When `USE_DOM_MOTOR` is on and a focused browser is attached, a DOM fast path (Playwright ARIA shortlist; System-1 kernel optional) runs first; send/submit/destructive clicks return `FAILED — BLOCKED` until `confirm_send: true`. Otherwise `locate_ui_element_ex(goal)` (Track 0 UIA → Track 1 OCR → Track 2 YOLO+caption) → pre-frame snapshot → `pyautogui.click` → cache invalidate → 0.8s sleep → **blockwise pre/post diff** (`screens_differ`) → result carries match provenance (source/text/score, low-confidence flag <0.65), foreground window title, and a no-visible-change WARNING when the diff is flat. Locate miss returns `FAILED — ...`. |
+| `smart_click` | `goal: str`, `confirm_send: bool?` | When `USE_DOM_MOTOR` is on and a focused browser is attached, a DOM fast path (Playwright ARIA shortlist; System-1 kernel optional) runs first; send/submit/destructive clicks return `FAILED — BLOCKED` until `confirm_send: true`. Otherwise `locate_ui_element_ex(goal)` (Track 0 UIA → Track 1 Qwen Vision Grounding) → pre-frame snapshot → `pyautogui.click` → cache invalidate → 0.8s sleep → **blockwise pre/post diff** (`screens_differ`) → result carries match provenance (source/text/score, low-confidence flag <0.65), foreground window title, and a no-visible-change WARNING when the diff is flat. Locate miss returns `FAILED — ...`. |
 | `smart_type` | `goal: str`, `text: str` | Locate field → click → **UIA focus check** (`focused_control_type()`): Edit/ComboBox (or UIA unavailable) → Ctrl+A + paste; DocumentControl → paste WITHOUT select-all (never wipes a document); any other type → `FAILED`, nothing typed. Result carries provenance + foreground title. |
 | `type_text` | `text: str` | Pastes at current cursor (pyperclip + Ctrl+V). Much faster than `smart_type` — skips the screen-search step. Use when the correct field is already focused. Result carries foreground title. |
 | `smart_scroll` | `direction: str`, `clicks: int` | Scrolls mouse wheel; pre/post diff warns "already at the top/end" when the screen did not change. |
 | `press_key` | `key: str` | `pyautogui.press(key)` — Enter, Tab, Escape, arrows, function keys, etc. Result carries foreground title. |
-| `highlight_on_screen` | `goal: str` | Assist Mode — `locate_ui_elements_boxed(goal)` (all matches as boxes, cached-OCR + YOLO-text tracks, no captioning) → `assist.highlight_regions()` dims screen + highlights matches. See Section 2.6.6. |
+| `highlight_on_screen` | `goal: str` | Assist Mode — `locate_ui_elements_boxed(goal)` (all matches as boxes via Qwen 3.6 vision grounding `_qwen_vision_locate_boxes`) → `assist.highlight_regions()` dims screen + highlights matches. See Section 2.6.6. |
 | `browse_web` | `url?`, `site?`, `query?`, `max_chars?` | Opens a live page in Aster's own browser (real Chrome/Edge on the dedicated persistent profile) and returns title + visible text + HTTP status. **No arguments reads the CURRENT page** (after interacting). `site='linkedin'`/`'amazon.eg'`/`'youtube'` target the site's own search; no query → home page. Read-only. `automation.web_browse: false` hides it. With `use_real_profile: true` it refuses loudly with the `login_once.py` alternative (the owner's real profile can NEVER be driven — see the DOM motor notes below). On a login wall the model tells the owner to run `python login_once.py <site>` once; the session persists in the dedicated profile and every later browse is logged in. |
 | `smart_type` (web) | `goal`, `text`, `submit?` | On a web page the DOM motor fills the field; `submit=true` presses Enter to run the search. Chain: `browse_web(site=…)` → `smart_type(goal, text, submit=true)` → `browse_web()` to read results. |
 
 **Loop-level guard:** the ReAct loop counts `smart_click` goals per turn and appends a STOP-hammering warning from the 3rd identical click. All `FAILED —` results feed the failure-blind-claim guard (the model cannot report success over a failed GUI action).
 
 **Implementation split:**
-- `locate_ui_element_ex()` / Tracks 1-2 live in [`tools/vision.py`](tools/vision.py); Track 0 + focus/foreground helpers in [`tools/uia.py`](tools/uia.py); shared scoring in [`tools/locator_common.py`](tools/locator_common.py)
+- `locate_ui_element_ex()` / Track 1 (Direct Qwen Vision Grounding) lives in [`tools/vision.py`](tools/vision.py); Track 0 + focus/foreground helpers in [`tools/uia.py`](tools/uia.py); shared scoring in [`tools/locator_common.py`](tools/locator_common.py)
 - `verify_action_result()` lives in [`tools/vision.py`](tools/vision.py) (model free-text, `n_predict=80`) — NOT called by the dispatch path; per-click verification is the deterministic diff
 
 **DOM-first automation motor (Stages 0–3, opt-in, default OFF):**
 - `tools/dom.py` — Playwright ARIA snapshot (web, attached via CDP; only the focused page is actionable) or one shared UIA walk (Windows) → structural filter (interactive/visible/enabled) → role+lexical rank → ≤18 shortlist → deterministic execution (model output never becomes selectors/JS/coordinates). Send/submit/destructive clicks require `confirm_send=true` after owner confirmation (`DOM_MOTOR_SEND_POLICY=confirm`).
 - `core/system1.py` — optional Laya kernel (lazy + ref-counted, CPU) picks among ambiguous shortlist candidates and provides the neutral-key yes/no gate API (`check_state`; not yet wired to a production caller); low-margin or failed decisions escalate to the LLM/pyautogui path. Decisions log to `Aster_Vault/system1_log.jsonl`; `engine_testing/calibrate_system1.py` fits temperatures and reports ECE.
-- Flags: `USE_DOM_MOTOR`, `USE_LAYA_KERNEL`, `USE_PIXEL_FALLBACK` (Track-2 demotion), `DOM_MOTOR_SEND_POLICY`, `DOM_MOTOR_SHORTLIST_K`, `DOM_MOTOR_MIN_SCORE`, `BROWSER_CDP_PORT`, `LAYA_MARGIN_THRESHOLD`, `LAYA_KEEP_RESIDENT`, `LAYA_LOG_PATH`, `WEB_BROWSE_ENABLED`, `DOM_MOTOR_OWN_BROWSER`, `BROWSER_HEADLESS`, `BROWSER_PROFILE_DIR`, `BROWSER_USE_REAL_PROFILE`, `BROWSER_HUMAN_SEARCH`. Promotion is gated on the per-stage QA checklists in `engine_testing/qa/`.
+- Flags: `USE_DOM_MOTOR`, `USE_LAYA_KERNEL`, `DOM_MOTOR_SEND_POLICY`, `DOM_MOTOR_SHORTLIST_K`, `DOM_MOTOR_MIN_SCORE`, `BROWSER_CDP_PORT`, `LAYA_MARGIN_THRESHOLD`, `LAYA_KEEP_RESIDENT`, `LAYA_LOG_PATH`, `WEB_BROWSE_ENABLED`, `DOM_MOTOR_OWN_BROWSER`, `BROWSER_HEADLESS`, `BROWSER_PROFILE_DIR`, `BROWSER_USE_REAL_PROFILE`, `BROWSER_HUMAN_SEARCH`. Promotion is gated on the per-stage QA checklists in `engine_testing/qa/`.
 - **Human-style site search (`BROWSER_HUMAN_SEARCH`, `automation.human_search`, 2026-09-26):** when ON, `browse_web(site, query)` lands on the site's HOME page and the model drives the site's own search bar (open site → `smart_type(search bar, q, submit=true)` → `browse_web()`) — the Astra-like interactive flow. The pre-mapped search URLs (`_SITE_SEARCH`) remain as the rollback path (flag off). Unknown bare site names still Bing-search (discovery must not guess dead hosts). E2E: amazon.eg + eggs → home → site search box (`Search Amazon.eg`) → `/s?k=eggs` with prices read from the page.
 - **Real browser profile — settled impossible (2026-09-26, experimental):** Chrome ≥136 ignores `--remote-debugging-port` on the default user-data-dir (verified: window opens, port never binds), and its v20 app-bound cookie encryption refuses to decrypt through ANY copy or directory-junction of that dir — Chrome then PURGES the undecryptable cookies (a junction test wiped the owner's `Default` + `Profile 3` sessions; `Local State` key survived — re-login only). Edge is identical (v20). Therefore `automation.use_real_profile: true` now raises `RealProfileUnavailable` (tools/dom.py) with the supported alternative — NO silent logged-out guest fallback; `browse_web`/`web_click`/`web_type` all relay it.
 - **`login_once.py`** — the supported way to browse logged in: opens `<site>`'s login page in Aster's dedicated persistent profile (`browser_profile_dir`), polls for the session cookie (li_at/SID/user_session) or a page marker (WhatsApp Web), and closes itself on success; `--status` lists saved sessions. One manual login per site; sessions persist on disk.
@@ -643,7 +635,6 @@ any mood colour.
 | SpeechBrain ECAPA (voice recognition, eager CUDA) | ~80 MB |
 | openWakeWord (CPU-only, negligible GPU) | ~0 MB GPU |
 | Silero VAD | ~50 MB |
-| OmniParser YOLO (loaded on first `smart_click` unless `USE_PIXEL_FALLBACK=false`, then released after use) | ~200 MB when active |
 | Kokoro TTS 82M (loaded only during a call / voice note, then offloaded) | ~0.3-0.6 GB when active |
 | **Total (idle, no call)** | **~8-9.5 GB** |
 | **Total (on a call)** | **~8.5-10.5 GB** |
@@ -736,9 +727,9 @@ A standalone `index.html` exists at the workspace root. This is unrelated to the
 
 **Location:** `tools/vision.py:locate_ui_element_ex()` / `tools/uia.py:uia_locate()`
 
-Since the 2026-07-11 rework, most locates resolve on Track 0 (UIA) in ~0.1-2s with zero OCR. When UIA misses, Track 1 costs ~2-4s for the two full-screen pytesseract passes — and that result IS now cached (~4s TTL, invalidated on every GUI action), so a click-then-type sequence pays for OCR once. Track 2 no longer runs per-crop tesseract at all (box labels come from the cached full-screen lines); its cost is the YOLO load/predict plus up to 8 icon-caption completions (~1-2s each) on the rare caption path.
+Locates primarily resolve on Track 0 (UIA) in ~0.1–2s with zero GPU overhead. When UIA misses, Track 1 (Direct Qwen 3.6 Vision Grounding via `_qwen_vision_locate`) takes ~0.5–2s for a single native multimodal forward pass with mmproj on the GPU. PyTesseract OCR and OmniParser v2 YOLO + captioning were completely stripped, eliminating multi-second OCR passes, crop captioning latency, and YOLO model weight loading.
 
-The `smart_click` tool description was updated and no longer references Florence-2. Functionally it uses UIA + OmniParser v2 + pytesseract (and, opt-in, the DOM motor). The `smart_scroll` tool has also been refactored — it no longer requires a `goal` parameter, taking `direction` + `clicks` instead.
+The `smart_click` tool description reflects UIA + Direct Qwen 3.6 Vision Grounding (and, opt-in, the DOM motor). The `smart_scroll` tool takes `direction` + `clicks`.
 
 ### 4.14 System Prompt — Tool Execution Directives
 
@@ -861,7 +852,7 @@ Async tasks (in WebRTC bridge only):
 | `tools/awareness.py` | ~559 | Awareness Mode — ambient screen+webcam polling daemon, context-block injector, mood inference, proactive nudges, initiative dial |
 | `tools/self_knowledge.py` | ~257 | Self-knowledge layer — 6 introspection functions (`get_my_config`, `list_my_contacts`, `list_my_capabilities`, `get_my_status`, `get_my_memory_stats`, `describe_my_tool`) |
 | `tools/notes.py` | 39 | Lightweight note-taking — `save_note()` / `get_notes()` backed by `Aster_Vault/notes.md` |
-| `tools/vision.py` | ~1330 | Screen capture (Base64), webcam capture + face recognition, cold storage, screen watcher. DOM-motor Track -1 + UIA + OCR + OmniParser/YOLO track locator (`locate_ui_element_ex`; Track 2 gated by `USE_PIXEL_FALLBACK`); `locate_ui_elements_boxed()` multi-match box locator for Assist Mode. The old YOLO coordinate pipeline's archived `'''...'''` blocks were deleted in the Qwen swap. |
+| `tools/vision.py` | ~1330 | Screen capture (Base64), webcam capture + face recognition, cold storage, screen watcher. DOM-motor Track -1 + UIA Track 0 + Direct Qwen 3.6 Vision Grounding Track 1 (`locate_ui_element_ex`); `locate_ui_elements_boxed()` multi-match `box_2d` grounding for Assist Mode (`_qwen_vision_locate_boxes`). PyTesseract OCR, OmniParser v2, YOLOv8, and `USE_PIXEL_FALLBACK` have been removed. |
 | `tools/dom.py` | ~1135 | DOM-first motor: ARIA snapshot parser, structural filter + role/lexical shortlist (K≤18), Playwright-over-CDP web execution with send gate + focus requirement, UIA shortlist with walk reuse; dedicated-profile own-launch with `--disable-background-mode` + profile-dir-matched kill on detach; `RealProfileUnavailable` refusal for `use_real_profile` (the real profile is impossible — Chrome ≥136 + app-bound cookies); `web_cookies()` for login_once. Flag `USE_DOM_MOTOR` (default off). |
 | `core/system1.py` | ~330 | System-1 decision kernel (Laya): neutral-key choice schemas, margin gating, escalation, JSONL decision log. Flag `USE_LAYA_KERNEL` (default off). |
 | `tools/assist.py` | ~115 | Assist Mode — stdlib-tkinter dim overlay (`highlight_regions()`) highlighting located screen elements; auto-dismiss on timeout/key/click |
