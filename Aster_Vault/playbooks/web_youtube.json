@@ -19,9 +19,15 @@
   "avoid_traps": [
     "Do NOT click the microphone icon next to the search bar (triggers browser voice permission prompt).",
     "Do NOT click the top-left hamburger menu to search.",
-    "Use press_key('k') instead of 'space' to play/pause so the page does not accidentally scroll down when the player isn't focused."
+    "Use press_key('k') instead of 'space' to play/pause so the page does not accidentally scroll down when the player isn't focused.",
+    "Do NOT spawn browse_web to inspect a channel or search result — stay in the active desktop YouTube window and click the channel or video directly via smart_click."
   ],
   "actions": {
+    "open_channel_or_video": {
+      "primary": "smart_click('channel avatar or name in search results')",
+      "visual_fallback": "smart_click('first search result')",
+      "verify": "The channel home page or video loads in the current tab"
+    },
     "search": {
       "shortcut": "/",
       "primary": "press_key('/') -> type_text(query) -> press_key('enter')",

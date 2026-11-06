@@ -431,6 +431,8 @@ def _query_gemini_playbook(
     prompt_text = "\n".join(context_lines)
 
     try:
+        import time
+
         client = genai.Client(api_key=api_key)
         contents: list[Any] = []
         if screenshot_b64:
@@ -441,26 +443,41 @@ def _query_gemini_playbook(
                 pass
         contents.append(prompt_text)
 
-        response = client.models.generate_content(
-            model=model_name,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                temperature=0.1,
-                response_mime_type="application/json",
-            ),
-        )
-        raw_text = (getattr(response, "text", None) or "").strip()
-        if not raw_text:
-            return None, "Gemini returned an empty response"
+        models_to_try = [model_name]
+        for fb in ("gemini-3.5-flash", "gemini-flash-latest"):
+            if fb not in models_to_try:
+                models_to_try.append(fb)
 
-        # Strip accidental markdown code fences if any
-        if raw_text.startswith("```"):
-            raw_text = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_text, flags=re.DOTALL).strip()
+        last_err = ""
+        for m in models_to_try:
+            try:
+                response = client.models.generate_content(
+                    model=m,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        temperature=0.1,
+                        response_mime_type="application/json",
+                    ),
+                )
+                raw_text = (getattr(response, "text", None) or "").strip()
+                if not raw_text:
+                    last_err = f"{m} returned an empty response"
+                    continue
 
-        parsed = json.loads(raw_text)
-        if not isinstance(parsed, dict):
-            return None, "Gemini response was not a JSON object"
-        return parsed, ""
+                # Strip accidental markdown code fences if any
+                if raw_text.startswith("```"):
+                    raw_text = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_text, flags=re.DOTALL).strip()
+
+                parsed = json.loads(raw_text)
+                if isinstance(parsed, dict):
+                    return parsed, ""
+                last_err = f"{m} response was not a JSON object"
+            except Exception as e:
+                last_err = str(e)
+                time.sleep(1.0)
+                continue
+
+        return None, f"Gemini playbook query failed: {last_err}"
     except Exception as e:
         return None, f"Gemini playbook query failed: {e}"
 
