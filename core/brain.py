@@ -2462,6 +2462,14 @@ def _extract_discord_message_intent(user_text: str) -> dict | None:
     if not text:
         return None
 
+    # Explicit desktop GUI instructions are NOT bot relay requests.
+    lowered_for_gui = text.lower()
+    if any(kw in lowered_for_gui for kw in (
+        "open discord", "launch discord", "click on", "click", "smart_click",
+        "ui navigation", "gui", "on screen", "on desktop"
+    )):
+        return None
+
     match = re.match(
         r"^\s*(tell|ask|text|message|dm|send)\s+([A-Za-z0-9_.@-]+)\s+(.+?)\s*[.!?]*\s*$",
         text,
@@ -2561,9 +2569,14 @@ def _laya_relay_intent(text: str) -> bool:
 def _is_discord_message_request(user_text: str) -> bool:
     if not isinstance(user_text, str):
         return False
+    lowered = user_text.lower()
+    if any(kw in lowered for kw in (
+        "open discord", "launch discord", "click on", "click", "smart_click",
+        "ui navigation", "gui", "on screen", "on desktop"
+    )):
+        return False
     if _extract_discord_message_intent(user_text) is not None:
         return True
-    lowered = user_text.lower()
     if "discord" not in lowered:
         return False
     return bool(re.search(r"\b(?:tell|ask|text|message|dm|send)\b", lowered))
@@ -3538,19 +3551,28 @@ def process_user_input(user_text, status_callback=None):
     if not str(user_text).startswith("[System Internal"):
         _turn_count += 1
 
-    discord_intent = _extract_discord_message_intent(user_text)
-    # QA round 11/12: capture the pending-confirmation TARGET before this turn can mark a
-    # new one (same-turn trap) and require it to match the target we are about to use.
-    _relay_confirm_target = (_pending_relay_confirm.get("target")
-                             if _pending_relay_is_fresh() else "")
-    # CACHE/COST (QA round 2): derive the boolean WITHOUT re-parsing. This used to call
-    # `_is_discord_message_request` (which parses again) and then parse a third time —
-    # up to 6 Laya passes for a plain "tell me a joke".
-    discord_message_request = discord_intent is not None
-    if not discord_message_request:
-        _lower_user = str(user_text).lower()
-        discord_message_request = ("discord" in _lower_user and bool(
-            re.search(r"\b(?:tell|ask|text|message|dm|send)\b", _lower_user)))
+    _lower_user = str(user_text).lower()
+    _is_explicit_desktop_gui = any(kw in _lower_user for kw in (
+        "open discord", "launch discord", "click on", "click", "smart_click",
+        "ui navigation", "gui", "on screen", "on desktop"
+    ))
+
+    if _is_explicit_desktop_gui:
+        discord_intent = None
+        discord_message_request = False
+    else:
+        discord_intent = _extract_discord_message_intent(user_text)
+        # QA round 11/12: capture the pending-confirmation TARGET before this turn can mark a
+        # new one (same-turn trap) and require it to match the target we are about to use.
+        _relay_confirm_target = (_pending_relay_confirm.get("target")
+                                 if _pending_relay_is_fresh() else "")
+        # CACHE/COST (QA round 2): derive the boolean WITHOUT re-parsing. This used to call
+        # `_is_discord_message_request` (which parses again) and then parse a third time —
+        # up to 6 Laya passes for a plain "tell me a joke".
+        discord_message_request = discord_intent is not None
+        if not discord_message_request:
+            discord_message_request = ("discord" in _lower_user and bool(
+                re.search(r"\b(?:tell|ask|text|message|dm|send)\b", _lower_user)))
 
     # ID 8 (tool tie-break hint) decommissioned in laya-backwards-integration.md (Step 1):
     # Qwen 3.6 35B resolves schemas directly without a 300M model backseating round 0.
