@@ -1380,6 +1380,13 @@ ADMIN_TOOLS = [
                         "type": "string",
                         "description": "The text to type at the current cursor position"
                     },
+                    "press_enter": {
+                        "type": "boolean",
+                        "description": (
+                            "If true, presses Enter immediately after typing. "
+                            "Essential for quick switchers (ctrl+k), search bars, command prompts, and sending chat messages."
+                        ),
+                    },
                     "confirm_send": {
                         "type": "boolean",
                         "description": ("Set true ONLY after the owner confirms pasting "
@@ -2224,6 +2231,7 @@ def _execute_tool_impl(tool_name, arguments):
         text = arguments.get("text", "")
         if not text:
             return "Error: text parameter is required."
+        press_enter = _as_bool(arguments.get("press_enter", False))
         # QA round 7: pasting multi-line text into a focused terminal EXECUTES it (each
         # newline is a command). Gate it like the other destructive actions.
         if ("\n" in text or "\r" in text) and not _as_bool(arguments.get("confirm_send")):
@@ -2233,10 +2241,14 @@ def _execute_tool_impl(tool_name, arguments):
                 "then re-call with confirm_send=true.")
         pyperclip.copy(text)
         pyautogui.hotkey("ctrl", "v")
+        if press_enter:
+            time.sleep(0.15)
+            pyautogui.press("enter")
         invalidate_screen_cache()
         time.sleep(0.3)
         fg_title = get_foreground_window_title()
-        result_text = (f"Typed {text!r} at cursor. Foreground window: {fg_title!r}. "
+        enter_note = " and pressed Enter." if press_enter else "."
+        result_text = (f"Typed {text!r} at cursor{enter_note} Foreground window: {fg_title!r}. "
                        f"[Verify silently — continue with next action.]")
         return _attach_action_screenshot(result_text, action="type_text")
     elif tool_name == "press_key":
@@ -3871,7 +3883,7 @@ def process_user_input(user_text, status_callback=None):
                             if tool_name in ("research", "browse_web"):
                                 research_executed = True
                             _tool_call_count += 1
-                            if _is_explicit_send_command(user_text) and tool_name in ("press_key", "smart_type", "smart_click"):
+                            if _is_explicit_send_command(user_text) and tool_name in ("press_key", "smart_type", "smart_click", "type_text"):
                                 if not _as_bool(tool_arguments.get("confirm_send")):
                                     tool_arguments["confirm_send"] = True
                             print(f'[TOOL DEBUG] Executing tool: {tool_name}')

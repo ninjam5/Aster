@@ -253,3 +253,44 @@ def test_gemini_dynamic_learning_and_self_healing(tmp_path, monkeypatch):
     healed = playbooks.load_playbook("obs_studio")
     assert healed["metadata"]["version"] == "1.1"
     assert healed["metadata"]["source"] == "self-healed"
+
+
+def test_locator_anti_container_scoring():
+    """Verify that locator_common suppresses container false positives like 'Search' and 'Direct Messages'."""
+    from tools.locator_common import parse_goal, score_text
+
+    # Goal 1: Searching for Ob in search results
+    p1 = parse_goal("The first Ob entry in the search results list")
+    score_ob = score_text("Ob", p1, "ListItemControl")
+    score_search = score_text("Search", p1, "EditControl")
+    assert score_ob > score_search
+    assert score_ob >= 0.70
+    assert score_search <= 0.40
+
+    # Goal 2: Clicking Ob in Direct Messages list
+    p2 = parse_goal("Ob in the Direct Messages list on the left sidebar")
+    score_ob2 = score_text("Ob", p2, "ListItemControl")
+    score_dm = score_text("Direct Messages", p2, "TextControl")
+    score_dm_grp = score_text("Direct Messages", p2, "GroupControl")
+    assert score_ob2 > score_dm
+    assert score_ob2 > score_dm_grp
+    assert score_dm <= 0.40
+
+
+def test_type_text_press_enter_support(monkeypatch):
+    """Verify that type_text supports press_enter=True and triggers Enter keypress."""
+    import core.brain as brain
+    pressed = []
+    copied = []
+    monkeypatch.setattr(brain.pyautogui, "press", lambda k: pressed.append(k))
+    monkeypatch.setattr(brain.pyautogui, "hotkey", lambda *a: None)
+    monkeypatch.setattr(brain.pyperclip, "copy", lambda t: copied.append(t))
+    monkeypatch.setattr(brain, "invalidate_screen_cache", lambda: None)
+    monkeypatch.setattr(brain, "_attach_action_screenshot", lambda text, action: text)
+    monkeypatch.setattr(brain, "get_foreground_window_title", lambda: "Discord")
+
+    res = brain.execute_tool("type_text", {"text": "Ob", "press_enter": True})
+    assert copied == ["Ob"]
+    assert pressed == ["enter"]
+    assert "pressed Enter" in res
+

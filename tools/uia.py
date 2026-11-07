@@ -155,7 +155,7 @@ def uia_locate_candidates(goal: str, candidates, desktop_size) -> dict | None:
         best: dict | None = None
         best_score = 0.0
         for cand in candidates:
-            score = score_text(cand["name"], parsed)
+            score = score_text(cand["name"], parsed, cand.get("type", ""))
             if parsed["type_hints"] and cand["type"] in parsed["type_hints"]:
                 score = min(1.0, score + 0.05)
             x1, y1, x2, y2 = cand["rect"]
