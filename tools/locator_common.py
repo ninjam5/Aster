@@ -11,16 +11,12 @@ import re
 # label. They dilute fuzzy matching ("the search bar at the top" should match
 # a box labeled "Search", not a random line containing "the" and "at").
 FILLER_WORDS = {
-    "the", "a", "an", "of", "to", "in", "on", "at", "for", "with", "my",
+    "the", "a", "an", "of", "to", "in", "on", "at", "for", "with", "from", "by", "my",
     "button", "icon", "menu", "field", "bar", "box", "link", "tab", "option",
     "item", "element", "control", "text", "input", "area", "section",
     "screen", "window", "page", "side", "corner", "upper", "lower",
     "top", "bottom", "left", "right", "center", "middle",
-    "list", "entry", "entries", "result", "results", "sidebar", "dropdown",
-    "panel", "row", "column", "first", "second", "third", "last",
 }
-
-CONTAINER_PREPOSITIONS = {"in", "on", "under", "inside", "within"}
 
 # Element-kind hints → UIA ControlTypeName(s) they correspond to.
 TYPE_HINTS = {
@@ -46,12 +42,10 @@ _SPATIAL_WORDS = {
 def parse_goal(goal: str) -> dict:
     """Split a natural-language goal into matchable text + hints.
 
-    Returns {raw, clean, tokens, subject_tokens, container_tokens, spatial, type_hints}:
+    Returns {raw, clean, tokens, spatial, type_hints}:
       raw              — lowercased original
       clean            — original minus filler words (falls back to raw if empty)
       tokens           — set of non-filler tokens (falls back to all tokens)
-      subject_tokens   — tokens identifying the target subject
-      container_tokens — tokens identifying the container/parent section
       spatial          — set like {"top", "right"} parsed from position words
       type_hints       — set of UIA ControlTypeNames implied by kind words
     """
@@ -63,21 +57,6 @@ def parse_goal(goal: str) -> dict:
     for w in words:
         type_hints |= TYPE_HINTS.get(w, set())
 
-    # Dissect "[Subject] in/on/under [Container]"
-    subject_words = []
-    container_words = []
-    hit_prep = False
-    for w in words:
-        if w in CONTAINER_PREPOSITIONS and subject_words:
-            hit_prep = True
-            continue
-        if hit_prep:
-            if w not in FILLER_WORDS:
-                container_words.append(w)
-        else:
-            if w not in FILLER_WORDS:
-                subject_words.append(w)
-
     content = [w for w in words if w not in FILLER_WORDS]
     if not content:  # goal was ALL filler ("the top bar") — keep everything
         content = words
@@ -86,8 +65,6 @@ def parse_goal(goal: str) -> dict:
         "raw": raw,
         "clean": " ".join(content),
         "tokens": set(content),
-        "subject_tokens": set(subject_words) if subject_words else set(content),
-        "container_tokens": set(container_words),
         "spatial": spatial,
         "type_hints": type_hints,
     }
@@ -96,57 +73,40 @@ def parse_goal(goal: str) -> dict:
 def score_text(candidate: str, parsed: dict, cand_type: str = "") -> float:
     """Fuzzy-match a candidate label against a parsed goal → 0.0-1.0.
 
-    Scores candidate text against the filler-stripped goal. Prevents generic
-    container labels (e.g. "Search", "Direct Messages", "Previous Channels") from
-    hijacking goals that name a specific subject (e.g. "Ob in Direct Messages").
+    Scores candidate text against the filler-stripped goal. Uses strict token
+    coverage so generic container labels never hijack goals that name a specific subject.
     """
     text = (candidate or "").lower().strip()
     if not text:
         return 0.0
+
     clean = parsed.get("clean", "")
     tokens = parsed.get("tokens", set())
-    subject_tokens = parsed.get("subject_tokens", tokens)
-    container_tokens = parsed.get("container_tokens", set())
-
-    cand_words = set(re.findall(r"[a-z0-9']+", text))
-
-    # Anti-container trap: if the goal specified a subject AND a container (e.g. "Ob in Direct Messages"),
-    # and the candidate matches only the container words while completely missing the subject words:
-    # it is the container header, NOT the target! Heavily penalize it.
-    if subject_tokens and container_tokens:
-        has_subject = bool(cand_words & subject_tokens)
-        has_container = bool(cand_words & container_tokens)
-        if has_container and not has_subject:
-            return 0.30
 
     if text == clean:
-        return 1.0
+        score = 1.0
+    else:
+        cand_words = set(re.findall(r"[a-z0-9']+", text))
+        overlap = len(cand_words & tokens) / max(len(tokens), 1)
+        seq = difflib.SequenceMatcher(None, text, clean).ratio()
 
-    overlap = len(cand_words & tokens) / max(len(tokens), 1)
-    seq = difflib.SequenceMatcher(None, text, clean).ratio()
-    substr = 0.95 if (clean and clean in text) else 0.0
+        # Case 2: Entire goal contained in candidate (e.g. "save" in "save as", "ob" in "ob the_ob")
+        substr = 0.95 if (clean and clean in text) else 0.0
 
-    # Short candidate fully contained in the goal (e.g. "File" in "file menu", or "Ob" in "Ob in chat")
-    if text and text in clean and len(text) >= 2:
-        match_ratio = len(cand_words & tokens) / max(len(tokens), 1)
-        if text in tokens:
-            if len(tokens) <= 2:
+        # Case 3: Candidate is a substring of goal (e.g. "Search" in "the search bar")
+        if text and text in clean and len(text) >= 2:
+            if overlap >= 0.75:
                 substr = max(substr, 0.90)
-            elif len(tokens) <= 4:
-                substr = max(substr, 0.85)
             else:
-                substr = max(substr, 0.70 + 0.25 * match_ratio)
-        elif match_ratio >= 0.5:
-            substr = max(substr, 0.70 + 0.25 * match_ratio)
+                substr = 0.0
+
+        if overlap < 0.75 and not (clean and clean in text):
+            seq = min(seq, overlap * 0.70)
+            token_score = overlap * 0.70
         else:
-            substr = max(substr, 0.35 + 0.30 * match_ratio)
+            token_score = overlap * 0.85
 
-    if tokens and not (cand_words & tokens):
-        seq = min(seq, 0.40)
-    elif overlap < 0.5 and len(tokens) >= 2:
-        seq = min(seq, 0.65)
-
-    score = max(seq, overlap * 0.85, substr)
+        score = max(seq, token_score, substr)
 
     # Penalize non-interactive container control types unless specifically asked for
     if cand_type in ("GroupControl", "WindowControl", "PaneControl") and not (

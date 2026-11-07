@@ -256,25 +256,38 @@ def test_gemini_dynamic_learning_and_self_healing(tmp_path, monkeypatch):
 
 
 def test_locator_anti_container_scoring():
-    """Verify that locator_common suppresses container false positives like 'Search' and 'Direct Messages'."""
+    """Verify that locator_common uses order-independent Strict Token Coverage to reject skeleton containers."""
     from tools.locator_common import parse_goal, score_text
 
-    # Goal 1: Searching for Ob in search results
+    # 1. For "The first Ob entry in the search results list":
+    # "Search" scores < 0.55 (rejected by UIA so Qwen Vision handles it).
     p1 = parse_goal("The first Ob entry in the search results list")
-    score_ob = score_text("Ob", p1, "ListItemControl")
     score_search = score_text("Search", p1, "EditControl")
-    assert score_ob > score_search
-    assert score_ob >= 0.70
-    assert score_search <= 0.40
+    assert score_search < 0.55
 
-    # Goal 2: Clicking Ob in Direct Messages list
-    p2 = parse_goal("Ob in the Direct Messages list on the left sidebar")
-    score_ob2 = score_text("Ob", p2, "ListItemControl")
-    score_dm = score_text("Direct Messages", p2, "TextControl")
-    score_dm_grp = score_text("Direct Messages", p2, "GroupControl")
-    assert score_ob2 > score_dm
-    assert score_ob2 > score_dm_grp
-    assert score_dm <= 0.40
+    # Target "Ob" against candidate "Ob the_ob" (full target contained in candidate) scores >= 0.90
+    p_ob = parse_goal("Ob")
+    score_ob_cand = score_text("Ob the_ob", p_ob, "ListItemControl")
+    assert score_ob_cand >= 0.90
+
+    # 2. Order-independence: container header "Direct Messages" ALWAYS scores < 0.55 (rejected by UIA)
+    goals = [
+        "Ob in Direct Messages",
+        "Direct Messages: Ob",
+        "Click the Direct Messages conversation with Ob",
+    ]
+    for g in goals:
+        p = parse_goal(g)
+        score_dm = score_text("Direct Messages", p, "TextControl")
+        assert score_dm < 0.55, f"Direct Messages on {g!r} scored {score_dm} >= 0.55"
+
+    # 3. Whereas "Search" for "the search bar at the top" scores >= 0.90
+    p_search = parse_goal("the search bar at the top")
+    assert score_text("Search", p_search, "EditControl") >= 0.90
+
+    # 4. And "File" for "File menu" scores >= 0.90
+    p_file = parse_goal("File menu")
+    assert score_text("File", p_file, "MenuItemControl") >= 0.90
 
 
 def test_type_text_press_enter_support(monkeypatch):

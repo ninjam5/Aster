@@ -845,7 +845,7 @@ def locate_ui_elements_boxed(goal: str, threshold: float = 0.5) -> list[dict]:
             uia_threshold = max(0.75, float(threshold))
             uia_matches: list[dict] = []
             for cand in candidates:
-                score = score_text(cand.get("name", ""), parsed)
+                score = score_text(cand.get("name", ""), parsed, cand.get("type", ""))
                 if parsed["type_hints"] and cand.get("type") in parsed["type_hints"]:
                     score = min(1.0, score + 0.05)
                 x1, y1, x2, y2 = cand["rect"]
