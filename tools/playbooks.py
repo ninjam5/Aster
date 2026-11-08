@@ -66,6 +66,8 @@ def load_playbook(playbook_id: str) -> dict[str, Any] | None:
     candidates = [slug]
     if not slug.startswith("web_"):
         candidates.append(f"web_{slug}")
+    if not slug.endswith("_web"):
+        candidates.append(f"{slug}_web")
 
     for cand in candidates:
         path = os.path.join(pb_dir, f"{cand}.json")
@@ -116,7 +118,7 @@ def _score_playbook_match(pb: dict[str, Any], text_lower: str, query_slug: str =
         return 0
 
     pb_id = str(pb.get("id", "")).lower()
-    pb_id_stripped = pb_id[4:] if pb_id.startswith("web_") else pb_id
+    pb_id_stripped = pb_id[4:] if pb_id.startswith("web_") else (pb_id[:-4] if pb_id.endswith("_web") else pb_id)
     pb_name = str(pb.get("name", "")).lower()
     tier = str(pb.get("tier", "desktop")).lower()
     match_cfg = pb.get("match") or {}

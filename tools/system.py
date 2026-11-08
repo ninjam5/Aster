@@ -3,6 +3,7 @@ import subprocess
 import time
 import threading
 import difflib
+import json
 import psutil
 import pyautogui
 from datetime import datetime
@@ -181,6 +182,31 @@ def _launch_browser_with_debug(app_name: str) -> bool:
         return False
 
 
+_STORE_APPS_CACHE: dict[str, str] | None = None
+
+
+def _get_store_apps() -> dict[str, str]:
+    global _STORE_APPS_CACHE
+    if _STORE_APPS_CACHE is not None:
+        return _STORE_APPS_CACHE
+    apps: dict[str, str] = {}
+    try:
+        cmd = ["powershell", "-NoProfile", "-Command", "Get-StartApps | Select-Object Name, AppID | ConvertTo-Json -Compress"]
+        out = subprocess.check_output(cmd, text=True, timeout=8)
+        parsed = json.loads(out)
+        if isinstance(parsed, dict):
+            parsed = [parsed]
+        for item in parsed:
+            name = (item.get("Name") or "").strip().lower()
+            appid = (item.get("AppID") or "").strip()
+            if name and appid and "!" in appid:
+                apps[name] = appid
+    except Exception as e:
+        print(f"[System] Failed to enumerate Store apps: {e}")
+    _STORE_APPS_CACHE = apps
+    return _STORE_APPS_CACHE
+
+
 def open_application(app_name, action=None):
     if _launch_browser_with_debug(app_name):
         # Skips the .lnk path: shortcuts cannot carry the CDP arguments.
@@ -227,7 +253,26 @@ def open_application(app_name, action=None):
             if target_file and os.path.exists(target_file):
                 os.startfile(target_file)
             else:
-                subprocess.Popen(f"start {app_name}", shell=True)
+                store_apps = _get_store_apps()
+                store_app_id = None
+                if app_lower in store_apps:
+                    store_app_id = store_apps[app_lower]
+                elif any(app_lower in k.split() for k in store_apps):
+                    word_matches = [k for k in store_apps if app_lower in k.split()]
+                    word_matches.sort(key=len)
+                    store_app_id = store_apps[word_matches[0]]
+                elif any(app_lower in k for k in store_apps):
+                    sub_matches = [k for k in store_apps if app_lower in k]
+                    sub_matches.sort(key=len)
+                    store_app_id = store_apps[sub_matches[0]]
+
+                if store_app_id:
+                    try:
+                        os.startfile(f"shell:AppsFolder\\{store_app_id}")
+                    except Exception:
+                        subprocess.Popen(f"explorer.exe shell:AppsFolder\\{store_app_id}", shell=True)
+                else:
+                    subprocess.Popen(f"start {app_name}", shell=True)
 
         time.sleep(2.5)  # Let the window come to foreground before next tool fires
 

@@ -345,3 +345,84 @@ def test_type_text_blocks_telegram_self_chat_and_unfocused_turn_start(monkeypatc
     assert copied == ["aloha bald human"]
 
 
+# ============================================================================
+# 6. PLAYBOOK ALIASES & STORE APPS SUPPORT
+# ============================================================================
+
+def test_load_playbook_slug_web_alias():
+    """load_playbook('instagram') resolves instagram_web.json and loads successfully."""
+    pb = playbooks.load_playbook("instagram")
+    assert pb is not None
+    assert pb.get("id") == "instagram_web"
+    assert pb.get("name") == "Instagram"
+
+
+def test_score_playbook_match_slug_web():
+    """_score_playbook_match scores 100 for query_slug='instagram' against a playbook with id='instagram_web'."""
+    sample_pb = {
+        "id": "instagram_web",
+        "name": "Instagram",
+        "tier": "web",
+        "match": {"domains": ["instagram.com"]},
+    }
+    score = playbooks._score_playbook_match(sample_pb, text_lower="instagram", query_slug="instagram")
+    assert score == 100
+
+
+def test_open_application_launches_store_app_via_startfile(monkeypatch):
+    """open_application launches Store app via os.startfile when store_apps has a match."""
+    from tools import system
+
+    startfile_calls = []
+    monkeypatch.setattr(system.os, "startfile", lambda path: startfile_calls.append(path))
+    monkeypatch.setattr(system.time, "sleep", lambda s: None)
+    monkeypatch.setattr(system, "_find_app_path", lambda exe: None)
+    monkeypatch.setattr(system, "_get_store_apps", lambda: {"instagram": "Instagram_8wekyb3d8bbwe!App"})
+    monkeypatch.setattr(system.os.path, "exists", lambda p: False)
+
+    system.open_application("instagram")
+    assert startfile_calls == ["shell:AppsFolder\\Instagram_8wekyb3d8bbwe!App"]
+
+
+def test_open_application_store_app_fallback_to_explorer(monkeypatch):
+    """open_application falls back to explorer.exe shell:AppsFolder when os.startfile fails."""
+    from tools import system
+
+    popen_calls = []
+
+    def mock_startfile(path):
+        raise OSError("startfile failed")
+
+    monkeypatch.setattr(system.os, "startfile", mock_startfile)
+    monkeypatch.setattr(system.subprocess, "Popen", lambda cmd, **kw: popen_calls.append(cmd))
+    monkeypatch.setattr(system.time, "sleep", lambda s: None)
+    monkeypatch.setattr(system, "_find_app_path", lambda exe: None)
+    monkeypatch.setattr(system, "_get_store_apps", lambda: {"calculator": "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"})
+    monkeypatch.setattr(system.os.path, "exists", lambda p: False)
+
+    system.open_application("calculator")
+    assert popen_calls == ["explorer.exe shell:AppsFolder\\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"]
+
+
+def test_get_store_apps_enumeration_and_caching(monkeypatch):
+    """_get_store_apps enumerates UWP apps with '!' in AppID and caches the result."""
+    from tools import system
+
+    mock_json = json.dumps([
+        {"Name": "Calculator", "AppID": "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"},
+        {"Name": "7-Zip File Manager", "AppID": "{6D809377-6AF0-444B-8957-A3773F02200E}\\7-Zip\\7zFM.exe"},
+    ])
+
+    monkeypatch.setattr(system, "_STORE_APPS_CACHE", None)
+    monkeypatch.setattr(system.subprocess, "check_output", lambda *a, **kw: mock_json)
+
+    apps = system._get_store_apps()
+    assert apps == {"calculator": "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"}
+    assert "7-zip file manager" not in apps
+
+    # Cached on subsequent call
+    monkeypatch.setattr(system.subprocess, "check_output", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("should not call")))
+    assert system._get_store_apps() == {"calculator": "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"}
+
+
+

@@ -1,0 +1,60 @@
+{
+  "id": "instagram_web",
+  "tier": "desktop",
+  "name": "Instagram",
+  "match": {
+    "process_names": [
+      "Instagram.exe",
+      "msedge.exe",
+      "ApplicationFrameHost.exe",
+      "chrome.exe"
+    ],
+    "title_keywords": [
+      "Instagram"
+    ],
+    "domains": [
+      "instagram.com"
+    ]
+  },
+  "metadata": {
+    "version": "1.0",
+    "source": "preseed",
+    "created_at": "2026-11-08",
+    "last_verified": "2026-11-08",
+    "consecutive_failures": 0,
+    "usage_count": 1
+  },
+  "layout_summary": "Left vertical sidebar houses primary navigation icons (Home, Search, Explore, Reels, Messages, Notifications, Create, Profile, More). The center feed displays vertical scrollable media posts with like/comment actions beneath each, while the right rail features suggested accounts.",
+  "avoid_traps": [
+    "Instagram is installed as a native Windows desktop app from the Microsoft Store. ALWAYS launch and use the desktop app via open_application('instagram') — NEVER open Chrome or navigate to instagram.com!",
+    "When searching for a user in the Search drawer or Direct Messages, if multiple accounts match, verify with Mohamed or use the memorized handle (e.g. @omar.barakat.23) before sending.",
+    "Clicking Search expands a persistent left drawer rather than a new page; press Escape or click away to close it.",
+    "Clicking backdrop space around photo modals or dialogs dismisses them without saving drafts."
+  ],
+  "actions": {
+    "open_app": {
+      "shortcut": "",
+      "primary": "open_application('instagram')",
+      "visual_fallback": "smart_click('Instagram icon on the taskbar')",
+      "verify": "Instagram desktop app window appears in foreground"
+    },
+    "search": {
+      "shortcut": "",
+      "primary": "smart_click('Search icon in left navigation sidebar')",
+      "visual_fallback": "smart_type('Search input in flyout panel', 'text', submit=true)",
+      "verify": "Search drawer slides out from the left with an active input field"
+    },
+    "open_direct_messages": {
+      "shortcut": "",
+      "primary": "smart_click('Messages icon in left navigation sidebar')",
+      "visual_fallback": "smart_click('Paper airplane Messages icon')",
+      "verify": "Direct Messages inbox opens with conversation threads list"
+    },
+    "send_message": {
+      "shortcut": "enter",
+      "primary": "smart_type('Message input box at bottom of conversation pane', message_text, submit=true)",
+      "visual_fallback": "smart_click('Message input field at bottom') -> type_text(message_text, press_enter=true)",
+      "verify": "Message appears at the bottom of the conversation thread"
+    }
+  }
+}
