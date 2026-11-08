@@ -66,8 +66,12 @@ def load_playbook(playbook_id: str) -> dict[str, Any] | None:
     candidates = [slug]
     if not slug.startswith("web_"):
         candidates.append(f"web_{slug}")
+    else:
+        candidates.append(slug[4:])
     if not slug.endswith("_web"):
         candidates.append(f"{slug}_web")
+    else:
+        candidates.append(slug[:-4])
 
     for cand in candidates:
         path = os.path.join(pb_dir, f"{cand}.json")

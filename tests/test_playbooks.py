@@ -14,9 +14,10 @@ from core import brain
 # ============================================================================
 
 EXPECTED_PRESEED_IDS = {
-    # Desktop tier (12)
+    # Desktop tier (13)
     "chrome",
     "discord",
+    "instagram",
     "stremio",
     "steam",
     "epic_games",
@@ -350,11 +351,15 @@ def test_type_text_blocks_telegram_self_chat_and_unfocused_turn_start(monkeypatc
 # ============================================================================
 
 def test_load_playbook_slug_web_alias():
-    """load_playbook('instagram') resolves instagram_web.json and loads successfully."""
+    """load_playbook('instagram') and load_playbook('instagram_web') resolve instagram.json and load successfully."""
     pb = playbooks.load_playbook("instagram")
     assert pb is not None
-    assert pb.get("id") == "instagram_web"
+    assert pb.get("id") == "instagram"
     assert pb.get("name") == "Instagram"
+
+    pb_web = playbooks.load_playbook("instagram_web")
+    assert pb_web is not None
+    assert pb_web.get("id") == "instagram"
 
 
 def test_score_playbook_match_slug_web():
