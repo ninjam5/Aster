@@ -17,10 +17,11 @@
   },
   "layout_summary": "Far-left strip: server icons (Discord logo at very top for DMs). Second column: channels or Direct Messages list, with user profile/mic/headphones bar at bottom-left. Center: active chat history and 'Message @name / #channel' input box at the bottom.",
   "avoid_traps": [
-    "In Quick Switcher (ctrl+k), NEVER pass press_enter=true when typing a contact name (React takes ~400ms to filter, so immediate Enter jumps to the wrong server!). Instead, call type_text(contact_name, press_enter=false) without '@', let the filtered dropdown appear in the screenshot, and then use smart_click to click the matching Direct Message user row.",
-    "Top header contact/channel name is display-only — do NOT click it once inside chat.",
-    "If the target contact is already visible in the left Direct Messages sidebar (or Previous Channels), just smart_click their name directly instead of opening Quick Switcher.",
-    "Do NOT click the voice call or video call icons at top-right when you only want to send a text message."
+    "NEVER confuse a 1-on-1 Direct Message user with a Group DM! In the left sidebar, a Group DM shows '2 Members' / '3 Members' underneath the name and a solid-colored two-person group icon — NEVER click a row that says 'Members' when asked to message a single person. In Quick Switcher (ctrl+k), 1-on-1 users appear at the TOP with their grey lowercase username handle right next to their display name (e.g. 'Ob  the_ob'), while Group DMs appear at the bottom with solid-colored two-person icons and NO username handle.",
+    "MANDATORY '@ ' CHECK BEFORE SENDING: In a real 1-on-1 DM, the bottom chat input box placeholder ALWAYS says 'Message @<Name>' (WITH an '@' symbol, e.g. 'Message @Ob'). If the bottom input box says 'Message <Name>' WITHOUT '@' (e.g. 'Message Ob') or the header/sidebar shows 'N Members', you are inside a Group Chat — DO NOT send the message! Immediately press ctrl+k, type the name with press_enter=false, and select the top 1-on-1 user row that has a grey username handle.",
+    "In Quick Switcher (ctrl+k), NEVER pass press_enter=true inside type_text (React takes ~400ms to filter, so immediate Enter jumps to the wrong server!). Instead, call type_text(contact_name, press_enter=false) without '@'. On the next step, once the filtered dropdown is visible on screen with the 1-on-1 user ('<Name> <username_handle>') highlighted at the very top, either call press_key('enter') or smart_click the top user row with the username handle.",
+    "Do NOT scroll down the Direct Messages sidebar looking for a contact (scrolling down lands in old multi-member Group DMs). If the contact's 1-on-1 DM (no 'Members' subtitle) is not immediately visible at the top of the sidebar, press ctrl+k to use Quick Switcher.",
+    "Top header contact/channel name is display-only — do NOT click it once inside chat."
   ],
   "actions": {
     "quick_switcher": {
@@ -31,9 +32,9 @@
     },
     "open_dm": {
       "shortcut": "ctrl+k",
-      "primary": "If contact is visible in Direct Messages sidebar, smart_click('<name> in Direct Messages sidebar'). Otherwise: press_key('ctrl+k') -> type_text(contact_name, press_enter=false) -> smart_click('<name> Direct Message row in Quick Switcher results')",
-      "visual_fallback": "smart_click('Discord logo at top-left to open Direct Messages') -> smart_click('<name> in Direct Messages sidebar')",
-      "verify": "Chat view switches to the target Direct Message (@username) conversation, not a server channel"
+      "primary": "If the 1-on-1 user (NO 'N Members' subtitle) is visible at the top of the Direct Messages sidebar, smart_click('<name> in Direct Messages sidebar'). Otherwise: press_key('ctrl+k') -> type_text(contact_name, press_enter=false) -> verify top highlighted result shows '<Name> <username>' (1-on-1 user, NOT a two-person group icon at the bottom) -> press_key('enter') or smart_click('the top <name> user row with username handle in Quick Switcher results')",
+      "visual_fallback": "smart_click('Find or start a conversation button at top of left sidebar') -> type_text(contact_name, press_enter=false) -> press_key('enter')",
+      "verify": "Bottom chat input placeholder MUST say 'Message @<Name>' (with '@', NOT 'Message <Name>' without '@' which is a group chat)"
     },
     "send_message": {
       "shortcut": "enter",

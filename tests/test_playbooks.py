@@ -307,3 +307,41 @@ def test_type_text_press_enter_support(monkeypatch):
     assert pressed == ["enter"]
     assert "pressed Enter" in res
 
+
+def test_type_text_blocks_telegram_self_chat_and_unfocused_turn_start(monkeypatch):
+    """Verify type_text blocks typing when Aster_Local control chat is foreground or when called unfocused at turn start."""
+    import core.brain as brain
+    pressed = []
+    hotkeys = []
+    copied = []
+    monkeypatch.setattr(brain.pyautogui, "press", lambda k: pressed.append(k))
+    monkeypatch.setattr(brain.pyautogui, "hotkey", lambda *a: hotkeys.append(a))
+    monkeypatch.setattr(brain.pyperclip, "copy", lambda t: copied.append(t))
+    monkeypatch.setattr(brain, "invalidate_screen_cache", lambda: None)
+    monkeypatch.setattr(brain, "_attach_action_screenshot", lambda text, action: text)
+
+    # 1. Aster_Local active foreground window blocks typing to self-chat
+    monkeypatch.setattr(brain, "get_foreground_window_title", lambda: "Aster_Local")
+    res1 = brain.execute_tool("type_text", {"text": "aloha bald human", "press_enter": True})
+    assert "FAILED — BLOCKED" in str(res1)
+    assert not hotkeys
+    assert not pressed
+    assert not copied
+
+    # 2. Telegram foreground window with _unfocused_turn_start=True blocks typing
+    monkeypatch.setattr(brain, "get_foreground_window_title", lambda: "Telegram")
+    res2 = brain.execute_tool("type_text", {"text": "aloha bald human", "press_enter": True, "_unfocused_turn_start": True})
+    assert "FAILED — BLOCKED" in str(res2)
+    assert not hotkeys
+    assert not pressed
+    assert not copied
+
+    # 3. Discord foreground window without _unfocused_turn_start succeeds as before
+    monkeypatch.setattr(brain, "get_foreground_window_title", lambda: "Discord")
+    res3 = brain.execute_tool("type_text", {"text": "aloha bald human", "press_enter": True})
+    assert "aloha bald human" in str(res3)
+    assert hotkeys == [("ctrl", "v")]
+    assert pressed == ["enter"]
+    assert copied == ["aloha bald human"]
+
+

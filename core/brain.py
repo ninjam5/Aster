@@ -2239,6 +2239,21 @@ def _execute_tool_impl(tool_name, arguments):
                 "FAILED — BLOCKED — the text contains a newline, which would EXECUTE the "
                 "lines in a focused terminal. Nothing was typed. Confirm with the owner, "
                 "then re-call with confirm_send=true.")
+        fg_before = (get_foreground_window_title() or "").strip()
+        if "aster_local" in fg_before.lower():
+            return tool_fail(
+                f"FAILED — BLOCKED — The active foreground window is currently {fg_before!r} "
+                f"(your own Telegram control chat). Typing here would send a message to yourself! "
+                f"Call open_application('<target_app>') or smart_click the target window first "
+                f"before calling type_text."
+            )
+        if _as_bool(arguments.get("_unfocused_turn_start")):
+            return tool_fail(
+                f"FAILED — BLOCKED — You called type_text at the start of a new turn before "
+                f"focusing or clicking any target window (foreground window is currently {fg_before!r}). "
+                f"Because the user just switched windows to send you this command, you MUST call "
+                f"open_application('<app>') or smart_click the target input box in THIS turn before calling type_text."
+            )
         pyperclip.copy(text)
         pyautogui.hotkey("ctrl", "v")
         if press_enter:
@@ -3696,6 +3711,7 @@ def process_user_input(user_text, status_callback=None):
             _tool_call_count = 0
             _lg_block_count = 0
             _turn_outcome = "unknown"
+            _gui_window_focused_this_turn = False
 
             for tool_round in range(MAX_TOOL_ROUNDS):
                 _rounds_used += 1
@@ -3886,6 +3902,8 @@ def process_user_input(user_text, status_callback=None):
                             if _is_explicit_send_command(user_text) and tool_name in ("press_key", "smart_type", "smart_click", "type_text"):
                                 if not _as_bool(tool_arguments.get("confirm_send")):
                                     tool_arguments["confirm_send"] = True
+                            if tool_name == "type_text" and not _gui_window_focused_this_turn:
+                                tool_arguments["_unfocused_turn_start"] = True
                             print(f'[TOOL DEBUG] Executing tool: {tool_name}')
                             print(f'[TOOL DEBUG] Tool arguments: {tool_arguments}')
                             try:
@@ -3896,6 +3914,8 @@ def process_user_input(user_text, status_callback=None):
                                 traceback.print_exc()
                                 tool_result = f"Error executing {tool_name}: {_tool_exc}"
                                 _tool_ok = False
+                            if _tool_ok and tool_name in ("open_application", "smart_click", "smart_type", "press_key"):
+                                _gui_window_focused_this_turn = True
                             if tool_result is None or str(tool_result).strip() == "":
                                 tool_result = "Action completed successfully."
 
