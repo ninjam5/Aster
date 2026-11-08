@@ -33,6 +33,7 @@ pytest tests/test_migration.py -v   # engine adapter + tool calling + failure gu
 pytest tests/test_locator.py -v     # GUI locator (UIA + Qwen 3.6 vision grounding)
 pytest tests/test_dom.py -v         # DOM motor (aria parser, shortlist, send gate)
 pytest tests/test_system1.py -v     # System-1 kernel (mocked Laya)
+pytest tests/test_console_logger.py -v # Console debug logging (stdout/stderr tee)
 
 # Run a single test
 pytest tests/test_migration.py -v -k "test_name_here"
@@ -242,6 +243,15 @@ Persistent, self-learning UI navigation memory (`Aster_Vault/playbooks/<slug>.ya
   - **Dynamic Learning via Gemini 3.8 Flash (`config.GEMINI_MODEL = "gemini-3.8-flash"`):** if the app/site or requested `task` is missing from the local vault (and `config.GEMINI_AVAILABLE` is true via `gemini.api_key` in `secrets.yaml`), queries the Gemini REST API to generate structured `shortcuts`, `tasks`, `landmarks`, and `avoid` rules, then merges and saves them permanently to `Aster_Vault/playbooks/<slug>.yaml`.
   - **Multimodal Self-Healing (`failed_step`):** when a UI step fails because an app updated its layout or a modal/popup blocked the target, passing `failed_step` captures a live screenshot (`capture_screen_base64()`) and sends it with the existing playbook to `gemini-3.8-flash` to diagnose the failure and patch the YAML playbook on disk.
   - **Fail-closed offline fallback:** if `gemini.api_key` is unset or the API call errors, `get_ui_playbook` degrades gracefully to local playbooks / generic UIA+vision guidance without raising.
+
+### Console Debug Logging (`tools/console_logger.py`)
+
+When `runtime.debug: true` in `self_config.yaml` (or `debug: true` at root), Aster mirrors all terminal stdout and stderr live to date-stamped log files in `Aster_Vault/console-logs/console_YYYY-MM-DD_HH-MM-SS.log`.
+- **Thread-Safe & Non-Blocking:** Re-entrant lock (`threading.RLock`) protects concurrent file writes and flushes across background threads.
+- **Pristine Output:** Strips terminal ANSI color escape sequences (`\x1b[...]`) so log files remain clean in plain-text editors.
+- **Unicode Resilient:** Handles arbitrary UTF-8 characters without encoding crashes on Windows console codepages.
+- **Lifecycle Banners:** Prepends session start header (with timestamp and PID) and appends session ended footer on exit.
+- **Zero Overhead When Off:** If `debug` is `false` (default), `console_logger.install()` is an immediate no-op, touching neither streams nor creating any log directories.
 
 ### Sentry Mode (`tools/sentry.py`)
 

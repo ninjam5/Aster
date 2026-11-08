@@ -155,6 +155,10 @@ OS_SHUTDOWN_DELAY = 0
 STOP_REQUESTED = False       # Set by /stop — checked between tool rounds to abort the current run
 DIAGNOSTICS_MODE = False     # Set by /diagnostics on|off — forwards stdout to Telegram
 
+# Console debug logging — mirrors terminal stdout/stderr to Aster_Vault/console-logs/ when true
+DEBUG_MODE = bool(_cfg("runtime", "debug", default=_cfg("debug", default=False)))
+CONSOLE_DEBUG_LOG_ENABLED = DEBUG_MODE
+
 # ============================================================================
 # MODEL CONFIGURATION — llama-server OpenAI-compatible client
 # ============================================================================
@@ -541,6 +545,7 @@ CONVERSATIONS_DIR  = str(_cfg("paths", "conversations_dir",  default=os.path.joi
 
 # Reliability-campaign instrumentation log (RELIABILITY_LOG_ENABLED above).
 RELIABILITY_LOG_PATH       = os.path.join(VAULT_DIR, "reliability_log.jsonl")
+CONSOLE_LOGS_DIR           = str(_cfg("paths", "console_logs_dir", default=os.path.join(VAULT_DIR, "console-logs")))
 
 # ============================================================================
 # GEMINI FRONTIER MODEL — UI Playbook generation & self-healing
@@ -601,6 +606,8 @@ os.makedirs(SYSTEM_PROMPTS_DIR, exist_ok=True)
 os.makedirs(PLAYBOOKS_DIR, exist_ok=True)
 os.makedirs(CUSTOM_VOICES_DIR, exist_ok=True)
 os.makedirs(CONVERSATIONS_DIR, exist_ok=True)
+if DEBUG_MODE:
+    os.makedirs(CONSOLE_LOGS_DIR, exist_ok=True)
 
 try:
     chroma_client = chromadb.PersistentClient(path=CHROMADB_PATH)

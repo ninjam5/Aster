@@ -55,6 +55,7 @@ runtime:
   structured_tool_results: true      # exact ToolResult(ok, text) failure detection for migrated tools; false = legacy FAILED/Error prefix-regex heuristic everywhere (core/tool_result.py)
   auto_compact: true                 # auto-run the /compact summarize-and-replace when context crosses the threshold below
   auto_compact_threshold: 0.75       # fraction of context_window that triggers auto-compaction (0.75 × 60k ≈ 45k tokens)
+  debug: false                       # when true, mirror all terminal stdout/stderr to date-stamped files in Aster_Vault/console-logs/
 
 voice:
   # Which STT/TTS engine the LiveKit CALL path uses. "local" = Faster-Whisper
@@ -172,6 +173,7 @@ paths:
   notes_file: Aster_Vault/notes.md
   system_prompts_dir: Aster_Vault/System_Prompts
   conversations_dir: Aster_Vault/Conversations
+  console_logs_dir: Aster_Vault/console-logs
 
 persona:
   # Active system prompt = a filename stem (no .md) in system_prompts_dir.

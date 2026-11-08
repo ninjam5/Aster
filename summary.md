@@ -152,6 +152,14 @@ When the model claims to execute a tool ("Playing on Spotify", "Taking a screens
 - `/api/token`, `/api/telemetry`, `/api/stream` — commented out
 - `stream_dispatch_loop` and `_telemetry_stream_loop` async tasks — disabled
 
+### 2.1b Console Debug Logger (`tools/console_logger.py`)
+
+**Status:** Implemented.
+- Gated by `runtime.debug: true` in `self_config.yaml` (`config.CONSOLE_DEBUG_LOG_ENABLED`).
+- Mirrors `sys.stdout` and `sys.stderr` to date-stamped log files in `Aster_Vault/console-logs/console_YYYY-MM-DD_HH-MM-SS.log`.
+- Strips terminal ANSI color codes, handles full UTF-8 characters safely, and appends session start/end banners with PID and timestamps.
+- When `debug: false`, acts as a hard no-op with zero file I/O overhead.
+
 ### 2.2 Telegram C2 Bridge
 
 **Status:** Fully implemented.
@@ -874,6 +882,8 @@ Async tasks (in WebRTC bridge only):
 | `livekit_agent.py` | 7 | Standalone LiveKit agent entry point |
 | `kokoro_test.py` | 173 | Kokoro TTS test harness |
 | `tests/test_migration.py` | ~814 | PyTest suite: 32 tests covering engine, tools, multimodal |
+| `tools/console_logger.py` | ~160 | Thread-safe stream tee logger mirroring stdout/stderr to date-stamped files in Aster_Vault/console-logs/ when runtime.debug is true |
+| `tests/test_console_logger.py` | ~80 | PyTest suite for console debug logger: lifecycle, mirroring, ANSI stripping, thread safety, config gating |
 | `tests/test_intervention.py` | ~25 | PyTest: 5 tests for `classify_window()` distraction detection |
 | `tests/test_sentiment.py` | ~30 | PyTest: 7 tests for `classify_sentiment()` mood classifier |
 | `checklist_test.md` | ~180 | Manual testing checklist for live validation |

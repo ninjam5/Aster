@@ -76,6 +76,8 @@ def _apply_live(updates: dict) -> None:
         "settings.voice_name":      ("VOICE_NAME",      str),
         "persona.system_prompt":    ("SYSTEM_PROMPT",   str),
         "integrations.google.access_tier": ("GOOGLE_ACCESS_TIER", str),
+        "runtime.debug":                   ("DEBUG_MODE",      bool),
+        "debug":                           ("DEBUG_MODE",      bool),
         # context_window / kv_cache_type are restart-gated — NOT hot-applied.
     }
     for dotted_key, value in updates.items():

@@ -18,7 +18,7 @@
     "created_at": "2026-11-06",
     "last_verified": "2026-11-06",
     "consecutive_failures": 0,
-    "usage_count": 16
+    "usage_count": 18
   },
   "layout_summary": "Client UI: top-left has blue 'PLAY' button; top bar has HOME, TFT, CLASH, and right-side icons for Profile, Collection (backpack), Loot (Hextech chest), Store (coins); right sidebar is Friends & Social list; bottom-center has 'CONFIRM' / 'FIND MATCH' button in lobbies. In-Game UI: champion abilities at bottom-center, minimap at bottom-right, shop via 'P'.",
   "avoid_traps": [

@@ -20,6 +20,10 @@ for _lib in ("cublas", "cuda_nvrtc"):
 
 import torch
 import config
+import tools.console_logger as _console_logger
+_console_log_path = _console_logger.install()
+if _console_log_path:
+    print(f"[Aster Core] Console debug logging enabled -> {_console_log_path}")
 from core.brain import process_user_input, check_context_health
 import tools.sentry as sentry
 from tools.discord_listener import start_discord_dm_listener
