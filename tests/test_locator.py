@@ -208,20 +208,40 @@ class TestQwenVisionGrounding:
             "score": 0.9,
         }
         with patch.object(tools.uia, "uia_locate", return_value=None), \
-             patch.object(vision, "locate_ui_elements_boxed", return_value=[]), \
              patch.object(vision, "_qwen_vision_locate", return_value=mock_result):
             res = vision.locate_ui_element_ex("search bar")
             assert res == mock_result
 
-    def test_locate_ui_element_ex_prefers_boxed(self):
+    def test_locate_ui_element_ex_uses_direct_point_grounding(self):
         from tools import vision
         import tools.uia
 
-        mock_boxes = [{"box": (200, 100, 200, 100), "score": 0.9, "text": "search bar", "source": "qwen-vision"}]
+        mock_result = {
+            "x": 960,
+            "y": 540,
+            "source": "qwen-vision",
+            "text": "search bar",
+            "score": 0.9,
+        }
         with patch.object(tools.uia, "uia_locate", return_value=None), \
-             patch.object(vision, "locate_ui_elements_boxed", return_value=mock_boxes):
+             patch.object(vision, "_qwen_vision_locate", return_value=mock_result) as mock_point, \
+             patch.object(vision, "locate_ui_elements_boxed") as mock_boxed:
             res = vision.locate_ui_element_ex("search bar")
-            assert res == {"x": 300, "y": 150, "source": "qwen-vision", "text": "search bar", "score": 0.9}
+            assert res == mock_result
+            mock_point.assert_called_once_with("search bar")
+            mock_boxed.assert_not_called()
+
+    def test_qwen_vision_locate_boxes_rejects_oversized_strip(self):
+        from tools import vision
+        import core.brain
+        import pyautogui
+
+        with patch.object(vision, "capture_screen_base64", return_value="fakeb64"), \
+             patch.object(pyautogui, "size", return_value=(1000, 1000)), \
+             patch.object(core.brain, "_execute_llm_completion",
+                          return_value={"content": '[{"label": "Ob", "box_2d": [0, 0, 41, 944]}]'}):
+            boxes = vision._qwen_vision_locate_boxes("Ob")
+            assert boxes == []
 
     def test_locate_ui_elements_boxed(self):
         from tools import vision

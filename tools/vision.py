@@ -710,6 +710,8 @@ def _qwen_vision_locate_boxes(goal: str, b64_img: str | None = None) -> list[dic
                 xmin, xmax = xmax, xmin
             if ymin > ymax:
                 ymin, ymax = ymax, ymin
+            if (xmax - xmin) > 500 or (ymax - ymin) > 500:
+                continue
             left = int((xmin / 1000.0) * logical_w)
             top = int((ymin / 1000.0) * logical_h)
             width = max(16, int(((xmax - xmin) / 1000.0) * logical_w))
@@ -723,11 +725,12 @@ def _qwen_vision_locate_boxes(goal: str, b64_img: str | None = None) -> list[dic
                 x_norm, y_norm, box_coords = single
                 if box_coords:
                     xmin, ymin, xmax, ymax = box_coords
-                    left = int((xmin / 1000.0) * logical_w)
-                    top = int((ymin / 1000.0) * logical_h)
-                    width = max(16, int(((xmax - xmin) / 1000.0) * logical_w))
-                    height = max(16, int(((ymax - ymin) / 1000.0) * logical_h))
-                    matches.append({"box": (left, top, width, height), "score": 0.9, "text": goal, "source": "qwen-vision"})
+                    if (xmax - xmin) <= 500 and (ymax - ymin) <= 500:
+                        left = int((xmin / 1000.0) * logical_w)
+                        top = int((ymin / 1000.0) * logical_h)
+                        width = max(16, int(((xmax - xmin) / 1000.0) * logical_w))
+                        height = max(16, int(((ymax - ymin) / 1000.0) * logical_h))
+                        matches.append({"box": (left, top, width, height), "score": 0.9, "text": goal, "source": "qwen-vision"})
                 else:
                     lx = int((x_norm / 1000.0) * logical_w)
                     ly = int((y_norm / 1000.0) * logical_h)
@@ -795,25 +798,7 @@ def locate_ui_element_ex(goal: str) -> dict | None:
         except Exception as e:
             print(f'[Locator] UIA track unavailable: {e}')
 
-    # Track 1: Boxed grounding first (100% parity with /find & assist mode)
-    try:
-        boxes = locate_ui_elements_boxed(goal)
-        if boxes:
-            best = boxes[0]
-            bx, by, bw, bh = best["box"]
-            cx = bx + bw // 2
-            cy = by + bh // 2
-            return {
-                "x": cx,
-                "y": cy,
-                "source": best.get("source", "qwen-vision"),
-                "text": best.get("text", goal),
-                "score": best.get("score", 0.9),
-            }
-    except Exception as e:
-        print(f"[Locator] Boxed grounding track failed: {e}")
-
-    # Fallback to direct point locate if boxed found nothing
+    # Track 1: Direct Qwen 3.6 Vision Grounding
     return _qwen_vision_locate(goal)
 
 
@@ -858,7 +843,7 @@ def locate_ui_elements_boxed(goal: str, threshold: float = 0.5) -> list[dict]:
                 width = max(8, int((x2 - x1) * scale_x))
                 height = max(8, int((y2 - y1) * scale_y))
                 # Ignore giant container panes covering more than half the screen
-                if width > logical_w * 0.6 and height > logical_h * 0.6:
+                if width > logical_w * 0.5 or height > logical_h * 0.5:
                     continue
                 uia_matches.append({
                     "box": (left, top, width, height),

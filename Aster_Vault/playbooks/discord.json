@@ -17,22 +17,22 @@
   },
   "layout_summary": "Far-left strip: server icons (Discord logo at very top for DMs). Second column: channels or Direct Messages list, with user profile/mic/headphones bar at bottom-left. Center: active chat history and 'Message @name / #channel' input box at the bottom.",
   "avoid_traps": [
-    "In Quick Switcher (ctrl+k), typing a plain name searches server channels, voice channels, AND users together. Always prefix with '@' (e.g. type_text('@Ob', press_enter=true)) when looking for a Direct Message user so server channels are excluded. If multiple matching users appear in the dropdown, use smart_click to click the exact username entry.",
+    "In Quick Switcher (ctrl+k), NEVER pass press_enter=true when typing a contact name (React takes ~400ms to filter, so immediate Enter jumps to the wrong server!). Instead, call type_text(contact_name, press_enter=false) without '@', let the filtered dropdown appear in the screenshot, and then use smart_click to click the matching Direct Message user row.",
     "Top header contact/channel name is display-only — do NOT click it once inside chat.",
-    "Do NOT scroll endlessly looking for a contact or server — press ctrl+k to open the Quick Switcher, type the name, and press enter.",
+    "If the target contact is already visible in the left Direct Messages sidebar (or Previous Channels), just smart_click their name directly instead of opening Quick Switcher.",
     "Do NOT click the voice call or video call icons at top-right when you only want to send a text message."
   ],
   "actions": {
     "quick_switcher": {
       "shortcut": "ctrl+k",
-      "primary": "press_key('ctrl+k') -> type_text(target_name, press_enter=true)",
+      "primary": "press_key('ctrl+k') -> type_text(target_name, press_enter=false) -> smart_click('matching row in Quick Switcher results')",
       "visual_fallback": "smart_click('Find or start a conversation button at top of left sidebar')",
-      "verify": "Quick Switcher modal opens and jumps directly to target DM/channel/server"
+      "verify": "Quick Switcher modal filters results and clicking the matching entry opens the target DM/channel"
     },
     "open_dm": {
       "shortcut": "ctrl+k",
-      "primary": "press_key('ctrl+k') -> type_text('@' + contact_name, press_enter=true)",
-      "visual_fallback": "smart_click('contact name in Quick Switcher results or left Direct Messages sidebar')",
+      "primary": "If contact is visible in Direct Messages sidebar, smart_click('<name> in Direct Messages sidebar'). Otherwise: press_key('ctrl+k') -> type_text(contact_name, press_enter=false) -> smart_click('<name> Direct Message row in Quick Switcher results')",
+      "visual_fallback": "smart_click('Discord logo at top-left to open Direct Messages') -> smart_click('<name> in Direct Messages sidebar')",
       "verify": "Chat view switches to the target Direct Message (@username) conversation, not a server channel"
     },
     "send_message": {

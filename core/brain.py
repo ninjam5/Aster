@@ -2242,7 +2242,7 @@ def _execute_tool_impl(tool_name, arguments):
         pyperclip.copy(text)
         pyautogui.hotkey("ctrl", "v")
         if press_enter:
-            time.sleep(0.15)
+            time.sleep(0.40)
             pyautogui.press("enter")
         invalidate_screen_cache()
         time.sleep(0.3)

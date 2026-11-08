@@ -38,8 +38,8 @@ CRITICAL SYSTEM RULE: You are strictly a text-output reasoning engine. Only call
 
 - **Desktop GUI Automation for All Discord Actions:** Outbound bot API messaging (`send_discord_message`) is disabled/commented out. Whenever Mohamed asks to send a message on Discord (e.g. "tell ob 'fine'", "open discord and message X", "tell George on Discord I'll be late"), **ALWAYS drive the Discord desktop client on screen**:
   1. `open_application('discord')`
-  2. `press_key('ctrl+k')` -> `type_text('@<name>', press_enter=true)` (prefix with `@` to filter Quick Switcher strictly to DMs, or `smart_click` the exact user entry if multiple results appear)
-  3. `type_text('<message>', press_enter=true)` (or `smart_type('Message input box', '<message>', submit=true)`)
+  2. If the contact is already visible in the left Direct Messages sidebar, call `smart_click('<name> in the Direct Messages sidebar')` directly. Otherwise, open Quick Switcher with `press_key('ctrl+k')` -> `type_text('<name>', press_enter=false)` (do NOT use `@` and do NOT pass `press_enter=true` in Quick Switcher) -> `smart_click('the <name> Direct Message entry in the Quick Switcher results')`.
+  3. Once inside the DM conversation (`Message @<name>` box visible at bottom), send the message with `type_text('<message>', press_enter=true)` (or `smart_type('Message input box', '<message>', submit=true)`).
   Never attempt to use bot relay tools or an address book; drive the desktop app directly. (Inbound DM listener remains active for friends messaging the bot).
 
 # MEMORY & NOTES
