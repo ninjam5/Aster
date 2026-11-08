@@ -384,6 +384,7 @@ def test_open_application_launches_store_app_via_startfile(monkeypatch):
     monkeypatch.setattr(system, "_find_app_path", lambda exe: None)
     monkeypatch.setattr(system, "_get_store_apps", lambda: {"instagram": "Instagram_8wekyb3d8bbwe!App"})
     monkeypatch.setattr(system.os.path, "exists", lambda p: False)
+    monkeypatch.setattr(system, "_find_and_focus_existing_window", lambda app: (False, ""))
 
     system.open_application("instagram")
     assert startfile_calls == ["shell:AppsFolder\\Instagram_8wekyb3d8bbwe!App"]
@@ -404,6 +405,7 @@ def test_open_application_store_app_fallback_to_explorer(monkeypatch):
     monkeypatch.setattr(system, "_find_app_path", lambda exe: None)
     monkeypatch.setattr(system, "_get_store_apps", lambda: {"calculator": "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"})
     monkeypatch.setattr(system.os.path, "exists", lambda p: False)
+    monkeypatch.setattr(system, "_find_and_focus_existing_window", lambda app: (False, ""))
 
     system.open_application("calculator")
     assert popen_calls == ["explorer.exe shell:AppsFolder\\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"]
@@ -428,6 +430,166 @@ def test_get_store_apps_enumeration_and_caching(monkeypatch):
     # Cached on subsequent call
     monkeypatch.setattr(system.subprocess, "check_output", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("should not call")))
     assert system._get_store_apps() == {"calculator": "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"}
+
+
+# ============================================================================
+# 7. OPEN APPLICATION & WINDOW FOCUSING
+# ============================================================================
+
+def test_open_application_already_open_focuses_and_skips_launch(monkeypatch):
+    """When _find_and_focus_existing_window finds an open window, open_application brings it to foreground and skips launch."""
+    from tools import system
+
+    startfile_calls = []
+    popen_calls = []
+    monkeypatch.setattr(system.os, "startfile", lambda path: startfile_calls.append(path))
+    monkeypatch.setattr(system.subprocess, "Popen", lambda cmd, **kw: popen_calls.append(cmd))
+    monkeypatch.setattr(system.time, "sleep", lambda s: None)
+    monkeypatch.setattr(system, "_find_and_focus_existing_window", lambda app: (True, "Instagram"))
+
+    result = system.open_application("instagram")
+    assert "already open" in result
+    assert "Instagram" in result
+    assert not startfile_calls
+    assert not popen_calls
+
+
+def test_open_application_already_open_executes_action(monkeypatch):
+    """When app is already open, open_application still performs the requested action."""
+    from tools import system
+
+    press_calls = []
+    monkeypatch.setattr(system.pyautogui, "press", lambda k: press_calls.append(k))
+    monkeypatch.setattr(system.time, "sleep", lambda s: None)
+    monkeypatch.setattr(system, "_find_and_focus_existing_window", lambda app: (True, "Spotify Premium"))
+
+    result = system.open_application("spotify", action="play")
+    assert "already open" in result
+    assert "Spotify Premium" in result
+    assert press_calls == ["space"]
+
+
+def test_open_application_not_open_falls_back_to_launch(monkeypatch):
+    """When _find_and_focus_existing_window returns (False, ''), open_application falls back to launching the app."""
+    from tools import system
+
+    startfile_calls = []
+    popen_calls = []
+    monkeypatch.setattr(system.os, "startfile", lambda path: startfile_calls.append(path))
+    monkeypatch.setattr(system.subprocess, "Popen", lambda cmd, **kw: popen_calls.append(cmd))
+    monkeypatch.setattr(system.time, "sleep", lambda s: None)
+    monkeypatch.setattr(system, "_find_app_path", lambda exe: None)
+    monkeypatch.setattr(system, "_get_store_apps", lambda: {"instagram": "Instagram_8wekyb3d8bbwe!App"})
+    monkeypatch.setattr(system.os.path, "exists", lambda p: False)
+    monkeypatch.setattr(system, "_find_and_focus_existing_window", lambda app: (False, ""))
+
+    result = system.open_application("instagram")
+    assert "Launched 'instagram'" in result
+    assert startfile_calls == ["shell:AppsFolder\\Instagram_8wekyb3d8bbwe!App"]
+    assert not popen_calls
+
+
+def test_find_and_focus_existing_window_restores_iconic_window(monkeypatch):
+    """_find_and_focus_existing_window restores iconic (minimized) windows and brings them to the foreground."""
+    from tools import system
+    import win32con
+
+    mock_hwnd = 54321
+    show_window_calls = []
+    set_fg_calls = []
+    keybd_calls = []
+
+    def mock_enum_windows(callback, extra):
+        callback(mock_hwnd, extra)
+
+    monkeypatch.setattr(system.win32gui, "EnumWindows", mock_enum_windows)
+    monkeypatch.setattr(system.win32gui, "GetWindowText", lambda h: "Instagram")
+    monkeypatch.setattr(system.win32gui, "GetForegroundWindow", lambda: 99999)
+    monkeypatch.setattr(system.win32gui, "IsIconic", lambda h: True)
+    monkeypatch.setattr(system.win32gui, "ShowWindow", lambda h, cmd: show_window_calls.append((h, cmd)))
+    monkeypatch.setattr(system.win32gui, "SetForegroundWindow", lambda h: set_fg_calls.append(h))
+    monkeypatch.setattr(system.win32api, "keybd_event", lambda *a: keybd_calls.append(a))
+
+    found, title = system._find_and_focus_existing_window("instagram")
+
+    assert found is True
+    assert title == "Instagram"
+    assert show_window_calls == [(mock_hwnd, win32con.SW_RESTORE)]
+    assert set_fg_calls == [mock_hwnd]
+    assert len(keybd_calls) == 2  # ALT key down and key up
+
+
+def test_find_and_focus_existing_window_already_foreground(monkeypatch):
+    """_find_and_focus_existing_window returns True without ShowWindow or SetForegroundWindow if already foreground."""
+    from tools import system
+
+    mock_hwnd = 12345
+    show_window_calls = []
+    set_fg_calls = []
+
+    def mock_enum_windows(callback, extra):
+        callback(mock_hwnd, extra)
+
+    monkeypatch.setattr(system.win32gui, "EnumWindows", mock_enum_windows)
+    monkeypatch.setattr(system.win32gui, "GetWindowText", lambda h: "Discord")
+    monkeypatch.setattr(system.win32gui, "GetForegroundWindow", lambda: mock_hwnd)
+    monkeypatch.setattr(system.win32gui, "IsIconic", lambda h: False)
+    monkeypatch.setattr(system.win32gui, "ShowWindow", lambda h, cmd: show_window_calls.append((h, cmd)))
+    monkeypatch.setattr(system.win32gui, "SetForegroundWindow", lambda h: set_fg_calls.append(h))
+
+    found, title = system._find_and_focus_existing_window("discord")
+
+    assert found is True
+    assert title == "Discord"
+    assert not show_window_calls
+    assert not set_fg_calls
+
+
+def test_find_and_focus_existing_window_not_found(monkeypatch):
+    """_find_and_focus_existing_window returns (False, '') when no matching window exists."""
+    from tools import system
+
+    def mock_enum_windows(callback, extra):
+        callback(11111, extra)
+
+    monkeypatch.setattr(system.win32gui, "EnumWindows", mock_enum_windows)
+    monkeypatch.setattr(system.win32gui, "GetWindowText", lambda h: "Calculator")
+    monkeypatch.setattr(system.win32gui, "GetForegroundWindow", lambda: 0)
+    monkeypatch.setattr(system.win32gui, "IsIconic", lambda h: False)
+
+    found, title = system._find_and_focus_existing_window("spotify")
+    assert found is False
+    assert title == ""
+
+
+def test_find_and_focus_existing_window_matches_process_name(monkeypatch):
+    """_find_and_focus_existing_window matches by process name when title doesn't contain app name."""
+    from tools import system
+
+    mock_hwnd = 67890
+    set_fg_calls = []
+
+    def mock_enum_windows(callback, extra):
+        callback(mock_hwnd, extra)
+
+    monkeypatch.setattr(system.win32gui, "EnumWindows", mock_enum_windows)
+    monkeypatch.setattr(system.win32gui, "GetWindowText", lambda h: "Artist - Track Name")
+    monkeypatch.setattr(system.win32process, "GetWindowThreadProcessId", lambda h: (0, 4321))
+
+    mock_proc = MagicMock()
+    mock_proc.name.return_value = "spotify.exe"
+    monkeypatch.setattr(system.psutil, "Process", lambda pid: mock_proc)
+
+    monkeypatch.setattr(system.win32gui, "GetForegroundWindow", lambda: 0)
+    monkeypatch.setattr(system.win32gui, "IsIconic", lambda h: False)
+    monkeypatch.setattr(system.win32gui, "SetForegroundWindow", lambda h: set_fg_calls.append(h))
+    monkeypatch.setattr(system.win32api, "keybd_event", lambda *a: None)
+
+    found, title = system._find_and_focus_existing_window("spotify")
+    assert found is True
+    assert title == "Artist - Track Name"
+    assert set_fg_calls == [mock_hwnd]
+
 
 
 

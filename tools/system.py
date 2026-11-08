@@ -15,6 +15,19 @@ try:
 except ImportError:
     PYCAW_AVAILABLE = False
 
+try:
+    import win32gui
+    import win32con
+    import win32process
+    import win32api
+    WIN32_AVAILABLE = True
+except ImportError:
+    win32gui = None
+    win32con = None
+    win32process = None
+    win32api = None
+    WIN32_AVAILABLE = False
+
 
 # ============================================================================
 # TOOL DEFINITION: get_current_time()
@@ -113,6 +126,148 @@ _BROWSER_EXES = {
     "chromium": "chrome.exe",
 }
 
+_APP_WINDOW_ALIASES = {
+    "instagram": {"keywords": ["instagram"], "processes": ["instagram.exe"]},
+    "discord": {"keywords": ["discord"], "processes": ["discord.exe"]},
+    "spotify": {"keywords": ["spotify"], "processes": ["spotify.exe"]},
+    "telegram": {"keywords": ["telegram"], "processes": ["telegram.exe"]},
+    "chrome": {"keywords": ["chrome", "google chrome"], "processes": ["chrome.exe"]},
+    "google chrome": {"keywords": ["chrome", "google chrome"], "processes": ["chrome.exe"]},
+    "stremio": {"keywords": ["stremio"], "processes": ["stremio.exe"]},
+    "steam": {"keywords": ["steam"], "processes": ["steam.exe", "steamwebhelper.exe"]},
+    "vscode": {"keywords": ["visual studio code", "vscode", "code"], "processes": ["code.exe"]},
+    "code": {"keywords": ["visual studio code", "vscode", "code"], "processes": ["code.exe"]},
+    "visual studio code": {"keywords": ["visual studio code", "vscode", "code"], "processes": ["code.exe"]},
+    "edge": {"keywords": ["edge", "microsoft edge", "msedge"], "processes": ["msedge.exe"]},
+    "msedge": {"keywords": ["edge", "microsoft edge", "msedge"], "processes": ["msedge.exe"]},
+    "microsoft edge": {"keywords": ["edge", "microsoft edge", "msedge"], "processes": ["msedge.exe"]},
+    "brave": {"keywords": ["brave"], "processes": ["brave.exe"]},
+    "brave browser": {"keywords": ["brave"], "processes": ["brave.exe"]},
+}
+
+_KNOWN_HOST_PROCESSES = {
+    "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "code.exe", "devenv.exe", "windowsterminal.exe"
+}
+
+
+def _find_and_focus_existing_window(app_name: str) -> tuple[bool, str]:
+    """Find an already-open window matching app_name and bring it to foreground.
+    Returns (True, window_title) if found and focused, (False, "") otherwise."""
+    if not WIN32_AVAILABLE or win32gui is None:
+        return False, ""
+    try:
+        clean_name = (app_name or "").strip().lower()
+        if not clean_name:
+            return False, ""
+        if clean_name.endswith(".exe"):
+            clean_name = clean_name[:-4]
+
+        alias_info = _APP_WINDOW_ALIASES.get(clean_name)
+        if alias_info:
+            target_keywords = alias_info["keywords"]
+            target_processes = alias_info["processes"]
+        else:
+            target_keywords = [clean_name]
+            target_processes = [f"{clean_name}.exe"]
+
+        found_hwnd = None
+        found_title = ""
+
+        def _enum_cb(hwnd, _):
+            nonlocal found_hwnd, found_title
+            try:
+                title = ""
+                try:
+                    title = win32gui.GetWindowText(hwnd) or ""
+                except Exception:
+                    pass
+
+                title_lower = title.strip().lower()
+
+                pname = ""
+                if win32process is not None:
+                    try:
+                        _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                        if pid > 0:
+                            pname = psutil.Process(pid).name().lower()
+                    except Exception:
+                        pass
+
+                # If window belongs to a known host (editor/browser) but we're not targeting that host, skip it
+                if pname in _KNOWN_HOST_PROCESSES and pname not in target_processes:
+                    return True
+
+                title_match = bool(title_lower) and any(kw in title_lower for kw in target_keywords)
+                proc_match = bool(pname) and (pname in target_processes)
+
+                if title_match or proc_match:
+                    found_hwnd = hwnd
+                    found_title = title.strip() or app_name
+                    return False
+            except Exception:
+                pass
+            return True
+
+        try:
+            win32gui.EnumWindows(_enum_cb, None)
+        except Exception:
+            pass
+
+        if not found_hwnd:
+            return False, ""
+
+        if win32gui.GetForegroundWindow() == found_hwnd:
+            return True, found_title
+
+        if win32gui.IsIconic(found_hwnd):
+            sw_restore = win32con.SW_RESTORE if win32con is not None else 9
+            win32gui.ShowWindow(found_hwnd, sw_restore)
+
+        # Alt tap workaround so Windows allows foreground activation
+        try:
+            if win32api is not None and win32con is not None:
+                win32api.keybd_event(0x12, 0, 0, 0)
+                win32api.keybd_event(0x12, 0, win32con.KEYEVENTF_KEYUP, 0)
+            else:
+                import ctypes
+                ctypes.windll.user32.keybd_event(0x12, 0, 0, 0)
+                ctypes.windll.user32.keybd_event(0x12, 0, 2, 0)
+        except Exception:
+            pass
+
+        try:
+            win32gui.SetForegroundWindow(found_hwnd)
+        except Exception:
+            try:
+                import ctypes
+                ctypes.windll.user32.SetForegroundWindow(found_hwnd)
+            except Exception:
+                pass
+
+        return True, found_title
+    except Exception:
+        return False, ""
+
+
+def _perform_action(action):
+    """Executes media / playback keyboard shortcuts for opened apps."""
+    if not action:
+        return
+    time.sleep(2)
+    if action == "play" or action == "pause":
+        pyautogui.press("space")
+    elif action == "next":
+        pyautogui.hotkey("ctrl", "right")
+    elif action == "previous":
+        pyautogui.hotkey("ctrl", "left")
+    elif action == "volume_up":
+        pyautogui.press("volumeup")
+    elif action == "volume_down":
+        pyautogui.press("volumedown")
+    elif action == "mute":
+        pyautogui.press("volumemute")
+
+
 # NOTE (settled 2026-09-26): driving the owner's REAL profile with a debug port
 # is impossible — Chrome >=136 ignores --remote-debugging-port on the default
 # user-data-dir, and any copy/junction of that dir loses the app-bound
@@ -208,6 +363,12 @@ def _get_store_apps() -> dict[str, str]:
 
 
 def open_application(app_name, action=None):
+    already_open, win_title = _find_and_focus_existing_window(app_name)
+    if already_open:
+        if action:
+            _perform_action(action)
+        return f"App {app_name!r} is already open ({win_title!r}). Brought to foreground."
+
     if _launch_browser_with_debug(app_name):
         # Skips the .lnk path: shortcuts cannot carry the CDP arguments.
         time.sleep(2.5)
@@ -277,19 +438,9 @@ def open_application(app_name, action=None):
         time.sleep(2.5)  # Let the window come to foreground before next tool fires
 
     if action:
-        time.sleep(2)
-        if action == "play" or action == "pause":
-            pyautogui.press("space")
-        elif action == "next":
-            pyautogui.hotkey("ctrl", "right")
-        elif action == "previous":
-            pyautogui.hotkey("ctrl", "left")
-        elif action == "volume_up":
-            pyautogui.press("volumeup")
-        elif action == "volume_down":
-            pyautogui.press("volumedown")
-        elif action == "mute":
-            pyautogui.press("volumemute")
+        _perform_action(action)
+
+    return f"Launched {app_name!r}. Window brought to foreground."
 
 
 # ============================================================================
