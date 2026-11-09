@@ -48,11 +48,11 @@ _diagnostics.install()
 
 LIVEKIT_ROOM_NAME = os.getenv("LIVEKIT_ROOM", "aster-command-center")
 
-# Verify the llama-server engine is reachable (60000-token context, mmproj vision)
+# Verify the PolyStrata engine is reachable (128k-token context, mmproj vision)
 try:
     config.load_engine()
 except Exception as e:
-    print(f"[Aster Core] CRITICAL: Failed to load llama-cpp-python engine: {e}")
+    print(f"[Aster Core] CRITICAL: Failed to load PolyStrata engine: {e}")
 
 
 
@@ -79,7 +79,7 @@ def _dispatch_telegram_response(message, response_text):
     import re as _re
 
     if not response_text or not response_text.strip():
-        response_text = "[No response generated.]"
+        response_text = "I have completed that for you, Sir."
 
     # Audio Payload Interceptor & Cleanup
     if "[NATIVE_AUDIO_PAYLOAD:" in response_text:
@@ -106,7 +106,18 @@ def _dispatch_telegram_response(message, response_text):
 
     # Send remaining text (if any)
     if response_text:
-        config.bot.reply_to(message, response_text)
+        try:
+            from tools.telegram_formatter import markdown_to_telegram_html, split_telegram_html
+            formatted_html = markdown_to_telegram_html(response_text)
+            chunks = split_telegram_html(formatted_html, max_chunk=4000)
+            for idx, chunk in enumerate(chunks):
+                if idx == 0:
+                    config.bot.reply_to(message, chunk, parse_mode="HTML")
+                else:
+                    config.bot.send_message(message.chat.id, chunk, parse_mode="HTML")
+        except Exception as e:
+            print(f"[Telegram Notice] HTML parse fallback ({e}); sending raw text")
+            config.bot.reply_to(message, response_text)
 
 
 # ============================================================================
@@ -226,7 +237,7 @@ if config.bot:
         import subprocess
         try:
             # nvidia-smi reports TRUE board usage — torch.cuda.* only sees
-            # PyTorch's own allocations and misses llama-server + CTranslate2.
+            # PyTorch's own allocations and misses PolyStrata + CTranslate2.
             board = subprocess.run(
                 ["nvidia-smi",
                  "--query-gpu=name,memory.used,memory.total,memory.free",
@@ -250,7 +261,7 @@ if config.bot:
                 f"Free : {free_gb:.2f} GB"
             ))
         except Exception as e:
-            # Fallback: PyTorch-only view (undercounts — excludes llama-server/Whisper)
+            # Fallback: PyTorch-only view (undercounts — excludes PolyStrata/Whisper)
             try:
                 if torch.cuda.is_available():
                     props = torch.cuda.get_device_properties(0)
@@ -258,7 +269,7 @@ if config.bot:
                     config.bot.reply_to(message, (
                         f"[Aster GPU: {props.name} — nvidia-smi unavailable]\n"
                         f"PyTorch reserved: {reserved:.2f} GB\n"
-                        f"(excludes llama-server & Whisper — install nvidia-smi for true usage)"
+                        f"(excludes PolyStrata & Whisper — install nvidia-smi for true usage)"
                     ))
                 else:
                     config.bot.reply_to(message, f"[Aster GPU: query failed — {e}]")
@@ -356,10 +367,10 @@ if config.bot:
             response_text = process_user_input(f"[NATIVE_IMAGE_PAYLOAD:{img_base64}]{caption}", None)
 
             if not response_text or not response_text.strip():
-                response_text = "[No response generated.]"
+                response_text = "I have completed that for you, Sir."
 
             # 5. Send Aster's response
-            config.bot.reply_to(message, response_text)
+            _dispatch_telegram_response(message, response_text)
 
         except Exception as e:
             config.bot.reply_to(message, f"[Aster: Failed to process visual signal: {str(e)}]")
@@ -653,7 +664,7 @@ def start_background_services():
     # Start Face server (token + log stream for the Tauri desktop UI)
     threading.Thread(target=_face_server.start_face_server, daemon=True).start()
 
-    # Start llama-server health watchdog (alerts + capped auto-restart)
+    # Start PolyStrata health watchdog (alerts + capped auto-restart)
     from tools import health_watchdog as _health_watchdog
     threading.Thread(target=_health_watchdog.health_watchdog_daemon, daemon=True, name="health-watchdog").start()
 

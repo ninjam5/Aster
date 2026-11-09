@@ -1,4 +1,4 @@
-"""Tests for the llama-server health watchdog (tools/health_watchdog.py).
+"""Tests for the PolyStrata health watchdog (tools/health_watchdog.py).
 
 check_once() is driven directly (no sleep loop); requests.get, subprocess
 launch, recovery wait, and the Telegram alert are all mocked.
@@ -150,5 +150,5 @@ def test_daemon_exits_immediately_when_disabled(monkeypatch):
 
 def test_start_bat_path_points_at_repo_root():
     import os
-    assert os.path.basename(wd.START_BAT) == "start.bat"
+    assert os.path.basename(wd.START_BAT) in ("start.bat", "qwen3.6_polystrata_start.bat")
     assert os.path.exists(wd.START_BAT)

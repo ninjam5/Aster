@@ -17,29 +17,31 @@
   },
   "layout_summary": "Far-left strip: server icons (Discord logo at very top for DMs). Second column: channels or Direct Messages list, with user profile/mic/headphones bar at bottom-left. Center: active chat history and 'Message @name / #channel' input box at the bottom.",
   "avoid_traps": [
-    "NEVER confuse a 1-on-1 Direct Message user with a Group DM! In the left sidebar, a Group DM shows '2 Members' / '3 Members' underneath the name and a solid-colored two-person group icon — NEVER click a row that says 'Members' when asked to message a single person. In Quick Switcher (ctrl+k), 1-on-1 users appear at the TOP with their grey lowercase username handle right next to their display name (e.g. 'Ob  the_ob'), while Group DMs appear at the bottom with solid-colored two-person icons and NO username handle.",
-    "MANDATORY '@ ' CHECK BEFORE SENDING: In a real 1-on-1 DM, the bottom chat input box placeholder ALWAYS says 'Message @<Name>' (WITH an '@' symbol, e.g. 'Message @Ob'). If the bottom input box says 'Message <Name>' WITHOUT '@' (e.g. 'Message Ob') or the header/sidebar shows 'N Members', you are inside a Group Chat — DO NOT send the message! Immediately press ctrl+k, type the name with press_enter=false, and select the top 1-on-1 user row that has a grey username handle.",
-    "In Quick Switcher (ctrl+k), NEVER pass press_enter=true inside type_text (React takes ~400ms to filter, so immediate Enter jumps to the wrong server!). Instead, call type_text(contact_name, press_enter=false) without '@'. On the next step, once the filtered dropdown is visible on screen with the 1-on-1 user ('<Name> <username_handle>') highlighted at the very top, either call press_key('enter') or smart_click the top user row with the username handle.",
-    "Do NOT scroll down the Direct Messages sidebar looking for a contact (scrolling down lands in old multi-member Group DMs). If the contact's 1-on-1 DM (no 'Members' subtitle) is not immediately visible at the top of the sidebar, press ctrl+k to use Quick Switcher.",
+    "DUPLICATE NAME TRAP (1-ON-1 USER vs GROUP CHAT WITH SAME NAME — e.g. two 'Ob' chats): A contact often appears TWICE in Discord because an old Group Chat was created with only that person in it (so it is also named 'Ob' with '2 Members'). NEVER rely on row position (top vs second), because Discord reorders chats by last activity! Always distinguish them by their AVATAR ICON and SUBTITLE:\n  - REAL 1-ON-1 USER (CLICK THIS): Has a custom profile photo/picture image inside the circular avatar (with a small status dot at bottom-right), only a SINGLE line of text in the sidebar ('Ob' with NO subtitle underneath), and in Quick Switcher shows their grey lowercase username handle right next to their name ('Ob  the_ob').\n  - GROUP CHAT (NEVER CLICK FOR A 1-ON-1 DM): Has a solid flat-colored circle (e.g. orange, pink, or blue) containing a default white 2-person silhouette icon, shows '2 Members' / '3 Members' underneath the name in the sidebar, and has NO username handle in Quick Switcher.\n  - When calling smart_click on a contact, ALWAYS describe the avatar positively: e.g. smart_click('Ob row with the custom photo avatar (not the orange 2-person group icon)').",
+    "ALWAYS CHAIN Quick Switcher + typing in a SINGLE round: call [press_key('ctrl+k'), type_text(contact_name, press_enter=false)] together in the same turn so Quick Switcher immediately filters to the contact! Never call press_key('ctrl+k') alone without typing the query.",
+    "MODAL LOCK RULE: Once Quick Switcher (ctrl+k) is open on screen, NEVER click the dimmed Direct Messages sidebar behind the modal (clicking outside the modal dismisses Quick Switcher or misclicks a Group DM). Always click the matching result row INSIDE the Quick Switcher modal.",
+    "In Quick Switcher (ctrl+k), rows showing '<Display Name>  <username_handle>' (e.g. 'Ob  the_ob') ARE 1-on-1 Direct Messages even when listed under the 'PREVIOUS CHANNELS' or 'DIRECT MESSAGES' header!",
+    "MANDATORY '@' CHECK BEFORE SENDING: In a real 1-on-1 DM, the bottom chat input box placeholder ALWAYS says 'Message @<Name>' (WITH '@', e.g. 'Message @Ob'). Call smart_type('Message @<Name>', message_text, submit=true) which matches Windows UIA in 0ms! If the bottom input box says 'Message <Name>' WITHOUT '@' (e.g. 'Message Ob') or shows 'N Members', you are in a Group Chat — DO NOT send! Immediately click the contact row that has the custom profile photo avatar (or use ctrl+k and select the row with the grey username handle).",
+    "In Quick Switcher (ctrl+k), NEVER pass press_enter=true inside type_text (React takes ~400ms to filter, so immediate Enter jumps to the wrong server!). Always pass press_enter=false when typing into Quick Switcher, then select the filtered result on the next round.",
     "Top header contact/channel name is display-only — do NOT click it once inside chat."
   ],
   "actions": {
     "quick_switcher": {
       "shortcut": "ctrl+k",
-      "primary": "press_key('ctrl+k') -> type_text(target_name, press_enter=false) -> smart_click('matching row in Quick Switcher results')",
-      "visual_fallback": "smart_click('Find or start a conversation button at top of left sidebar')",
+      "primary": "Chain in 1 round: [press_key('ctrl+k'), type_text(target_name, press_enter=false)] -> Next round: smart_click('top matching row with custom photo avatar and username handle in Quick Switcher results')",
+      "visual_fallback": "smart_click('Find or start a conversation button at top of left sidebar') -> type_text(target_name, press_enter=false)",
       "verify": "Quick Switcher modal filters results and clicking the matching entry opens the target DM/channel"
     },
     "open_dm": {
       "shortcut": "ctrl+k",
-      "primary": "If the 1-on-1 user (NO 'N Members' subtitle) is visible at the top of the Direct Messages sidebar, smart_click('<name> in Direct Messages sidebar'). Otherwise: press_key('ctrl+k') -> type_text(contact_name, press_enter=false) -> verify top highlighted result shows '<Name> <username>' (1-on-1 user, NOT a two-person group icon at the bottom) -> press_key('enter') or smart_click('the top <name> user row with username handle in Quick Switcher results')",
-      "visual_fallback": "smart_click('Find or start a conversation button at top of left sidebar') -> type_text(contact_name, press_enter=false) -> press_key('enter')",
+      "primary": "Chain in 1 round: [press_key('ctrl+k'), type_text(contact_name, press_enter=false)] -> Next round: smart_click('top <contact_name> row with custom photo avatar and grey username handle in Quick Switcher results')",
+      "visual_fallback": "Only when Quick Switcher modal is closed: smart_click('<contact_name> row with custom profile photo avatar in Direct Messages sidebar (not the solid-colored 2-person group icon with N Members)')",
       "verify": "Bottom chat input placeholder MUST say 'Message @<Name>' (with '@', NOT 'Message <Name>' without '@' which is a group chat)"
     },
     "send_message": {
       "shortcut": "enter",
-      "primary": "smart_type('Message input box at bottom of chat', message_text, submit=true)",
-      "visual_fallback": "smart_click('Message @name at bottom') -> type_text(message_text) -> press_key('enter')",
+      "primary": "smart_type('Message @<Name>', message_text, submit=true)",
+      "visual_fallback": "smart_click('Message input box at bottom of chat') -> type_text(message_text, press_enter=true)",
       "verify": "Message appears at the bottom of the chat history"
     },
     "toggle_mute": {

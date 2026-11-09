@@ -2,7 +2,7 @@
 
 **A fully local, always-on AI companion — voice, vision, memory, and 67 autonomous tools, running entirely on a single consumer GPU with no data ever leaving the machine.**
 
-Aster is a personal AI agent I designed and built from scratch: a local LLM (Qwen 3.6 35B-A3B via `llama.cpp`) wired into a real agentic loop with native function-calling, long-term memory, multimodal perception (screen, webcam, voice), and interfaces across CLI, Telegram, Discord, a live local WebSocket / WebRTC voice call, and two custom desktop apps. Nothing is routed through a third-party API — inference, speech, vision, and memory all run on-device.
+Aster is a personal AI agent I designed and built from scratch: a local LLM (Qwen 3.6 35B-A3B via PolyStrata / Strata engine) wired into a real agentic loop with native function-calling, long-term memory, multimodal perception (screen, webcam, voice), and interfaces across CLI, Telegram, Discord, a live local WebSocket / WebRTC voice call, and two custom desktop apps. Nothing is routed through a third-party API — inference, speech, vision, and memory all run on-device.
 
 I'm submitting Aster as my project for the **Claude Builder / Life Sciences Program** application. It isn't a life-sciences tool itself, but it's the clearest evidence I have of the skills that track cares about: building *reliable* agentic systems on top of an LLM — tool orchestration, multimodal reasoning, long-horizon memory, and privacy-preserving architecture — all of which transfer directly to building trustworthy AI agents for sensitive, high-stakes domains like healthcare and life sciences, where **data never leaving a controlled environment** and **auditable, gated tool use** aren't nice-to-haves, they're the whole point.
 
@@ -44,7 +44,7 @@ User input (CLI / Telegram / Local WS / WebRTC voice)
     → response                      routed back to whichever interface asked
 ```
 
-A single `llama-server` instance (Qwen 3.6 35B-A3B MoE, IQ4_XS, 60k context, KVarN-quantized KV cache, MTP speculative decoding) serves **every** text, vision, and tool-calling request across every interface — there's no separate vision pipeline or duplicate model load. The tool-calling path is the OpenAI-compatible native `tools` schema, which is why the whole system is built around a single dispatch abstraction.
+A single PolyStrata instance (Strata engine, Qwen 3.6 35B-A3B MoE, IQ4_XS, 128k context, q8_0 KV cache) serves **every** text, vision, and tool-calling request across every interface — there's no separate vision pipeline or duplicate model load. The tool-calling path is the OpenAI-compatible native `tools` schema, which is why the whole system is built around a single dispatch abstraction.
 
 ### Interfaces, all backed by the same brain
 
@@ -63,7 +63,7 @@ A single `llama-server` instance (Qwen 3.6 35B-A3B MoE, IQ4_XS, 60k context, KVa
 - **One LLM adapter function**, `_execute_llm_completion()`, is the single place every caller (chat, vision, sentry, persona generation) goes through — every non-tool-calling caller has to explicitly unwrap the same dict shape, which was a deliberate choice to keep one calling convention instead of two.
 - **Modular persona system** — the entire personality (tone, response length) lives in swappable markdown files (`jarvis.md`, `gogi.md`), selected by one config key, with zero code branching on "which persona."
 - **Ref-counted, lazy-loaded models** — Kokoro TTS and CUDA Faster-Whisper are acquired/released like a semaphore so VRAM is only paid for while something is actually using them, instead of holding every model resident all the time on a 12GB card.
-- **Zero VRAM for Telegram voice notes** — voice notes use a lazy CPU instance of Faster-Whisper `small.en`, preserving all GPU compute buffers for llama-server.
+- **Zero VRAM for Telegram voice notes** — voice notes use a lazy CPU instance of Faster-Whisper `small.en`, preserving all GPU compute buffers for PolyStrata.
 - **Console Debug Logging** — when `runtime.debug: true`, `tools/console_logger.py` mirrors all stdout/stderr live to date-stamped files in `Aster_Vault/console-logs/` with ANSI color escape stripping and thread-safe file tees.
 - **Everything optional fails closed** — every third-party integration (Spotify, Gmail, Discord, Firecrawl, Deepgram) checks for its credential at boot and disables itself gracefully rather than crashing the whole system when a key is missing.
 
@@ -71,7 +71,7 @@ A single `llama-server` instance (Qwen 3.6 35B-A3B MoE, IQ4_XS, 60k context, KVa
 
 | Layer | Choice |
 |---|---|
-| LLM inference | `llama-server` (llama.cpp; BeeLlama v0.4.7 fork), Qwen 3.6 35B-A3B IQ4_XS (MoE, ~3B active/token), 60k ctx, KVarN KV cache, MTP speculative decoding |
+| LLM inference | PolyStrata (Strata engine), Qwen 3.6 35B-A3B IQ4_XS (MoE, ~3B active/token), 128k ctx, q8_0 KV cache |
 | STT | Faster-Whisper (`small.en`, CTranslate2, CUDA int8 on calls, CPU on voice notes; optional cloud Deepgram Flux) |
 | TTS | Kokoro 82M (single voice pipeline; optional cloud Deepgram Flux TTS `flux-colin-en`) |
 | Voice ID | SpeechBrain ECAPA-TDNN speaker embeddings |
@@ -97,7 +97,7 @@ webrtc_bridge.py Standalone LiveKit voice agent and local WebSocket audio bridge
 
 ## Status
 
-This is a live, actively-used personal system (not a demo repo) — I run it daily as my own assistant. Model weights, voice enrollments, and personal config are gitignored; see `secrets.example.yaml` and `self_config.example.yaml` for the setup shape. A from-scratch install additionally requires a running `llama-server` instance serving Qwen 3.6 35B-A3B + its multimodal projector — see `first_run_setup.py` for the guided setup wizard.
+This is a live, actively-used personal system (not a demo repo) — I run it daily as my own assistant. Model weights, voice enrollments, and personal config are gitignored; see `secrets.example.yaml` and `self_config.example.yaml` for the setup shape. A from-scratch install additionally requires a running PolyStrata instance serving Qwen 3.6 35B-A3B + its multimodal projector — see `first_run_setup.py` for the guided setup wizard.
 
 ## Quickstart
 
@@ -110,7 +110,7 @@ Copy-Item secrets.example.yaml secrets.yaml       # fill in your tokens
 Copy-Item self_config.example.yaml self_config.yaml
 
 # 3. Start the LLM backend, wait for /health, then Aster + the UIs
-.\Start-all.bat        # or: python main.py once llama-server is healthy
+.\Start-all.bat        # or: python main.py once PolyStrata is healthy
 ```
 
 ## License

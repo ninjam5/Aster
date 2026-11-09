@@ -2,7 +2,7 @@
   - think-tag stripping (core.brain._strip_think_tags)
   - /tokenize-calibrated token counting (core.memory)
 
-No llama-server required — requests.post is mocked for the /tokenize calls.
+No LLM server required — requests.post is mocked for the /tokenize calls.
 """
 from unittest.mock import MagicMock, patch
 

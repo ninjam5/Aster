@@ -480,7 +480,7 @@ class InsufficientMemoryForBrowser(RuntimeError):
     """Raised when free system RAM is too low to safely launch Aster's browser.
 
     Deterministic refusal (like RealProfileUnavailable): no retry, no launch.
-    Launching Chrome beside llama-server's mmap'd MoE experts OOM'd this machine
+    Launching Chrome beside the LLM engine's mmap'd MoE experts OOM'd this machine
     (2026-09-28). The message is surfaced to the model verbatim.
     """
 

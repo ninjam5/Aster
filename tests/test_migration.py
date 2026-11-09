@@ -1,8 +1,8 @@
 """
 Aster Engine Migration Test Suite
-Tests for the llama-server REST adapter and XML→native tool calling migration.
+Tests for the PolyStrata REST adapter and XML→native tool calling migration.
 Run: pytest tests/test_migration.py -v
-No llama-server needed — requests.post is mocked throughout.
+No LLM server needed — requests.post is mocked throughout.
 """
 import pytest
 import json
@@ -89,7 +89,7 @@ def sample_messages():
 # ============================================================================
 
 class TestExecuteLlmCompletion:
-    """Tests for the llama-server REST adapter."""
+    """Tests for the PolyStrata REST adapter."""
 
     def test_returns_message_dict(self, sample_messages):
         """_execute_llm_completion returns the full message dict, not a bare string."""
@@ -525,7 +525,7 @@ class TestContextWindowManagement:
         """_estimate_tokens uses the 4-chars-per-token fallback heuristic.
 
         Calibration against the live /tokenize endpoint is patched out so the
-        assertion is independent of whether llama-server is running (with the
+        assertion is independent of whether PolyStrata is running (with the
         server up, the calibrated ratio for a run of 'A's is ~16, not 4)."""
         from unittest.mock import patch
 
@@ -843,6 +843,213 @@ class TestGoogleReplyGuardrail:
         with patch.object(config, "GOOGLE_ACCESS_TIER", "limited"):
             result = gmail_tool.reply_to_email("msg5", "Sure, let's talk.")
             assert "Blocked" in result
+
+
+
+
+# ============================================================================
+# GUI LATENCY & ACTION CHAINING OPTIMIZATIONS
+# ============================================================================
+
+class TestGuiLatencyOptimizations:
+    """Tests for in-loop screenshot pruning, smart_type aliases, and GUI action chaining."""
+
+    def test_prune_in_turn_screenshots_replaces_older_tool_screens(self):
+        """_prune_in_turn_screenshots converts previous tool screenshot messages to compact text
+        while leaving user-provided images or non-tool images untouched."""
+        from core.brain import _prune_in_turn_screenshots
+
+        sample_history = [
+            {"role": "system", "content": "system prompt"},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,OLD_TOOL_B64"}},
+                    {"type": "text", "text": "Tool Execution Result: Clicked 'Search' at (100, 200)."},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,USER_CAMERA_PHOTO"}},
+                    {"type": "text", "text": "Can you describe what is on my desk?"},
+                ],
+            },
+        ]
+
+        pruned = _prune_in_turn_screenshots(sample_history)
+        assert pruned == 1
+        # Tool execution screenshot is pruned to text tombstone
+        assert sample_history[1]["content"] == "[Previous screen archived]\nTool Execution Result: Clicked 'Search' at (100, 200)."
+        # User image is preserved as a multipart list with image_url intact
+        assert isinstance(sample_history[2]["content"], list)
+        assert sample_history[2]["content"][0]["type"] == "image_url"
+        assert sample_history[2]["content"][0]["image_url"]["url"] == "data:image/jpeg;base64,USER_CAMERA_PHOTO"
+
+        # Now simulate appending a new tool screenshot after pruning
+        sample_history.append({
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,NEW_TOOL_B64"}},
+                {"type": "text", "text": "Tool Execution Result: Typed 'hello' into field."},
+            ],
+        })
+        # Verify subsequent new screenshot remains intact
+        assert isinstance(sample_history[3]["content"], list)
+        assert sample_history[3]["content"][0]["image_url"]["url"] == "data:image/jpeg;base64,NEW_TOOL_B64"
+
+    def test_smart_type_press_enter_alias(self, monkeypatch):
+        """smart_type accepts press_enter=True as an alias for submit=True and presses Enter."""
+        import core.brain as brain
+        import pyautogui
+
+        pressed_keys = []
+        clicked_coords = []
+        typed_text = []
+
+        monkeypatch.setattr(brain, "locate_ui_element_ex",
+                            lambda goal: {"source": "test", "text": goal, "score": 0.95, "x": 150, "y": 250})
+        monkeypatch.setattr(brain, "focused_control_type", lambda: "EditControl")
+        monkeypatch.setattr(brain, "get_foreground_window_title", lambda: "Test Window")
+        monkeypatch.setattr(brain, "capture_screen_base64", lambda: "B64_MOCK")
+        monkeypatch.setattr(brain, "invalidate_screen_cache", lambda: None)
+        monkeypatch.setattr(pyautogui, "click", lambda x, y: clicked_coords.append((x, y)))
+        monkeypatch.setattr(pyautogui, "hotkey", lambda *keys: None)
+        monkeypatch.setattr(pyautogui, "press", lambda key: pressed_keys.append(key))
+        monkeypatch.setattr("pyperclip.copy", lambda text: typed_text.append(text))
+        monkeypatch.setattr("time.sleep", lambda s: None)
+
+        res = brain.execute_tool("smart_type", {"goal": "search bar", "text": "test query", "press_enter": True})
+
+        assert clicked_coords == [(150, 250)]
+        assert typed_text == ["test query"]
+        assert "enter" in pressed_keys
+        assert isinstance(res, dict)
+        assert "Submitted with Enter." in res["text"]
+
+    def test_gui_action_chaining_sequential_execution_and_single_screenshot(self, monkeypatch):
+        """Sequential GUI actions in one round execute sequentially and maintain only 1 active screenshot."""
+        import core.brain as brain
+
+        executed_tools = []
+        round2_messages_call1 = []
+
+        def fake_llm(messages, **kwargs):
+            if len(executed_tools) == 0:
+                return {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": "call_1", "type": "function", "function": {"name": "open_application", "arguments": '{"app_name": "chrome"}'}},
+                        {"id": "call_2", "type": "function", "function": {"name": "smart_click", "arguments": '{"goal": "Search"}'}},
+                    ],
+                }
+            round2_messages_call1.extend([dict(m) for m in messages])
+            return {"role": "assistant", "content": "Opened chrome and clicked search."}
+
+        def fake_execute_tool_ex(name, args):
+            executed_tools.append((name, args))
+            if name == "open_application":
+                return True, "Launched chrome successfully."
+            elif name == "smart_click":
+                return True, {"text": "Clicked 'Search' at (100, 200).", "ui_screenshot_b64": "SCREEN_B64_1"}
+            return True, "ok"
+
+        monkeypatch.setattr(brain, "_execute_llm_completion", fake_llm)
+        monkeypatch.setattr(brain, "execute_tool_ex", fake_execute_tool_ex)
+
+        brain.messages[:] = [brain.messages[0]]
+        reply = brain.process_user_input("Open chrome and search")
+
+        # Both tools executed in 1 round
+        assert [name for name, _ in executed_tools] == ["open_application", "smart_click"]
+        assert "Opened chrome" in reply
+
+        # Verify messages sent to LLM in round 2: only 1 active image_url screenshot
+        image_msgs = [
+            m for m in round2_messages_call1
+            if isinstance(m.get("content"), list)
+            and any(isinstance(p, dict) and p.get("type") == "image_url" for p in m["content"])
+        ]
+        assert len(image_msgs) == 1
+        assert image_msgs[0]["content"][0]["image_url"]["url"] == "data:image/jpeg;base64,SCREEN_B64_1"
+
+        # Now test 2 GUI tools both producing screenshots: smart_click + type_text
+        executed_tools.clear()
+        round2_messages_call2 = []
+
+        def fake_llm_chain2(messages, **kwargs):
+            if len(executed_tools) == 0:
+                return {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": "call_a", "type": "function", "function": {"name": "smart_click", "arguments": '{"goal": "Search"}'}},
+                        {"id": "call_b", "type": "function", "function": {"name": "type_text", "arguments": '{"text": "omar", "press_enter": true}'}},
+                    ],
+                }
+            round2_messages_call2.extend([dict(m) for m in messages])
+            return {"role": "assistant", "content": "Searched for omar."}
+
+        def fake_execute_tool_ex2(name, args):
+            executed_tools.append((name, args))
+            if name == "smart_click":
+                return True, {"text": "Clicked 'Search'.", "ui_screenshot_b64": "SCREEN_CLICK_B64"}
+            elif name == "type_text":
+                return True, {"text": "Typed 'omar'.", "ui_screenshot_b64": "SCREEN_TYPE_B64"}
+            return True, "ok"
+
+        monkeypatch.setattr(brain, "_execute_llm_completion", fake_llm_chain2)
+        monkeypatch.setattr(brain, "execute_tool_ex", fake_execute_tool_ex2)
+
+        brain.messages[:] = [brain.messages[0]]
+        reply = brain.process_user_input("Click search and type omar")
+
+        assert [name for name, _ in executed_tools] == ["smart_click", "type_text"]
+        active_image_msgs = [
+            m for m in round2_messages_call2
+            if isinstance(m.get("content"), list)
+            and any(isinstance(p, dict) and p.get("type") == "image_url" for p in m["content"])
+        ]
+        assert len(active_image_msgs) == 1
+        assert active_image_msgs[0]["content"][0]["image_url"]["url"] == "data:image/jpeg;base64,SCREEN_TYPE_B64"
+
+    def test_gui_action_chaining_aborts_on_first_tool_failure(self, monkeypatch):
+        """When tool 1 fails in a GUI action chain, tool 2 is skipped safely."""
+        import core.brain as brain
+
+        executed_tools = []
+
+        def fake_llm(messages, **kwargs):
+            if len(executed_tools) == 0:
+                return {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": "c1", "type": "function", "function": {"name": "smart_click", "arguments": '{"goal": "MissingButton"}'}},
+                        {"id": "c2", "type": "function", "function": {"name": "type_text", "arguments": '{"text": "should not run"}'}},
+                    ],
+                }
+            return {"role": "assistant", "content": "Failed to click button."}
+
+        def fake_execute_tool_ex(name, args):
+            executed_tools.append((name, args))
+            if name == "smart_click":
+                return False, "FAILED — could not locate 'MissingButton' on screen."
+            return True, "ok"
+
+        monkeypatch.setattr(brain, "_execute_llm_completion", fake_llm)
+        monkeypatch.setattr(brain, "execute_tool_ex", fake_execute_tool_ex)
+
+        brain.messages[:] = [brain.messages[0]]
+        reply = brain.process_user_input("Click missing button and type")
+
+        # Only tool 1 was executed; tool 2 was skipped
+        assert [name for name, _ in executed_tools] == ["smart_click"]
+        # Verify tool 2 was recorded with skipped message
+        tool_2_msg = next((m for m in brain.messages if m.get("tool_call_id") == "c2"), None)
+        assert tool_2_msg is not None
+        assert "Skipped type_text because the preceding tool in this chain failed" in tool_2_msg["content"]
 
 
 @pytest.fixture(autouse=True)

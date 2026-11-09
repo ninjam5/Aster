@@ -1,5 +1,5 @@
 """Tests for RRF hybrid memory recall (core.memory: _bm25_rank, _rrf_fuse,
-_load_md_facts, recall_memory). No llama-server or real ChromaDB required —
+_load_md_facts, recall_memory). No LLM server or real ChromaDB required —
 memory_collection is a fake object with a canned .query() return."""
 import pytest
 

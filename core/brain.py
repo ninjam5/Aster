@@ -28,6 +28,7 @@ from tools.vision import (
     capture_webcam_base64, capture_screen_base64, save_image_to_cold_storage,
     re_examine_image, locate_ui_element, locate_ui_element_ex, locate_ui_elements_boxed,
     verify_action_result, invalidate_screen_cache, capture_screen_small_gray, screens_differ,
+    hover_ui_element, drag_and_drop_ui_elements, click_at_coordinates, zoom_and_read_region,
 )
 from tools.uia import get_foreground_window_title, focused_control_type, EDITABLE_CONTROL_TYPES
 from tools.assist import highlight_regions
@@ -83,15 +84,15 @@ def _strip_think_tags(text: str) -> str:
 # ============================================================================
 # NATIVE LLM REST ADAPTER — OpenAI-format chat completions with mmproj vision
 # ============================================================================
-# Persistent HTTP session for llama-server. A fresh `requests.post()` opens a NEW
-# TCP connection to llama-server every call, and on this engine a new connection
+# Persistent HTTP session for PolyStrata. A fresh `requests.post()` opens a NEW
+# TCP connection to the engine every call, and on this engine a new connection
 # costs ~2-3 s (measured) vs ~0.6 s over a reused one — i.e. the connection setup
 # alone dominated every turn. One pooled Session reuses the connection.
 _LLM_SESSION = requests.Session()
 
 
 def _execute_llm_completion(messages: list[dict], temperature: float = None, n_predict: int = 1000, top_p: float = None, top_k: int = None, tools: list[dict] | None = None, enable_thinking: bool | None = None, chat_template_kwargs: dict | None = None) -> dict:
-    """Sends messages in OpenAI chat format to llama-server /v1/chat/completions.
+    """Sends messages in OpenAI chat format to PolyStrata /v1/chat/completions.
 
     Returns the full choices[0]["message"] dict (keys: role, content, tool_calls).
     Callers that only need text do: (response_msg.get("content") or "").strip()
@@ -182,7 +183,7 @@ def _execute_llm_completion(messages: list[dict], temperature: float = None, n_p
     except requests.exceptions.Timeout:
         raise Exception("Chat API Error: Request timed out after 120s")
     except requests.exceptions.ConnectionError:
-        raise Exception("Chat API Error: Could not connect to llama-server at localhost:8080")
+        raise Exception("Chat API Error: Could not connect to PolyStrata at localhost:8080")
     except Exception as e:
         raise Exception(f"Chat API Error: {e}")
 
@@ -191,7 +192,7 @@ def _execute_llm_completion(messages: list[dict], temperature: float = None, n_p
 # output-compression policy (core/output_compression.py). Because the froggeric
 # chat template renders `tools` and `messages[0]` (system prompt) at the top of
 # the prompt, calling _execute_llm_completion without ADMIN_TOOLS and messages[0]
-# would wipe llama-server's ~13k-token prompt prefix cache on the next round!
+# would wipe the engine's ~13k-token prompt prefix cache on the next round!
 def _prefix_preserving_summarizer(messages: list[dict], temperature: float = 0.2, n_predict: int = 300) -> dict:
     full_msgs = list(messages or [])
     if globals().get("messages") and (not full_msgs or full_msgs[0].get("role") != "system"):
@@ -1221,7 +1222,7 @@ ADMIN_TOOLS = [
         "type": "function",
         "function": {
             "name": "smart_type",
-            "description": "Types text into a text field — on screen, or on a web page via the DOM motor. Use for forms, search bars, login fields. Examples: smart_type(\"the search bar\", \"hello world\"), smart_type(\"username field\", \"admin\"). On a web page set submit=true to press Enter and run the search after typing; then read the results with browse_web() (no arguments).",
+            "description": "Locates a text field, clicks it to focus, pastes text, and (when submit=true or press_enter=true) presses Enter all in one round. Prefer smart_type over separate smart_click + type_text + press_key rounds for forms, search bars, and login fields. Works on desktop or on web pages via the DOM motor. Examples: smart_type(\"the search bar\", \"hello world\", press_enter=true), smart_type(\"username field\", \"admin\"). On a web page set submit=true (or press_enter=true) to press Enter and run the search after typing; then read results with browse_web().",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1236,6 +1237,10 @@ ADMIN_TOOLS = [
                     "submit": {
                         "type": "boolean",
                         "description": "Press Enter after typing (submits the form / runs the search).",
+                    },
+                    "press_enter": {
+                        "type": "boolean",
+                        "description": "Alias for submit: if true, presses Enter after typing.",
                     },
                     "confirm_send": {
                         "type": "boolean",
@@ -1264,6 +1269,95 @@ ADMIN_TOOLS = [
                     }
                 },
                 "required": ["direction"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "mouse_hover",
+            "description": "Moves the mouse cursor over a target UI element without clicking. Essential for triggering hover-to-reveal action bars (e.g. Discord message action bars, Gmail email actions, video player controls, drop-down menus). Example: mouse_hover('the message from Ob').",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal": {
+                        "type": "string",
+                        "description": "Natural language description of the element to hover over."
+                    }
+                },
+                "required": ["goal"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "drag_and_drop",
+            "description": "Clicks and holds the mouse on a source element, drags smoothly to a target element, and releases. Use for sliders, reordering lists/playlists, moving files into upload zones, or dragging items. Example: drag_and_drop('track #5 in playlist', 'top of playlist').",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source": {
+                        "type": "string",
+                        "description": "Description of the element to grab."
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "Description of the location/element where to drop it."
+                    },
+                    "duration": {
+                        "type": "number",
+                        "description": "Drag duration in seconds (default 0.5s for smooth UI recognition)."
+                    }
+                },
+                "required": ["source", "target"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "click_at",
+            "description": "Clicks directly at exact logical screen coordinates (x, y) without running locator algorithms. Fast and deterministic for unlabelled canvases, dismiss clicks on neutral background areas, or when coordinates are already known. Example: click_at(500, 300).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "x": {
+                        "type": "integer",
+                        "description": "Horizontal logical screen coordinate (0..screen_width)."
+                    },
+                    "y": {
+                        "type": "integer",
+                        "description": "Vertical logical screen coordinate (0..screen_height)."
+                    },
+                    "clicks": {
+                        "type": "integer",
+                        "description": "Number of clicks: 1 (default) or 2."
+                    },
+                    "button": {
+                        "type": "string",
+                        "enum": ["left", "right", "middle"],
+                        "description": "Mouse button: 'left' (default), 'right', or 'middle'."
+                    }
+                },
+                "required": ["x", "y"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "zoom_and_read",
+            "description": "Extracts an uncompressed, 1:1 native-resolution crop around a specific screen region and performs high-detail visual transcription. Use when text is too small or blurry in the full-screen view (e.g. dense financial tables, tiny timestamps, system tray icons, code editor details). Example: zoom_and_read('the timestamp next to Ob\'s message').",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "region": {
+                        "type": "string",
+                        "description": "Description of the specific area or element to inspect at full native resolution."
+                    }
+                },
+                "required": ["region"]
             }
         }
     },
@@ -1866,14 +1960,17 @@ def _execute_tool_impl(tool_name, arguments):
                 {"type": "text", "text": (
                     "What app/window is currently in focus? "
                     "List the key visible UI elements: buttons, text labels, input fields, list items, window title. "
-                    "Be specific and terse — this is navigation data."
+                    "Be specific and terse — this is navigation data. "
+                    "Do NOT call any tools — reply with plain text only."
                 )}
             ]
         }]
-        desc = (_execute_llm_completion(messages=screen_msgs, temperature=0.1, n_predict=1500, enable_thinking=False).get("content") or "")
+        if messages and isinstance(messages[0], dict) and messages[0].get("role") == "system":
+            screen_msgs.insert(0, messages[0])
+        desc = (_execute_llm_completion(messages=screen_msgs, tools=ADMIN_TOOLS, temperature=0.1, n_predict=1500, enable_thinking=False).get("content") or "")
         if not desc or not desc.strip():
             # Apathy fallback: retry once at higher temperature
-            desc = (_execute_llm_completion(messages=screen_msgs, temperature=0.4, n_predict=1500, enable_thinking=False).get("content") or "")
+            desc = (_execute_llm_completion(messages=screen_msgs, tools=ADMIN_TOOLS, temperature=0.4, n_predict=1500, enable_thinking=False).get("content") or "")
         if not desc or not desc.strip():
             desc = "[Screen description unavailable — proceed based on task context and visible element names.]"
         ui_guide = _get_ui_guide(desc)
@@ -1943,11 +2040,13 @@ def _execute_tool_impl(tool_name, arguments):
             "role": "user",
             "content": [
                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{result_data}"}},
-                {"type": "text", "text": f"{faces_context}{user_query}"}
+                {"type": "text", "text": f"{faces_context}{user_query}\nDo NOT call any tools — reply with plain text only."}
             ]
         }]
+        if messages and isinstance(messages[0], dict) and messages[0].get("role") == "system":
+            webcam_msgs.insert(0, messages[0])
 
-        vision_result = (_execute_llm_completion(messages=webcam_msgs, temperature=0.2, n_predict=1500, enable_thinking=False).get("content") or "")
+        vision_result = (_execute_llm_completion(messages=webcam_msgs, tools=ADMIN_TOOLS, temperature=0.2, n_predict=1500, enable_thinking=False).get("content") or "")
         return f"[System Note: Webcam captured and analyzed successfully.]\n\nWebcam Analysis:\n{vision_result}"
     elif tool_name == "toggle_gesture_mode":
         import tools.gesture as gesture_mod
@@ -2079,6 +2178,21 @@ def _execute_tool_impl(tool_name, arguments):
                     return dom_result
             except Exception as e:
                 print(f"[DOM] web click path failed: {e}")
+        fg_before = (get_foreground_window_title() or "").strip()
+        if "aster_local" in fg_before.lower():
+            return tool_fail(
+                f"FAILED — BLOCKED — The active foreground window is currently {fg_before!r} "
+                f"(your own Telegram control chat). Typing here would send a message to yourself! "
+                f"Call open_application('<target_app>') or smart_click the target window first "
+                f"before calling smart_type."
+            )
+        if _as_bool(arguments.get("_unfocused_turn_start")):
+            return tool_fail(
+                f"FAILED — BLOCKED — You called smart_type at the start of a new turn before "
+                f"focusing or clicking any target window (foreground window is currently {fg_before!r}). "
+                f"Because the user just switched windows to send you this command, you MUST call "
+                f"open_application('<app>') or smart_click the target input box in THIS turn before calling smart_type."
+            )
         loc = locate_ui_element_ex(goal)
         if not loc:
             return tool_fail(f'FAILED — could not locate "{goal}" on screen. Nothing was clicked. '
@@ -2135,7 +2249,7 @@ def _execute_tool_impl(tool_name, arguments):
         text = arguments.get("text", "")
         if not goal or not text:
             return "Error: goal and text parameters are required."
-        submit = _as_bool(arguments.get("submit", False))
+        submit = _as_bool(arguments.get("submit", False)) or _as_bool(arguments.get("press_enter", False))
         # QA round 9: smart_type pastes via the clipboard exactly like type_text, so it
         # needs the same multi-line guard (a newline EXECUTES in a focused terminal).
         # (The round-8 commit claimed this; it had not actually been added.)
@@ -2171,6 +2285,21 @@ def _execute_tool_impl(tool_name, arguments):
                     return dom_result
             except Exception as e:
                 print(f"[DOM] web type path failed: {e}")
+        fg_before = (get_foreground_window_title() or "").strip()
+        if "aster_local" in fg_before.lower():
+            return tool_fail(
+                f"FAILED — BLOCKED — The active foreground window is currently {fg_before!r} "
+                f"(your own Telegram control chat). Typing here would send a message to yourself! "
+                f"Call open_application('<target_app>') or smart_click the target window first "
+                f"before calling smart_type."
+            )
+        if _as_bool(arguments.get("_unfocused_turn_start")):
+            return tool_fail(
+                f"FAILED — BLOCKED — You called smart_type at the start of a new turn before "
+                f"focusing or clicking any target window (foreground window is currently {fg_before!r}). "
+                f"Because the user just switched windows to send you this command, you MUST call "
+                f"open_application('<app>') or smart_click the target input box in THIS turn before calling smart_type."
+            )
         loc = locate_ui_element_ex(goal)
         if not loc:
             return tool_fail(f'FAILED — could not locate "{goal}" on screen. Nothing was typed. '
@@ -2335,6 +2464,40 @@ def _execute_tool_impl(tool_name, arguments):
         result_text = (f"Scrolled {direction} {clicks} clicks.{change_note} "
                        f"[Verify silently — continue with next action.]")
         return _attach_action_screenshot(result_text, action="smart_scroll")
+    elif tool_name == "mouse_hover":
+        goal = arguments.get("goal", "")
+        if not goal:
+            return "Error: goal parameter is required."
+        loc = hover_ui_element(goal)
+        if not loc:
+            return tool_fail(f'FAILED — could not locate "{goal}" to hover over.')
+        return f"Hovering cursor over '{goal}' at ({loc['x']}, {loc['y']})."
+    elif tool_name == "drag_and_drop":
+        source = arguments.get("source", "")
+        target = arguments.get("target", "")
+        if not source or not target:
+            return "Error: source and target parameters are required."
+        duration = float(arguments.get("duration", 0.5))
+        loc_src, loc_dst = drag_and_drop_ui_elements(source, target, duration=duration)
+        if not loc_src:
+            return tool_fail(f'FAILED — could not locate source element "{source}".')
+        if not loc_dst:
+            return tool_fail(f'FAILED — could not locate target element "{target}".')
+        return _attach_action_screenshot(f"Dragged '{source}' from ({loc_src['x']}, {loc_src['y']}) to '{target}' at ({loc_dst['x']}, {loc_dst['y']}).", action="drag_and_drop")
+    elif tool_name == "click_at":
+        x = arguments.get("x")
+        y = arguments.get("y")
+        if x is None or y is None:
+            return "Error: x and y coordinates are required."
+        clicks = int(arguments.get("clicks", 1))
+        button = str(arguments.get("button", "left")).lower()
+        click_at_coordinates(x, y, clicks=clicks, button=button)
+        return _attach_action_screenshot(f"Clicked directly at ({x}, {y}) [button={button}, clicks={clicks}].", action="click_at")
+    elif tool_name == "zoom_and_read":
+        region = arguments.get("region", "")
+        if not region:
+            return "Error: region parameter is required."
+        return zoom_and_read_region(region)
     elif tool_name == "save_note":
         return save_note(arguments.get("text", ""))
     elif tool_name == "get_notes":
@@ -3022,6 +3185,30 @@ _IMAGE_TOMBSTONE = (
     "'re_examine_image' tool with this file path and their specific question.]\n"
     "Original Caption: "
 )
+
+
+def _prune_in_turn_screenshots(msg_list: list[dict] | None = None) -> int:
+    """Replaces older GUI action screenshots in `msg_list` with a compact text tombstone
+    so only the single newest screenshot is sent to mmproj during a multi-round GUI turn.
+    Also strips redundant `[UI Playbook: ...]` blocks from archived steps since the newest
+    screenshot carries the active playbook hint."""
+    target_list = msg_list if msg_list is not None else messages
+    pruned_count = 0
+    for msg in target_list[1:]:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        has_image = any(isinstance(p, dict) and p.get("type") == "image_url" for p in content)
+        if not has_image:
+            continue
+        text_parts = [p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"]
+        joined_text = " ".join(text_parts).strip()
+        # Prune previous tool execution screenshots in the active loop
+        if joined_text.startswith("Tool Execution Result:"):
+            compact_text = re.sub(r"\n\[UI Playbook:.*?(?=\n\[TASK REMINDER:|\Z)", "", joined_text, flags=re.DOTALL).strip()
+            msg["content"] = f"[Previous screen archived]\n{compact_text}"
+            pruned_count += 1
+    return pruned_count
 
 
 def purge_media_cache():
@@ -3801,7 +3988,7 @@ def process_user_input(user_text, status_callback=None):
 
                     if tool_payload.get("json_error") or _truncated:
                         # Malformed OR truncated tool-call arguments. NEVER re-inject
-                        # the raw tool_calls into history: llama-server's chat template
+                        # the raw tool_calls into history: the engine's chat template
                         # parses `arguments` as JSON and returns HTTP 500 on a broken/
                         # truncated string, which used to abort the whole tool loop.
                         instrumentation.record_event(
@@ -3902,7 +4089,7 @@ def process_user_input(user_text, status_callback=None):
                             if _is_explicit_send_command(user_text) and tool_name in ("press_key", "smart_type", "smart_click", "type_text"):
                                 if not _as_bool(tool_arguments.get("confirm_send")):
                                     tool_arguments["confirm_send"] = True
-                            if tool_name == "type_text" and not _gui_window_focused_this_turn:
+                            if tool_name in ("type_text", "smart_type", "smart_click") and not _gui_window_focused_this_turn:
                                 tool_arguments["_unfocused_turn_start"] = True
                             print(f'[TOOL DEBUG] Executing tool: {tool_name}')
                             print(f'[TOOL DEBUG] Tool arguments: {tool_arguments}')
@@ -3967,14 +4154,16 @@ def process_user_input(user_text, status_callback=None):
                         messages = trim_memory(messages)
 
                     # If the model emitted additional parallel tool calls in this same completion
-                    # (e.g. memorize_fact + save_note in one turn), execute safe non-GUI companion
-                    # calls now so their tool_call_ids are also answered and not dropped.
+                    # (e.g. memorize_fact + save_note in one turn, or chained GUI actions like
+                    # open_application + smart_click), execute safe companion calls now so their
+                    # tool_call_ids are also answered and not dropped.
                     _extra_calls = _extract_all_native_tool_calls(response_msg)[1:]
 
                     # UI tools include a task reminder so the model never forgets the original goal.
                     _UI_TOOL_NAMES = {
                         "look_at_screen", "smart_click", "smart_type",
                         "type_text", "press_key", "smart_scroll",
+                        "mouse_hover", "drag_and_drop", "click_at", "zoom_and_read",
                     }
                     _ui_task_reminder = (
                         f'\n[TASK REMINDER: Your original goal is "{user_text}". '
@@ -3992,39 +4181,86 @@ def process_user_input(user_text, status_callback=None):
                         f"otherwise call the next required tool.]"
                     ) if tool_name in _UI_TOOL_NAMES else ""
 
-                    # UI tools return {"text": ..., "ui_screenshot_b64": ...} for visual feedback.
-                    # Inject as a multimodal message so the outer LLM sees the actual screen.
-                    if isinstance(tool_result, dict) and "ui_screenshot_b64" in tool_result:
-                        ui_b64 = tool_result["ui_screenshot_b64"]
-                        clean_memory_string = tool_result.get("text", "Action completed.")
-                        messages.append({
-                            "role": "user",
-                            "content": [
-                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{ui_b64}"}},
-                                {"type": "text", "text": f"Tool Execution Result: {clean_memory_string}{_ui_task_reminder}"},
-                            ],
-                        })
+                    _chain_aborted = (not _tool_ok) or _tool_result_is_safety_gate(tool_result) or _lg_blocked
+                    _has_gui_in_extra = any(
+                        (_extra.get("name") or "").strip() in _UI_TOOL_NAMES
+                        or (_extra.get("name") or "").strip() == "open_application"
+                        for _extra in _extra_calls
+                    )
+
+                    pending_ui_screenshot = None
+
+                    if not _has_gui_in_extra:
+                        # UI tools return {"text": ..., "ui_screenshot_b64": ...} for visual feedback.
+                        # When there are NO GUI tools in _extra_calls (common single-tool case),
+                        # keep existing behavior: inject multimodal user message after non-GUI extras.
+                        if isinstance(tool_result, dict) and "ui_screenshot_b64" in tool_result:
+                            pending_ui_screenshot = {
+                                "b64": tool_result["ui_screenshot_b64"],
+                                "text": tool_result.get("text", "Action completed."),
+                                "tool_name": tool_name,
+                            }
+                        else:
+                            # Standard text tool result — KV cache protection for audio payloads
+                            clean_memory_string = str(tool_result)
+                            if "[NATIVE_AUDIO_PAYLOAD:" in clean_memory_string:
+                                audio_match = re.search(r'(\[NATIVE_AUDIO_PAYLOAD:.*?\])', clean_memory_string)
+                                if audio_match:
+                                    audio_payload_tag = audio_match.group(1)
+                                clean_memory_string = re.sub(r'\[NATIVE_AUDIO_PAYLOAD:.*?\]\s*', '', clean_memory_string)
+                            clean_memory_string = compress_tool_output(tool_name, clean_memory_string, tool_arguments)
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_payload.get("tool_call_id", ""),
+                                "content": f"{clean_memory_string}{_ui_task_reminder_text}",
+                            })
                     else:
-                        # Standard text tool result — KV cache protection for audio payloads
-                        clean_memory_string = str(tool_result)
-                        if "[NATIVE_AUDIO_PAYLOAD:" in clean_memory_string:
-                            audio_match = re.search(r'(\[NATIVE_AUDIO_PAYLOAD:.*?\])', clean_memory_string)
-                            if audio_match:
-                                audio_payload_tag = audio_match.group(1)
-                            clean_memory_string = re.sub(r'\[NATIVE_AUDIO_PAYLOAD:.*?\]\s*', '', clean_memory_string)
-                        clean_memory_string = compress_tool_output(tool_name, clean_memory_string, tool_arguments)
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_payload.get("tool_call_id", ""),
-                            "content": f"{clean_memory_string}{_ui_task_reminder_text}",
-                        })
+                        # Chained GUI actions: primary tool always records role: "tool" so its tool_call_id
+                        # is resolved, holding any screenshot to attach only the final screen in the chain.
+                        if isinstance(tool_result, dict) and "ui_screenshot_b64" in tool_result:
+                            clean_memory_string = tool_result.get("text", "Action completed.")
+                            clean_memory_string = compress_tool_output(tool_name, clean_memory_string, tool_arguments)
+                            tool_msg_text = re.sub(r"\n\[UI Playbook:.*", "", clean_memory_string, flags=re.DOTALL).strip()
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_payload.get("tool_call_id", ""),
+                                "content": tool_msg_text,
+                            })
+                            pending_ui_screenshot = {
+                                "b64": tool_result["ui_screenshot_b64"],
+                                "text": clean_memory_string,
+                                "tool_name": tool_name,
+                            }
+                        else:
+                            clean_memory_string = str(tool_result)
+                            if "[NATIVE_AUDIO_PAYLOAD:" in clean_memory_string:
+                                audio_match = re.search(r'(\[NATIVE_AUDIO_PAYLOAD:.*?\])', clean_memory_string)
+                                if audio_match:
+                                    audio_payload_tag = audio_match.group(1)
+                                clean_memory_string = re.sub(r'\[NATIVE_AUDIO_PAYLOAD:.*?\]\s*', '', clean_memory_string)
+                            clean_memory_string = compress_tool_output(tool_name, clean_memory_string, tool_arguments)
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_payload.get("tool_call_id", ""),
+                                "content": f"{clean_memory_string}{_ui_task_reminder_text}",
+                            })
 
                     for _extra in _extra_calls:
                         _ex_name = (_extra.get("name") or "").strip()
                         _ex_args = _extra.get("arguments") or {}
                         _ex_id = _extra.get("tool_call_id", "")
-                        if not _ex_name or _ex_name in _UI_TOOL_NAMES or (discord_message_request and _ex_name in discord_blocked_tools):
+                        if not _ex_name or (discord_message_request and _ex_name in discord_blocked_tools):
                             continue
+
+                        _is_gui_extra = (_ex_name in _UI_TOOL_NAMES or _ex_name == "open_application")
+                        if _chain_aborted and _is_gui_extra:
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": _ex_id,
+                                "content": f"Skipped {_ex_name} because the preceding tool in this chain failed or required confirmation.",
+                            })
+                            continue
+
                         _ex_lg = loop_guard.check(_ex_name, _ex_args)
                         if _ex_lg.action == "block":
                             _ex_res = _ex_lg.message
@@ -4035,24 +4271,79 @@ def process_user_input(user_text, status_callback=None):
                             if _ex_name in ("research", "browse_web"):
                                 research_executed = True
                             _tool_call_count += 1
+
+                            if _is_explicit_send_command(user_text) and _ex_name in ("press_key", "smart_type", "smart_click", "type_text"):
+                                if not _as_bool(_ex_args.get("confirm_send")):
+                                    _ex_args["confirm_send"] = True
+                            if _ex_name in ("type_text", "smart_type", "smart_click") and not _gui_window_focused_this_turn:
+                                _ex_args["_unfocused_turn_start"] = True
+
+                            print(f'[TOOL DEBUG] Executing chained tool: {_ex_name}')
+                            print(f'[TOOL DEBUG] Tool arguments: {_ex_args}')
                             try:
                                 _ex_ok, _ex_res = execute_tool_ex(_ex_name, _ex_args)
                             except Exception as _ex_exc:
+                                import traceback
+                                print(f'[TOOL DEBUG] Chained tool {_ex_name} raised exception:')
+                                traceback.print_exc()
                                 _ex_res = f"Error executing {_ex_name}: {_ex_exc}"
                                 _ex_ok = False
+
+                            if _ex_ok and _ex_name in ("open_application", "smart_click", "smart_type", "press_key", "mouse_hover", "drag_and_drop", "click_at"):
+                                _gui_window_focused_this_turn = True
+
                             if _ex_res is None or str(_ex_res).strip() == "":
                                 _ex_res = "Action completed successfully."
                             if _ex_lg.action == "warn":
-                                _ex_res = f"{_ex_res} {_ex_lg.message}"
+                                if isinstance(_ex_res, dict) and "text" in _ex_res:
+                                    _ex_res["text"] += f" {_ex_lg.message}"
+                                elif isinstance(_ex_res, str):
+                                    _ex_res += f" {_ex_lg.message}"
+
+                        if (not _ex_ok) or _tool_result_is_safety_gate(_ex_res):
+                            _chain_aborted = True
+
                         if (not _ex_ok) and (not _tool_result_is_safety_gate(_ex_res)):
                             failed_tools.add(_ex_name)
                         else:
                             failed_tools.discard(_ex_name)
-                        _ex_str = compress_tool_output(_ex_name, str(_ex_res), _ex_args)
+
+                        if isinstance(_ex_res, dict) and "ui_screenshot_b64" in _ex_res:
+                            _ex_text = _ex_res.get("text", "Action completed.")
+                            _ex_text = compress_tool_output(_ex_name, _ex_text, _ex_args)
+                            _ex_tool_msg = re.sub(r"\n\[UI Playbook:.*", "", _ex_text, flags=re.DOTALL).strip()
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": _ex_id,
+                                "content": _ex_tool_msg,
+                            })
+                            pending_ui_screenshot = {
+                                "b64": _ex_res["ui_screenshot_b64"],
+                                "text": _ex_text,
+                                "tool_name": _ex_name,
+                            }
+                        else:
+                            _ex_text = _ex_res.get("text", "") if isinstance(_ex_res, dict) else str(_ex_res)
+                            _ex_str = compress_tool_output(_ex_name, _ex_text, _ex_args)
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": _ex_id,
+                                "content": _ex_str,
+                            })
+
+                    if pending_ui_screenshot is not None:
+                        _prune_in_turn_screenshots(messages)
+                        _final_reminder = (
+                            f'\n[TASK REMINDER: Your original goal is "{user_text}". '
+                            f"Examine the screenshot: if ALL steps are complete, confirm to the user in one sentence and STOP. "
+                            f"If steps remain, call the next required tool — do not speak to the user yet.]"
+                        ) if pending_ui_screenshot.get("tool_name") in _UI_TOOL_NAMES else ""
                         messages.append({
-                            "role": "tool",
-                            "tool_call_id": _ex_id,
-                            "content": _ex_str,
+                            "role": "user",
+                            "content": [
+                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{pending_ui_screenshot['b64']}"}},
+                                {"type": "text", "text": f"Tool Execution Result: {pending_ui_screenshot['text']}{_final_reminder}"},
+                            ],
                         })
 
                     messages = trim_memory(messages)
@@ -4098,6 +4389,24 @@ def process_user_input(user_text, status_callback=None):
 
                 # No tool call — this is the final text response
                 response_text = response_text.strip()
+
+                # Text XML tool call leakage retry: model emitted raw XML tool syntax (<tool_call>, <tool>, <function=...>)
+                # instead of native OpenAI function call format. Strip/detect the tag and retry with a 1-turn system nudge.
+                _raw_xml_match = re.search(r'<(?:tool_call|tool|function=)[^>]*>', response_text, re.IGNORECASE)
+                if not hallucination_retried and _raw_xml_match:
+                    print(f"[Aster Internal: Raw XML tool call leakage detected ({_raw_xml_match.group(0)}) — forcing native JSON tool call retry...]")
+                    hallucination_retried = True
+                    instrumentation.record_event("xml_tool_leak_retry", turn_id=_turn_id, round=_rounds_used)
+                    messages.append({"role": "assistant", "content": response_text})
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "[System: You outputted raw XML text tags instead of invoking native function calling. "
+                            "Do NOT output <tool_call> or <tool> XML tags in your response. "
+                            "You MUST invoke the actual tool using native tool calls now.]"
+                        )
+                    })
+                    continue  # Retry the loop
 
                 # Hallucination retry: model claims execution without calling a tool
                 if not hallucination_retried and response_text and _claims_tool_execution(
@@ -4190,8 +4499,33 @@ def process_user_input(user_text, status_callback=None):
 
                     response_msg = _execute_llm_completion(messages=messages,
                                                            temperature=config.LLM_TEMPERATURE,
-                                                           tools=ADMIN_TOOLS)
+                                                           tools=None)
                     response_text = (response_msg.get("content") or "").strip()
+
+                    # If model generated reasoning but empty content, recover gracefully
+                    if not response_text:
+                        _rc = (response_msg.get("reasoning_content") or "").strip()
+                        if _rc:
+                            for r_line in _rc.split("\n"):
+                                clean_l = r_line.strip().strip("-*# ")
+                                if len(clean_l) > 10 and not clean_l.startswith(("{", "<", "[")) and not clean_l.lower().startswith("the user"):
+                                    response_text = clean_l
+                                    break
+                        if not response_text:
+                            if failed_tools:
+                                response_text = "I'm afraid that operation did not succeed, Sir."
+                            elif executed_tools:
+                                last_t = executed_tools[-1]
+                                if last_t == "open_application":
+                                    response_text = "I have brought up the application for you, Sir."
+                                elif last_t in ("smart_type", "type_text"):
+                                    response_text = "Text entered as requested, Sir."
+                                elif last_t in ("smart_click", "press_key"):
+                                    response_text = "Action completed, Sir."
+                                else:
+                                    response_text = "The requested actions have been completed, Sir."
+                            else:
+                                response_text = "Action completed, Sir."
 
                     # Append the final response, then wipe the ghost prod from history
                     messages.append({"role": "assistant", "content": response_text})
@@ -4213,7 +4547,9 @@ def process_user_input(user_text, status_callback=None):
                 _turn_outcome = "max_rounds"
                 final_response = (_execute_llm_completion(messages=messages,
                                                           temperature=config.LLM_TEMPERATURE,
-                                                          tools=ADMIN_TOOLS).get("content") or "")
+                                                          tools=None).get("content") or "").strip()
+                if not final_response:
+                    final_response = "I have executed the requested actions, Sir."
                 print(f"Aster: {final_response}")
                 messages.append({"role": "assistant", "content": final_response})
                 messages = trim_memory(messages)
@@ -4297,8 +4633,9 @@ def process_user_input(user_text, status_callback=None):
         display_response = re.sub(r"<\|.*?\|>", "", display_response, flags=re.DOTALL)
 
 
-        # Normalize whitespace after all cleanup passes.
-        display_response = re.sub(r"\s+", " ", display_response).strip()
+        # Normalize horizontal whitespace while preserving paragraph & line breaks
+        display_response = re.sub(r"[ \t]+", " ", display_response)
+        display_response = re.sub(r"\n{3,}", "\n\n", display_response).strip()
 
         # Silence fallback: never emit placeholder text to TTS.
         if not display_response:

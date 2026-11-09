@@ -1,6 +1,6 @@
 """Tests for the native-path rewrite of engine_testing/harness.py.
 
-No llama-server required — requests.post is mocked throughout. This module
+No LLM server required — requests.post is mocked throughout. This module
 is not a package (no __init__.py), so we add it to sys.path the same way
 run_engine_test.py does.
 """

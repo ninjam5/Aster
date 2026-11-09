@@ -19,7 +19,7 @@ prefix-cache and parallel-tool optimizations:
      _shared_tool_laws.md include the Clarification Gate and Confirmation Gate, remove
      the 15-row lookup table, and cut static prompt size by >50%.
   7. Optimization 1 (Prefix-preserving research summarizer): _prefix_preserving_summarizer
-     includes messages[0] and ADMIN_TOOLS sollama-server's KV prefix cache is not wiped.
+     includes messages[0] and ADMIN_TOOLS soPolyStrata's KV prefix cache is not wiped.
   8. Optimization 2 (Parallel non-GUI tool calls): emitting memorize_fact + save_note in
      a single completion executes both tools in one round.
 """

@@ -511,9 +511,9 @@ def log_raw_turn(user_text: str, assistant_text: str) -> None:
 # MEMORY MANAGER: Sliding Window with (optionally) calibrated token counting
 # ============================================================================
 # The primary estimator is still the char/ratio heuristic — there is no local
-# tokenizer since the engine is a REST-only llama-server. When
+# tokenizer since the engine is a REST-only PolyStrata server. When
 # config.EXACT_TOKEN_COUNT is on, the chars-per-token ratio is calibrated
-# against llama-server's /tokenize endpoint (not the generation endpoint — no
+# against PolyStrata's /tokenize endpoint (not the generation endpoint — no
 # LLM inference, just tokenization), cached, and refreshed at most once every
 # _RATIO_REFRESH_SECONDS AND only when the running estimate is already close
 # to the trim budget. This bounds it to well under one network call per turn
@@ -548,7 +548,7 @@ def _extract_text_and_image_count(msg_list) -> tuple[str, int]:
 
 
 def _tokenize_count(text: str) -> int | None:
-    """Exact token count via llama-server's /tokenize endpoint. None on any
+    """Exact token count via PolyStrata's /tokenize endpoint. None on any
     failure (server down, endpoint missing, timeout) — callers must fall back
     to the heuristic ratio."""
     if not text:

@@ -150,8 +150,19 @@ _KNOWN_HOST_PROCESSES = {
 }
 
 
+_IGNORED_WINDOW_TITLES = frozenset({
+    "default ime",
+    "msctfime ui",
+    "program manager",
+    "windows input experience",
+    "textinputhost",
+})
+
+
 def _find_and_focus_existing_window(app_name: str) -> tuple[bool, str]:
-    """Find an already-open window matching app_name and bring it to foreground.
+    """Find an already-open visible window matching app_name and bring it to foreground.
+    Ignores invisible/tray-hidden HWNDs and system IME helper windows so tray-minimized
+    apps fall through to shortcut launch.
     Returns (True, window_title) if found and focused, (False, "") otherwise."""
     if not WIN32_AVAILABLE or win32gui is None:
         return False, ""
@@ -172,10 +183,14 @@ def _find_and_focus_existing_window(app_name: str) -> tuple[bool, str]:
 
         found_hwnd = None
         found_title = ""
+        best_score = 0
 
         def _enum_cb(hwnd, _):
-            nonlocal found_hwnd, found_title
+            nonlocal found_hwnd, found_title, best_score
             try:
+                if hasattr(win32gui, "IsWindowVisible") and not win32gui.IsWindowVisible(hwnd):
+                    return True
+
                 title = ""
                 try:
                     title = win32gui.GetWindowText(hwnd) or ""
@@ -183,6 +198,8 @@ def _find_and_focus_existing_window(app_name: str) -> tuple[bool, str]:
                     pass
 
                 title_lower = title.strip().lower()
+                if not title_lower or title_lower in _IGNORED_WINDOW_TITLES:
+                    return True
 
                 pname = ""
                 if win32process is not None:
@@ -197,13 +214,18 @@ def _find_and_focus_existing_window(app_name: str) -> tuple[bool, str]:
                 if pname in _KNOWN_HOST_PROCESSES and pname not in target_processes:
                     return True
 
-                title_match = bool(title_lower) and any(kw in title_lower for kw in target_keywords)
+                title_match = any(kw in title_lower for kw in target_keywords)
                 proc_match = bool(pname) and (pname in target_processes)
 
-                if title_match or proc_match:
+                if title_match and proc_match:
                     found_hwnd = hwnd
-                    found_title = title.strip() or app_name
+                    found_title = title.strip()
+                    best_score = 2
                     return False
+                if (title_match or proc_match) and best_score < 1:
+                    found_hwnd = hwnd
+                    found_title = title.strip()
+                    best_score = 1
             except Exception:
                 pass
             return True
@@ -243,6 +265,12 @@ def _find_and_focus_existing_window(app_name: str) -> tuple[bool, str]:
                 ctypes.windll.user32.SetForegroundWindow(found_hwnd)
             except Exception:
                 pass
+
+        try:
+            if hasattr(win32gui, "BringWindowToTop"):
+                win32gui.BringWindowToTop(found_hwnd)
+        except Exception:
+            pass
 
         return True, found_title
     except Exception:
@@ -436,6 +464,7 @@ def open_application(app_name, action=None):
                     subprocess.Popen(f"start {app_name}", shell=True)
 
         time.sleep(2.5)  # Let the window come to foreground before next tool fires
+        _find_and_focus_existing_window(app_name)
 
     if action:
         _perform_action(action)

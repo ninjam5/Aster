@@ -124,7 +124,7 @@ Acceptance criteria for each Phase A item. Mirror of the plan's verification sec
 
 ## Regression & system health
 
-- [ ] `pytest tests/test_migration.py -v` passes (mocked LLM, no llama-server needed).
+- [ ] `pytest tests/test_migration.py -v` passes (mocked LLM, no LLM server needed).
 - [ ] Intervention daemon still fires on distraction windows (Discord/YouTube focus for `INTERVENTION_THRESHOLD`s).
 - [ ] All 45 existing admin tools still callable (smoke test: `get_current_time`, `look_at_screen`, `smart_click`, `play_spotify_track`, `memorize_fact`).
 - [ ] **VRAM check** — with the daemon running at 5 min interval (~12 Gemma calls/hr at ~60-120 tokens each), no OOM while `look_through_webcam` is mid-call. The `_brain_busy` defer flag must be honored.

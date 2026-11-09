@@ -196,9 +196,9 @@ def get_my_status() -> str:
             "livekit": True,
             "memory_db": bool(getattr(config, "MEMORY_AVAILABLE", False)),
         },
-        "llm_engine": "llama-server at http://localhost:8080",
+        "llm_engine": "PolyStrata (Strata engine) at http://localhost:8080",
         "model": _safe_get(cfg, "runtime", "llm_model", default="Qwen3.6-35B-A3B-UD-IQ4_XS"),
-        "context_window": int(getattr(config, "N_CTX", 60000)),
+        "context_window": int(getattr(config, "N_CTX", 131072)),
     }
 
     try:

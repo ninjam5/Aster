@@ -1,4 +1,4 @@
-"""llama-server health watchdog (reliability campaign round 2).
+"""PolyStrata health watchdog (reliability campaign round 2).
 
 A daemon thread pings http://localhost:8080/health every CHECK_INTERVAL
 seconds. Three consecutive failures declare the server down: a Telegram alert
@@ -36,7 +36,8 @@ MAX_RESTARTS_PER_HOUR = 2      # rolling-hour crash-loop cap
 RESTART_WAIT_SECONDS = 300.0   # max wait for the model to come back up
 ALERT_BACKOFF_SECONDS = 3600.0  # alert-only cadence once the cap is hit
 
-START_BAT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "start.bat")
+_poly_bat = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "qwen3.6_polystrata_start.bat")
+START_BAT = _poly_bat if os.path.exists(_poly_bat) else os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "start.bat")
 
 # Module state (single daemon thread — no locking needed).
 _consecutive_failures = 0
@@ -61,7 +62,7 @@ def _alert(text: str) -> None:
     print(f"[Aster Watchdog] {text}")
     try:
         from tools.diagnostics import send_alert
-        send_alert("llama-server watchdog", text)
+        send_alert("PolyStrata watchdog", text)
     except Exception:
         pass
 
@@ -105,7 +106,7 @@ def _handle_down() -> None:
     instrumentation.record_event("llm_server_down", consecutive_failures=_consecutive_failures)
 
     if not config.HEALTH_WATCHDOG_AUTORESTART:
-        _alert("llama-server is DOWN (3 consecutive /health failures). "
+        _alert("PolyStrata is DOWN (3 consecutive /health failures). "
                "Auto-restart is disabled — please restart it manually (start.bat).")
         return
 
@@ -116,11 +117,11 @@ def _handle_down() -> None:
         # alert would be silently suppressed for the first hour of uptime.
         if _last_capped_alert <= 0.0 or now - _last_capped_alert >= ALERT_BACKOFF_SECONDS:
             _last_capped_alert = now
-            _alert(f"llama-server is DOWN and crash-looping ({MAX_RESTARTS_PER_HOUR} "
+            _alert(f"PolyStrata is DOWN and crash-looping ({MAX_RESTARTS_PER_HOUR} "
                    f"restarts in the last hour already). Backing off — manual intervention needed.")
         return
 
-    _alert("llama-server is DOWN (3 consecutive /health failures). Attempting auto-restart...")
+    _alert("PolyStrata is DOWN (3 consecutive /health failures). Attempting auto-restart...")
     _restart_times.append(now)
     instrumentation.record_event("llm_server_restart_attempt", attempt_in_window=len(_restart_times))
 
@@ -128,11 +129,11 @@ def _handle_down() -> None:
         return
 
     if _wait_for_recovery():
-        _alert("llama-server is back up. Auto-restart succeeded.")
+        _alert("PolyStrata is back up. Auto-restart succeeded.")
         instrumentation.record_event("llm_server_restart_ok")
     else:
         _alert(f"Auto-restart launched but the server did not report healthy within "
-               f"{int(RESTART_WAIT_SECONDS)}s. Check the llama-server console.")
+               f"{int(RESTART_WAIT_SECONDS)}s. Check the PolyStrata console.")
         instrumentation.record_event("llm_server_restart_timeout")
 
 
@@ -164,7 +165,7 @@ def health_watchdog_daemon() -> None:
     if not config.HEALTH_WATCHDOG_ENABLED:
         print("[Aster Watchdog] Disabled via daemons.health_watchdog — thread exiting.")
         return
-    print(f"[Aster Watchdog] llama-server health watchdog active "
+    print(f"[Aster Watchdog] PolyStrata health watchdog active "
           f"(every {int(CHECK_INTERVAL)}s, autorestart={'on' if config.HEALTH_WATCHDOG_AUTORESTART else 'off'}).")
     time.sleep(STARTUP_GRACE_SECONDS)
     while True:

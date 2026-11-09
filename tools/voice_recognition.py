@@ -326,7 +326,7 @@ def identify_and_maybe_learn(audio, sample_rate: int = 16000) -> "str | None":
 
 # Eager load at module import — mirrors load_known_faces() in tools/vision.py.
 # Fail closed: a transient import-time failure (e.g. MemoryError while
-# llama-server is still allocating its KV cache during a simultaneous boot)
+# the LLM engine is still allocating its KV cache during a simultaneous boot)
 # must NOT take down the whole app. Empty globals ⇒ identification returns None.
 try:
     load_known_voices()

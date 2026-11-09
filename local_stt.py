@@ -168,7 +168,7 @@ def transcribe_file(path: str) -> str:
 
     Uses the CPU instance unless a LiveKit call already holds the CUDA model.
     A *resident* CUDA Whisper is deliberately avoided: it consumes ~1.2 GB of the
-    12 GB card, which starves llama-server's compute buffers and slows vision
+    12 GB card, which starves the LLM engine's compute buffers and slows vision
     prefill ~15x (measured 2026-09-27: image prompt 4.4 s without it vs 64.7 s
     with the GPU nearly full). Calls load CUDA Whisper for their duration only.
     """

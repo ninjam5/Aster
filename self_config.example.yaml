@@ -33,8 +33,8 @@ contacts:
 
 runtime:
   llm_model: Qwen3.6-35B-A3B-UD-IQ4_XS
-  llm_engine: llama-server (llama.cpp, OpenAI-compatible REST)
-  context_window: 60000          # must match llama-server --ctx-size
+  llm_engine: PolyStrata (Strata engine, OpenAI-compatible REST)
+  context_window: 131072         # matches PolyStrata 128k context (131072)
   tool_max_tokens: 4096          # max output tokens for one tool-loop round; large write_local_file payloads need headroom (was implicitly 1000)
   vision_enabled: true
   vision_model: Qwen3.6-35B-A3B (mmproj-F16)
@@ -49,7 +49,7 @@ runtime:
   loop_guard_enabled: true           # blocks/warns on degenerate repeated tool calls within one turn (core/loop_guard.py)
   tool_output_compression: true      # truncate/summarize oversized tool results before they enter history (core/output_compression.py)
   strip_think_tags: true             # strip <think>/<thinking> reasoning-scaffold blocks from every completion's content
-  exact_token_count: true            # calibrate trim_memory()'s chars-per-token ratio against llama-server's /tokenize endpoint (cached, rate-limited — not a per-turn network call)
+  exact_token_count: true            # calibrate trim_memory()'s chars-per-token ratio against the engine's /tokenize endpoint (cached, rate-limited — not a per-turn network call)
   # ── Reliability campaign round 2 ──
   tts_chunk_streaming: true          # LiveKit calls: start speaking after the first Kokoro segment instead of synthesizing the whole reply first (local_tts.py)
   structured_tool_results: true      # exact ToolResult(ok, text) failure detection for migrated tools; false = legacy FAILED/Error prefix-regex heuristic everywhere (core/tool_result.py)
@@ -75,7 +75,7 @@ voice:
 automation:
   # Minimum free system RAM (GB) before Aster launches its own browser for
   # browse_web/research. Below this it refuses with a readable message instead
-  # of risking an OOM (llama-server's MoE experts + Chrome can exhaust RAM).
+  # of risking an OOM (the LLM engine's MoE experts + Chrome can exhaust RAM).
   browser_min_free_ram_gb: 1.5
   # DOM-first perception motor (tools/dom.py). When enabled, web tasks are
   # driven through the attached browser's accessibility tree (Playwright over
@@ -146,7 +146,7 @@ daemons:
   intervention_mode: false       # inactive until /intervention on
   gesture_mode: false            # inactive until /gesture on
   awareness_mode: true           # ambient context daemon boot state — this key IS honored now (config.AWARENESS_ACTIVE); set false to boot with awareness off
-  health_watchdog: true          # ping llama-server /health every 30s; 3 consecutive failures → Telegram alert (tools/health_watchdog.py)
+  health_watchdog: true          # ping PolyStrata /health every 30s; 3 consecutive failures → Telegram alert (tools/health_watchdog.py)
   health_watchdog_autorestart: true  # on failure, relaunch start.bat automatically (max 2 restarts per rolling hour); false = alert-only
   webrtc_bridge: disabled        # benched for future mobile app (direct WebSocket audio runs on face_server :8000)
   face_server: enabled           # always-on (FastAPI on :8000)

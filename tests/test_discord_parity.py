@@ -1,5 +1,5 @@
 """Tests for Discord brain parity (instrumentation + LoopGuard in
-process_discord_chat). Mocked llama-server via requests.post."""
+process_discord_chat). Mocked PolyStrata via requests.post."""
 import json
 from unittest.mock import MagicMock, patch
 

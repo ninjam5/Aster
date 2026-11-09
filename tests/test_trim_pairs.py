@@ -3,7 +3,7 @@ _pop_oldest_turn_unit): an assistant message carrying tool_calls and its
 trailing role:"tool" messages must be popped as one unit so trimming never
 leaves an orphaned tool message with a dangling tool_call_id.
 
-No llama-server required — EXACT_TOKEN_COUNT is forced off so the fixed
+No LLM server required — EXACT_TOKEN_COUNT is forced off so the fixed
 4-chars/token heuristic makes budgets deterministic.
 """
 import pytest

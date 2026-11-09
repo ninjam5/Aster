@@ -146,7 +146,7 @@ def send_error(context: str, exc: Exception) -> None:
 def send_alert(context: str, text: str) -> None:
     """Forward a plain-text alert to Telegram unconditionally — not gated on
     DIAGNOSTICS_MODE. The message-only sibling of send_error for events that
-    are not exceptions (e.g. the llama-server health watchdog)."""
+    are not exceptions (e.g. the engine health watchdog)."""
     import config
     if not config.bot or _suppressed_in_tests():
         return

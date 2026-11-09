@@ -138,6 +138,29 @@ def _downscale_bgr(frame_bgr, max_width: int):
     return frame_bgr
 
 
+_LAST_RAW_SCREENSHOT_BGR: np.ndarray | None = None
+
+
+def get_raw_screenshot_bgr() -> np.ndarray | None:
+    """Returns the latest uncompressed full-resolution raw BGR frame, or captures a fresh one."""
+    global _LAST_RAW_SCREENSHOT_BGR
+    if _LAST_RAW_SCREENSHOT_BGR is not None:
+        return _LAST_RAW_SCREENSHOT_BGR
+    if mss is None:
+        return None
+    try:
+        with mss.mss() as sct:
+            if len(sct.monitors) < 2:
+                return None
+            monitor = sct.monitors[1]
+            raw = sct.grab(monitor)
+        frame_bgr = cv2.cvtColor(np.array(raw), cv2.COLOR_BGRA2BGR)
+        _LAST_RAW_SCREENSHOT_BGR = frame_bgr.copy()
+        return _LAST_RAW_SCREENSHOT_BGR
+    except Exception:
+        return None
+
+
 def capture_screen_base64(max_width: int | None = None) -> str | None:
     """Captures the primary monitor and returns raw base64 for multimodal injection.
 
@@ -157,6 +180,8 @@ def capture_screen_base64(max_width: int | None = None) -> str | None:
             monitor = sct.monitors[1]
             raw = sct.grab(monitor)
         frame_bgr = cv2.cvtColor(np.array(raw), cv2.COLOR_BGRA2BGR)
+        global _LAST_RAW_SCREENSHOT_BGR
+        _LAST_RAW_SCREENSHOT_BGR = frame_bgr.copy()
         frame_bgr = _downscale_bgr(frame_bgr, max_width)
         ok, buffer = cv2.imencode(".jpg", frame_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
         if not ok:
@@ -257,18 +282,27 @@ def re_examine_image(filepath: str, specific_question: str) -> str:
         clean_b64 = clean_b64.replace("\n", "").replace("\r", "").strip()
 
         # Stateless 1-turn inference — image never enters main conversation
-        one_shot_msg = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{clean_b64}"}},
-                    {"type": "text", "text": specific_question.strip()},
-                ],
-            }
-        ]
+        import core.brain as _brain
+        user_msg = {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{clean_b64}"}},
+                {"type": "text", "text": f"{specific_question.strip()} Do NOT call any tools — reply with plain text only."},
+            ],
+        }
+        one_shot_msg = []
+        brain_msgs = getattr(_brain, "messages", None)
+        if isinstance(brain_msgs, list) and brain_msgs and isinstance(brain_msgs[0], dict) and brain_msgs[0].get("role") == "system":
+            one_shot_msg.append(brain_msgs[0])
+        one_shot_msg.append(user_msg)
 
-        from core.brain import _execute_llm_completion
-        answer = _execute_llm_completion(messages=one_shot_msg, temperature=0.2, n_predict=1500, enable_thinking=False).get("content") or ""
+        answer = _brain._execute_llm_completion(
+            messages=one_shot_msg,
+            tools=getattr(_brain, "ADMIN_TOOLS", None),
+            temperature=0.2,
+            n_predict=1500,
+            enable_thinking=False,
+        ).get("content") or ""
 
         if not answer:
             return "Error: Visual inference returned an empty response."
@@ -345,8 +379,9 @@ def start_screen_watcher(target_text: str) -> str:
 # SCREEN CACHE BACKWARD COMPATIBILITY
 # ============================================================================
 def invalidate_screen_cache() -> None:
-    """No-op kept for caller/test backward compatibility."""
-    pass
+    """Clear cached raw screenshot buffer after mouse or keyboard actions."""
+    global _LAST_RAW_SCREENSHOT_BGR
+    _LAST_RAW_SCREENSHOT_BGR = None
 
 
 def capture_screen_small_gray(width: int = 240) -> np.ndarray | None:
@@ -576,29 +611,38 @@ def _qwen_vision_locate(goal: str, b64_img: str | None = None) -> dict | None:
     """Locate a UI element via direct Qwen 3.6 vision grounding."""
     try:
         if b64_img is None:
-            b64_img = capture_screen_base64(max_width=0)
+            b64_img = capture_screen_base64()
         if not b64_img:
             return None
 
         prompt = (
             f'You are a computer vision UI grounding model.\n'
             f'Look at the screenshot and find the exact UI element: "{goal}".\n'
+            f'Disambiguation rule for chat/contact lists (e.g. Discord, Telegram, Instagram): if multiple entries share the same name (such as two "Ob" rows because one is a 1-on-1 user and the other is a 2-member group chat with that person), ALWAYS select the 1-on-1 user row that has a custom photographic/illustrated profile avatar (and/or a username handle next to the name) and a single-line name, and NEVER select the row that has a solid-colored circle with a default 2-person group silhouette icon or "2 Members" / "N Members" subtitle (unless a group chat was explicitly requested).\n'
             f'If the element is NOT visible on the screen, return ONLY: {{"found": false}}\n'
             f'If visible, return ONLY a JSON object with the center coordinate normalized to a 1000x1000 grid:\n'
             f'{{"found": true, "target": "{goal}", "point": [x, y]}}\n'
             f'Where x is the horizontal coordinate (0-1000, left to right) and y is the vertical coordinate (0-1000, top to bottom).\n'
-            f'Do not include markdown or reasoning outside the JSON.'
+            f'Do not include markdown or reasoning outside the JSON. Do NOT call any tools — return ONLY the JSON output.'
         )
 
-        from core.brain import _execute_llm_completion
-        resp = _execute_llm_completion(
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}},
-                    {"type": "text", "text": prompt},
-                ],
-            }],
+        import core.brain as _brain
+        user_msg = {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}},
+                {"type": "text", "text": prompt},
+            ],
+        }
+        messages = []
+        brain_msgs = getattr(_brain, "messages", None)
+        if isinstance(brain_msgs, list) and brain_msgs and isinstance(brain_msgs[0], dict) and brain_msgs[0].get("role") == "system":
+            messages.append(brain_msgs[0])
+        messages.append(user_msg)
+
+        resp = _brain._execute_llm_completion(
+            messages=messages,
+            tools=getattr(_brain, "ADMIN_TOOLS", None),
             temperature=0.1,
             n_predict=1500,
             enable_thinking=False,
@@ -627,7 +671,7 @@ def _qwen_vision_locate_boxes(goal: str, b64_img: str | None = None) -> list[dic
     """Locate all visible instances of `goal` on screen as logical-pixel boxes."""
     try:
         if b64_img is None:
-            b64_img = capture_screen_base64(max_width=0)
+            b64_img = capture_screen_base64()
         if not b64_img:
             return []
 
@@ -638,18 +682,26 @@ def _qwen_vision_locate_boxes(goal: str, b64_img: str | None = None) -> list[dic
             f'[{{"label": "{goal}", "box_2d": [xmin, ymin, xmax, ymax]}}]\n'
             f'Where xmin,xmax are horizontal (0-1000, left to right) and ymin,ymax are vertical (0-1000, top to bottom).\n'
             f'If no instances are visible on the screen, return ONLY: []\n'
-            f'Do not include markdown or reasoning outside the JSON.'
+            f'Do not include markdown or reasoning outside the JSON. Do NOT call any tools — return ONLY the JSON output.'
         )
 
-        from core.brain import _execute_llm_completion
-        resp = _execute_llm_completion(
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}},
-                    {"type": "text", "text": prompt},
-                ],
-            }],
+        import core.brain as _brain
+        user_msg = {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}},
+                {"type": "text", "text": prompt},
+            ],
+        }
+        messages = []
+        brain_msgs = getattr(_brain, "messages", None)
+        if isinstance(brain_msgs, list) and brain_msgs and isinstance(brain_msgs[0], dict) and brain_msgs[0].get("role") == "system":
+            messages.append(brain_msgs[0])
+        messages.append(user_msg)
+
+        resp = _brain._execute_llm_completion(
+            messages=messages,
+            tools=getattr(_brain, "ADMIN_TOOLS", None),
             temperature=0.1,
             n_predict=1500,
             enable_thinking=False,
@@ -884,16 +936,143 @@ def verify_action_result(goal: str) -> str:
     if not b64:
         return 'Could not verify — screen capture failed.'
 
-    from core.brain import _execute_llm_completion
-    verify_msgs = [{
+    import core.brain as _brain
+    user_msg = {
         'role': 'user',
         'content': [
             {'type': 'image_url', 'image_url': {'url': f'data:image/jpeg;base64,{b64}'}},
             {'type': 'text', 'text': (
                 f'I just tried to: {goal}\n'
                 'Looking at the current screen, did the action succeed? '
-                'Reply in one sentence starting with SUCCESS or FAILED.'
+                'Reply in one sentence starting with SUCCESS or FAILED. '
+                'Do NOT call any tools — reply with plain text only.'
             )}
         ]
-    }]
-    return _execute_llm_completion(messages=verify_msgs, temperature=0.1, n_predict=300, enable_thinking=False).get("content") or ""
+    }
+    verify_msgs = []
+    brain_msgs = getattr(_brain, "messages", None)
+    if isinstance(brain_msgs, list) and brain_msgs and isinstance(brain_msgs[0], dict) and brain_msgs[0].get("role") == "system":
+        verify_msgs.append(brain_msgs[0])
+    verify_msgs.append(user_msg)
+    return _brain._execute_llm_completion(
+        messages=verify_msgs,
+        tools=getattr(_brain, "ADMIN_TOOLS", None),
+        temperature=0.1,
+        n_predict=300,
+        enable_thinking=False,
+    ).get("content") or ""
+
+
+
+# ============================================================================
+# EXTENDED MOUSE PRIMITIVES & DYNAMIC HIGH-RESOLUTION FOVEATED VISION
+# ============================================================================
+def hover_ui_element(goal: str) -> dict | None:
+    """Locate a UI element and move the mouse cursor over it without clicking."""
+    loc = locate_ui_element_ex(goal)
+    if not loc:
+        return None
+    pyautogui.moveTo(loc["x"], loc["y"], duration=0.2)
+    time.sleep(0.3)
+    return loc
+
+
+def drag_and_drop_ui_elements(source_goal: str, target_goal: str, duration: float = 0.5) -> tuple[dict | None, dict | None]:
+    """Locate source and target elements, then click and drag smoothly between them."""
+    loc_src = locate_ui_element_ex(source_goal)
+    if not loc_src:
+        return None, None
+    loc_dst = locate_ui_element_ex(target_goal)
+    if not loc_dst:
+        return loc_src, None
+    pyautogui.moveTo(loc_src["x"], loc_src["y"], duration=0.2)
+    time.sleep(0.1)
+    pyautogui.mouseDown(button="left")
+    time.sleep(0.1)
+    pyautogui.moveTo(loc_dst["x"], loc_dst["y"], duration=max(0.2, duration))
+    time.sleep(0.1)
+    pyautogui.mouseUp(button="left")
+    time.sleep(0.3)
+    invalidate_screen_cache()
+    return loc_src, loc_dst
+
+
+def click_at_coordinates(x: int, y: int, clicks: int = 1, button: str = "left") -> bool:
+    """Clicks directly at logical screen coordinates without running element locators."""
+    logical_w, logical_h = pyautogui.size()
+    cx = max(0, min(logical_w, int(x)))
+    cy = max(0, min(logical_h, int(y)))
+    btn = button.lower() if button.lower() in ("left", "right", "middle") else "left"
+    pyautogui.click(cx, cy, clicks=max(1, clicks), button=btn)
+    invalidate_screen_cache()
+    return True
+
+
+def zoom_and_read_region(region_query: str, padding: int = 60) -> str:
+    """Extracts an uncompressed, 1:1 native-resolution crop around a region and transcribes fine detail."""
+    raw = get_raw_screenshot_bgr()
+    if raw is None:
+        return "Screen capture unavailable."
+
+    # 1. Coarse locate in logical desktop space
+    matches = _qwen_vision_locate_boxes(region_query)
+    if matches:
+        left, top, width, height = matches[0]["box"]
+    else:
+        single = locate_ui_element_ex(region_query)
+        if single:
+            left, top, width, height = max(0, single["x"] - 150), max(0, single["y"] - 100), 300, 200
+        else:
+            return f"Could not visually isolate region '{region_query}' to zoom in."
+
+    # 2. Convert logical coordinates to raw physical pixels
+    logical_w, logical_h = pyautogui.size()
+    phys_h, phys_w = raw.shape[:2]
+    sx = phys_w / logical_w if logical_w else 1.0
+    sy = phys_h / logical_h if logical_h else 1.0
+
+    px1 = max(0, int((left - padding) * sx))
+    py1 = max(0, int((top - padding) * sy))
+    px2 = min(phys_w, int((left + width + padding) * sx))
+    py2 = min(phys_h, int((top + height + padding) * sy))
+
+    if (px2 - px1) < 10 or (py2 - py1) < 10:
+        return f"Target region '{region_query}' was too small or off-screen."
+
+    # 3. 1:1 uncompressed crop
+    patch_bgr = raw[py1:py2, px1:px2]
+    ok, buf = cv2.imencode(".jpg", patch_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+    if not ok:
+        return "Failed to encode high-resolution patch."
+    patch_b64 = base64.b64encode(buf).decode("utf-8")
+
+    # 4. Multimodal transcription request to Qwen
+    import core.brain as _brain
+    prompt = (
+        f"You are inspecting an uncompressed 1:1 high-resolution zoom of the screen region: '{region_query}'.\n"
+        f"Transcribe all visible text exactly as written. Describe any timestamps, numbers, status badges, buttons, or fine details visible in this region."
+    )
+    user_msg = {
+        "role": "user",
+        "content": [
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{patch_b64}"}},
+            {"type": "text", "text": prompt},
+        ],
+    }
+    messages = []
+    brain_msgs = getattr(_brain, "messages", None)
+    if isinstance(brain_msgs, list) and brain_msgs and isinstance(brain_msgs[0], dict) and brain_msgs[0].get("role") == "system":
+        messages.append(brain_msgs[0])
+    messages.append(user_msg)
+
+    resp = _brain._execute_llm_completion(
+        messages=messages,
+        tools=getattr(_brain, "ADMIN_TOOLS", None),
+        temperature=0.1,
+        n_predict=600,
+        enable_thinking=False,
+    )
+    text_out = (resp.get("content") or "").strip()
+    if not text_out:
+        text_out = (resp.get("reasoning_content") or "").strip()
+    return text_out or "No readable text or details could be resolved in this zoomed region."

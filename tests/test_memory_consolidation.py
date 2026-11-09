@@ -8,7 +8,7 @@
   ID 3  — a Laya pre-filter skips the expensive 35B consolidation pass when the recent
           window is confidently free of new durable facts. Any doubt runs the pass.
 
-No model, no llama-server, no network.
+No model, no LLM server, no network.
 """
 import os
 import sys

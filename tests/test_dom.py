@@ -827,7 +827,7 @@ class TestDegradation:
 class TestBrowserMemoryGuard:
     """Feature 8 - low-RAM guard before launching Aster's browser (2026-09-28).
 
-    Launching Chrome beside llama-server's mmap'd MoE experts OOM'd the box
+    Launching Chrome beside the LLM engine's mmap'd MoE experts OOM'd the box
     (2.1 GB free, commit 41.9/47.5). The guard refuses deterministically with a
     readable message instead of dying mid-turn.
     """

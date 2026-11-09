@@ -346,6 +346,43 @@ def test_type_text_blocks_telegram_self_chat_and_unfocused_turn_start(monkeypatc
     assert copied == ["aloha bald human"]
 
 
+def test_smart_type_and_smart_click_block_telegram_self_chat_and_unfocused_turn_start(monkeypatch):
+    """Verify smart_type and smart_click block execution when Aster_Local control chat is foreground or when called unfocused at turn start."""
+    import core.brain as brain
+    clicks = []
+    monkeypatch.setattr(brain.pyautogui, "click", lambda *a, **kw: clicks.append(a))
+    monkeypatch.setattr(brain, "invalidate_screen_cache", lambda: None)
+    monkeypatch.setattr(brain, "locate_ui_element_ex", lambda g: {"x": 100, "y": 100, "source": "test", "text": g, "score": 1.0})
+
+    # 1. smart_type blocked when Aster_Local is foreground
+    monkeypatch.setattr(brain, "get_foreground_window_title", lambda: "Aster_Local")
+    res1 = brain.execute_tool("smart_type", {"goal": "search bar", "text": "hello"})
+    assert "FAILED — BLOCKED" in str(res1)
+    assert "your own Telegram control chat" in str(res1)
+    assert not clicks
+
+    # 2. smart_type blocked when _unfocused_turn_start=True
+    monkeypatch.setattr(brain, "get_foreground_window_title", lambda: "Discord")
+    res2 = brain.execute_tool("smart_type", {"goal": "search bar", "text": "hello", "_unfocused_turn_start": True})
+    assert "FAILED — BLOCKED" in str(res2)
+    assert "start of a new turn before focusing" in str(res2)
+    assert not clicks
+
+    # 3. smart_click blocked when Aster_Local is foreground
+    monkeypatch.setattr(brain, "get_foreground_window_title", lambda: "Aster_Local")
+    res3 = brain.execute_tool("smart_click", {"goal": "submit button"})
+    assert "FAILED — BLOCKED" in str(res3)
+    assert "your own Telegram control chat" in str(res3)
+    assert not clicks
+
+    # 4. smart_click blocked when _unfocused_turn_start=True
+    monkeypatch.setattr(brain, "get_foreground_window_title", lambda: "Discord")
+    res4 = brain.execute_tool("smart_click", {"goal": "submit button", "_unfocused_turn_start": True})
+    assert "FAILED — BLOCKED" in str(res4)
+    assert "start of a new turn before focusing" in str(res4)
+    assert not clicks
+
+
 # ============================================================================
 # 6. PLAYBOOK ALIASES & STORE APPS SUPPORT
 # ============================================================================
@@ -503,11 +540,13 @@ def test_find_and_focus_existing_window_restores_iconic_window(monkeypatch):
         callback(mock_hwnd, extra)
 
     monkeypatch.setattr(system.win32gui, "EnumWindows", mock_enum_windows)
+    monkeypatch.setattr(system.win32gui, "IsWindowVisible", lambda h: True)
     monkeypatch.setattr(system.win32gui, "GetWindowText", lambda h: "Instagram")
     monkeypatch.setattr(system.win32gui, "GetForegroundWindow", lambda: 99999)
     monkeypatch.setattr(system.win32gui, "IsIconic", lambda h: True)
     monkeypatch.setattr(system.win32gui, "ShowWindow", lambda h, cmd: show_window_calls.append((h, cmd)))
     monkeypatch.setattr(system.win32gui, "SetForegroundWindow", lambda h: set_fg_calls.append(h))
+    monkeypatch.setattr(system.win32gui, "BringWindowToTop", lambda h: None)
     monkeypatch.setattr(system.win32api, "keybd_event", lambda *a: keybd_calls.append(a))
 
     found, title = system._find_and_focus_existing_window("instagram")
@@ -531,6 +570,7 @@ def test_find_and_focus_existing_window_already_foreground(monkeypatch):
         callback(mock_hwnd, extra)
 
     monkeypatch.setattr(system.win32gui, "EnumWindows", mock_enum_windows)
+    monkeypatch.setattr(system.win32gui, "IsWindowVisible", lambda h: True)
     monkeypatch.setattr(system.win32gui, "GetWindowText", lambda h: "Discord")
     monkeypatch.setattr(system.win32gui, "GetForegroundWindow", lambda: mock_hwnd)
     monkeypatch.setattr(system.win32gui, "IsIconic", lambda h: False)
@@ -553,6 +593,7 @@ def test_find_and_focus_existing_window_not_found(monkeypatch):
         callback(11111, extra)
 
     monkeypatch.setattr(system.win32gui, "EnumWindows", mock_enum_windows)
+    monkeypatch.setattr(system.win32gui, "IsWindowVisible", lambda h: True)
     monkeypatch.setattr(system.win32gui, "GetWindowText", lambda h: "Calculator")
     monkeypatch.setattr(system.win32gui, "GetForegroundWindow", lambda: 0)
     monkeypatch.setattr(system.win32gui, "IsIconic", lambda h: False)
@@ -573,6 +614,7 @@ def test_find_and_focus_existing_window_matches_process_name(monkeypatch):
         callback(mock_hwnd, extra)
 
     monkeypatch.setattr(system.win32gui, "EnumWindows", mock_enum_windows)
+    monkeypatch.setattr(system.win32gui, "IsWindowVisible", lambda h: True)
     monkeypatch.setattr(system.win32gui, "GetWindowText", lambda h: "Artist - Track Name")
     monkeypatch.setattr(system.win32process, "GetWindowThreadProcessId", lambda h: (0, 4321))
 
@@ -583,12 +625,47 @@ def test_find_and_focus_existing_window_matches_process_name(monkeypatch):
     monkeypatch.setattr(system.win32gui, "GetForegroundWindow", lambda: 0)
     monkeypatch.setattr(system.win32gui, "IsIconic", lambda h: False)
     monkeypatch.setattr(system.win32gui, "SetForegroundWindow", lambda h: set_fg_calls.append(h))
+    monkeypatch.setattr(system.win32gui, "BringWindowToTop", lambda h: None)
     monkeypatch.setattr(system.win32api, "keybd_event", lambda *a: None)
 
     found, title = system._find_and_focus_existing_window("spotify")
     assert found is True
     assert title == "Artist - Track Name"
     assert set_fg_calls == [mock_hwnd]
+
+
+def test_find_and_focus_existing_window_ignores_invisible_and_ime_windows(monkeypatch):
+    """Tray-hidden (invisible) windows and Default IME / untitled helper HWNDs of Discord.exe are skipped."""
+    from tools import system
+
+    # HWNDs:
+    # 101: Discord.exe hidden tray window (title="Discord", IsWindowVisible=False)
+    # 102: Discord.exe IME helper window (title="Default IME", IsWindowVisible=True)
+    # 103: Discord.exe untitled helper window (title="", IsWindowVisible=True)
+    windows = {
+        101: {"title": "Discord", "visible": False},
+        102: {"title": "Default IME", "visible": True},
+        103: {"title": "", "visible": True},
+    }
+
+    def mock_enum_windows(callback, extra):
+        for hwnd in windows:
+            if callback(hwnd, extra) is False:
+                break
+
+    monkeypatch.setattr(system.win32gui, "EnumWindows", mock_enum_windows)
+    monkeypatch.setattr(system.win32gui, "IsWindowVisible", lambda h: windows[h]["visible"])
+    monkeypatch.setattr(system.win32gui, "GetWindowText", lambda h: windows[h]["title"])
+    monkeypatch.setattr(system.win32process, "GetWindowThreadProcessId", lambda h: (0, 22132))
+
+    mock_proc = MagicMock()
+    mock_proc.name.return_value = "discord.exe"
+    monkeypatch.setattr(system.psutil, "Process", lambda pid: mock_proc)
+
+    found, title = system._find_and_focus_existing_window("discord")
+    assert found is False
+    assert title == ""
+
 
 
 

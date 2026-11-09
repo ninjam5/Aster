@@ -1,4 +1,4 @@
-"""Tests for core.loop_guard.LoopGuard — pure unit tests, no mocks, no llama-server.
+"""Tests for core.loop_guard.LoopGuard — pure unit tests, no mocks, no LLM server.
 
 Also disables reliability logging so these tests don't write to
 Aster_Vault/reliability_log.jsonl.

@@ -366,6 +366,55 @@ def _task_matches_existing_actions(task: str, actions: dict[str, Any]) -> bool:
     return False
 
 
+_GEMINI_PLAYBOOK_SYSTEM_PROMPT = (
+    "You are a Principal Windows 11 Desktop & Web UI Playbook Architect for Aster, "
+    "a local autonomous agent powered by Qwen 3.6 35B-A3B MoE.\n\n"
+    "### AGENT MOTOR TOOLS & LATENCY PROFILE\n"
+    "The local agent ONLY has the following GUI tools (use these exact names and signatures):\n"
+    "1. `open_application('app_name')` — Focuses existing window or launches the app.\n"
+    "2. `press_key('shortcut')` — Instant (0ms vision cost). Examples: `'ctrl+k'`, `'ctrl+l'`, `'ctrl+t'`, `'ctrl+f'`, `'enter'`, `'escape'`, `'space'`.\n"
+    "3. `type_text('text', press_enter=false)` — Instant clipboard paste into the currently focused input. Set `press_enter=true` to press Enter 400ms after pasting.\n"
+    "4. `smart_type('exact_input_placeholder_or_label', 'text', submit=true)` — Clicks the input field, pastes `'text'`, and presses Enter if `submit=true`.\n"
+    "5. `smart_click('exact_element_label_or_visual_description')` — Clicks a UI element.\n"
+    "6. `smart_scroll('down' or 'up', clicks=3)` — Scrolls the active pane.\n\n"
+    "### 2-STAGE LOCATOR COST HIERARCHY (CRITICAL FOR SPEED)\n"
+    "- Stage 1 (Windows UIA Tree): **0ms** if the `smart_click`/`smart_type` goal matches the control's exact accessibility `Name` or placeholder text (e.g. `'Message @<Name>'`, `'Write a message...'`, `'Search'`).\n"
+    "- Stage 2 (Qwen Vision Grounding Fallback): **~7,000ms** if UIA misses because the goal was vague prose (e.g. `'the message input box at the bottom of the screen'`).\n"
+    "- Therefore, ALWAYS prefer keyboard shortcuts (`press_key` + `type_text`) or exact UIA placeholder/button labels in `smart_type`/`smart_click`.\n\n"
+    "### 4 MANDATORY PLAYBOOK DESIGN RULES\n"
+    "1. **NO CONDITIONAL BRANCHING IN `primary`**: Never write `'If X is visible do A, otherwise do B'` inside `primary`. Local models get confused by branching prose and may open a modal (path B) and then click the dimmed background behind it (path A). `primary` MUST be a single, unambiguous, deterministic path (preferring keyboard shortcuts). Put visual-only alternatives in `visual_fallback`.\n"
+    "2. **USE SINGLE-ROUND ACTION CHAINING**: The local agent can execute multiple deterministic tools in a SINGLE round (`[tool1, tool2]`), stopping before any coordinate-dependent `smart_click` on a newly opened modal/page. Whenever a shortcut focuses an input field, format `primary` as:\n"
+    "   - Synchronous submit (URL bar, file open, standard search): `\"Chain in 1 round: [press_key('ctrl+l'), type_text(query, press_enter=true)]\"`\n"
+    "   - Async React/Electron modal filter (e.g. Discord Ctrl+K Quick Switcher): `\"Chain in 1 round: [press_key('ctrl+k'), type_text(query, press_enter=false)] -> Next round: smart_click('top matching row in modal results')\"`\n"
+    "3. **MODAL LOCK DISCIPLINE IN `avoid_traps`**: Whenever an app uses a search modal/overlay (`ctrl+k`, command palette, flyout drawer), explicitly warn in `avoid_traps` NEVER to click dimmed background/sidebar elements while the modal is open, and explain how to distinguish 1-on-1 items from group/channel items in the modal results.\n"
+    "4. **EXACT VERIFICATION SIGNALS**: In `verify`, state the exact visual or placeholder change that proves success (e.g. `'Bottom input placeholder says Message @<Name> (with @)'`).\n\n"
+    "### REQUIRED JSON OUTPUT SCHEMA\n"
+    "Return ONLY a single valid JSON object matching this exact structure:\n"
+    "{\n"
+    '  "id": "slug_id",\n'
+    '  "tier": "desktop" or "web",\n'
+    '  "name": "Human Readable Name",\n'
+    '  "match": {\n'
+    '    "process_names": ["App.exe"],\n'
+    '    "title_keywords": ["keyword"],\n'
+    '    "domains": ["example.com"]\n'
+    "  },\n"
+    '  "layout_summary": "Concise 1-2 sentence spatial map of key panes, bars, and controls.",\n'
+    '  "avoid_traps": [\n'
+    '    "Specific, high-signal trap warning (modal lock rules, async filter delays, lookalike buttons to avoid)..."\n'
+    "  ],\n"
+    '  "actions": {\n'
+    '    "action_slug": {\n'
+    '      "shortcut": "keyboard shortcut or empty string",\n'
+    '      "primary": "Single deterministic path using Chain in 1 round: [...] notation where applicable",\n'
+    '      "visual_fallback": "Concrete smart_click / smart_type fallback",\n'
+    '      "verify": "Exact screen/placeholder state confirming success"\n'
+    "    }\n"
+    "  }\n"
+    "}"
+)
+
+
 def _query_gemini_playbook(
     app_or_site: str,
     task: str = "",
@@ -385,52 +434,24 @@ def _query_gemini_playbook(
     except Exception as e:
         return None, f"google-genai SDK not available: {e}"
 
-    schema_instruction = (
-        "You are a Windows 11 Desktop & Web UI Playbook Architect for an autonomous agent "
-        "whose motor tools are:\n"
-        "- press_key('shortcut') (e.g. 'ctrl+t', 'ctrl+k', 'enter', 'escape', '/')\n"
-        "- type_text('text')\n"
-        "- smart_click('concise visual label or description')\n"
-        "- smart_type('concise input field description', 'text', submit=true)\n"
-        "- scroll_screen('down' or 'up', clicks)\n\n"
-        "Return ONLY a single valid JSON object matching this exact schema:\n"
-        "{\n"
-        '  "id": "slug_id",\n'
-        '  "tier": "desktop" or "web",\n'
-        '  "name": "Human Readable Name",\n'
-        '  "match": {\n'
-        '    "process_names": ["app.exe"],\n'
-        '    "title_keywords": ["keyword"],\n'
-        '    "domains": ["example.com"]\n'
-        "  },\n"
-        '  "layout_summary": "Concise 1-2 sentence description of spatial layout.",\n'
-        '  "avoid_traps": ["Specific visual trap or wrong button to avoid..."],\n'
-        '  "actions": {\n'
-        '    "action_slug": {\n'
-        '      "shortcut": "keyboard shortcut or empty string",\n'
-        '      "primary": "keyboard-first or most reliable step sequence",\n'
-        '      "visual_fallback": "smart_click or smart_type fallback",\n'
-        '      "verify": "What changes on screen when successful"\n'
-        "    }\n"
-        "  }\n"
-        "}\n"
-        "Always prefer keyboard shortcuts for `primary` where reliable, and concrete "
-        "`smart_click`/`smart_type` descriptions for `visual_fallback`."
-    )
-
-    context_lines = [schema_instruction, f"\nTarget Application or Website: {app_or_site}"]
+    context_lines = [
+        _GEMINI_PLAYBOOK_SYSTEM_PROMPT,
+        f"\nTarget Application or Website: {app_or_site}",
+    ]
     if task:
         context_lines.append(f"Current User Task / Goal: {task}")
     if failed_step:
         context_lines.append(
             f"FAILED STEP TO SELF-HEAL: {failed_step}\n"
-            "Analyze why this step failed (using the attached screenshot if provided), "
-            "add a warning to `avoid_traps` so the agent does not repeat the mistake, "
-            "and update `actions` and `layout_summary` with the corrected navigation procedure."
+            "Analyze why this step failed or took an inefficient detour (using the attached screenshot if provided):\n"
+            "1. Add a crisp rule to `avoid_traps` so the local agent never repeats this mistake or modal detour.\n"
+            "2. Rewrite the relevant `actions` entry so `primary` is a single linear deterministic sequence "
+            "(using `Chain in 1 round: [...]` for shortcut+typing) with zero ambiguous `'If ... Otherwise ...'` branching.\n"
+            "3. Use exact visible UIA control/placeholder names in `smart_type`/`smart_click`."
         )
     if existing_playbook:
         context_lines.append(
-            "Existing Playbook JSON (preserve working actions while adding/fixing the requested task):\n"
+            "Existing Playbook JSON (preserve working actions while optimizing/fixing the requested task):\n"
             + json.dumps(existing_playbook, indent=2)
         )
 
@@ -461,6 +482,7 @@ def _query_gemini_playbook(
                     model=m,
                     contents=contents,
                     config=types.GenerateContentConfig(
+                        system_instruction=_GEMINI_PLAYBOOK_SYSTEM_PROMPT,
                         temperature=0.1,
                         response_mime_type="application/json",
                     ),
@@ -621,10 +643,18 @@ def get_ui_playbook(app_or_site: str, task: str = "", failed_step: str = "") -> 
     if existing is not None:
         actions = existing.get("actions") or {}
         if task and not _task_matches_existing_actions(task, actions):
+            screenshot_b64 = None
+            try:
+                from tools.vision import capture_screen_base64
+
+                screenshot_b64 = capture_screen_base64()
+            except Exception:
+                screenshot_b64 = None
             enriched_raw, _err = _query_gemini_playbook(
                 app_or_site=target,
                 task=task,
                 existing_playbook=existing,
+                screenshot_b64=screenshot_b64,
             )
             if enriched_raw is not None:
                 enriched = _merge_or_normalize_playbook(
@@ -650,7 +680,18 @@ def get_ui_playbook(app_or_site: str, task: str = "", failed_step: str = "") -> 
     # ------------------------------------------------------------------
     # Mode C: Dynamic Learning via Gemini 3.8 Flash (no local playbook)
     # ------------------------------------------------------------------
-    learned_raw, err = _query_gemini_playbook(app_or_site=target, task=task)
+    screenshot_b64 = None
+    try:
+        from tools.vision import capture_screen_base64
+
+        screenshot_b64 = capture_screen_base64()
+    except Exception:
+        screenshot_b64 = None
+    learned_raw, err = _query_gemini_playbook(
+        app_or_site=target,
+        task=task,
+        screenshot_b64=screenshot_b64,
+    )
     if learned_raw is not None:
         learned = _merge_or_normalize_playbook(
             learned_raw,

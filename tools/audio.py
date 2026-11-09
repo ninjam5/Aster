@@ -44,7 +44,7 @@ def acquire_kokoro_pipeline():
     """Load Kokoro if needed, register a user, and return the shared pipeline (or None).
 
     Tries CUDA first; if KPipeline init or a probe synthesis raises (e.g. VRAM OOM
-    alongside llama-server), falls back to CPU so voice is never silently lost.
+    alongside the LLM engine), falls back to CPU so voice is never silently lost.
     """
     global kokoro_pipeline, sf, _kokoro_users
     with _kokoro_lock:

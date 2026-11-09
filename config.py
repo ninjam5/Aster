@@ -96,7 +96,7 @@ _INITIATIVE_NAME_TO_INT = {"silent": 0, "low": 1, "medium": 2, "high": 3}
 # SPOTIFY CLIENT
 # ============================================================================
 # Redirect URI defaults to :8081 (not :8080) to avoid colliding with
-# llama-server's port during the local OAuth callback. If you've already
+# PolyStrata's port during the local OAuth callback. If you've already
 # registered a Spotify app on :8080, set redirect_uri explicitly in
 # secrets.yaml to match — it must be an exact match on Spotify's dashboard.
 SPOTIPY_CLIENT_ID = _secret("spotify", "client_id", default="")
@@ -160,16 +160,15 @@ DEBUG_MODE = bool(_cfg("runtime", "debug", default=_cfg("debug", default=False))
 CONSOLE_DEBUG_LOG_ENABLED = DEBUG_MODE
 
 # ============================================================================
-# MODEL CONFIGURATION — llama-server OpenAI-compatible client
+# MODEL CONFIGURATION — PolyStrata (Strata) OpenAI-compatible client
 # ============================================================================
 
-# Model name sent as the `model=` parameter to llama-server (server ignores it
+# Model name sent as the `model=` parameter to PolyStrata (server ignores it
 # when only one model is loaded, but the field is required by the OpenAI schema).
 MODEL_NAME = "Qwen3.6-35B-A3B-UD-IQ4_XS"
 
-# Context window ceiling — must match llama-server's --ctx-size.
-# 60k leaves VRAM headroom for the multimodal image pipeline on a 12 GB card.
-N_CTX = int(_cfg("runtime", "context_window", default=60000))
+# Context window ceiling — matches PolyStrata's 128k context (131072).
+N_CTX = int(_cfg("runtime", "context_window", default=131072))
 
 # Utterance coalescing debounce — how long to wait after a VAD segment ends
 # before sending to the brain. Rapid mid-sentence pauses within this window
@@ -266,7 +265,7 @@ LLM_TOOL_TOP_K       = int(_cfg("settings",   "llm_tool_top_k",       default=LL
 # Max output tokens for ONE agentic tool-loop round. The old implicit cap was
 # 1000, which truncated any tool call carrying a large payload (e.g.
 # write_local_file with a whole HTML file) mid-JSON — the arguments came back
-# invalid and llama-server returned HTTP 500 parsing them. 4096 fits a modest
+# invalid and the engine returned HTTP 500 parsing them. 4096 fits a modest
 # file; raise for bigger artifacts (longer generation time), lower to cap it.
 TOOL_MAX_TOKENS = int(_cfg("runtime", "tool_max_tokens", default=4096))
 
@@ -292,7 +291,7 @@ TOOL_OUTPUT_COMPRESSION = bool(_cfg("runtime", "tool_output_compression", defaul
 # content before it re-enters history or reaches the user/TTS.
 STRIP_THINK_TAGS = bool(_cfg("runtime", "strip_think_tags", default=True))
 
-# Use llama-server's /tokenize endpoint to calibrate trim_memory()'s chars-per-
+# Use the engine's /tokenize endpoint to calibrate trim_memory()'s chars-per-
 # token ratio instead of the fixed //4 heuristic. Calibration is cached and
 # rate-limited (see core/memory.py) — this does NOT add a network call per turn.
 EXACT_TOKEN_COUNT = bool(_cfg("runtime", "exact_token_count", default=True))
@@ -319,10 +318,10 @@ AUTO_COMPACT_THRESHOLD = float(_cfg("runtime", "auto_compact_threshold", default
 # Screenshot width cap (px) for images sent to the vision model; 0 = full resolution.
 # Qwen's encoder tiles internally, so detail above ~1280px is largely discarded anyway --
 # capping here cuts the encode cost ~2x with no measured quality loss (2026-09-27).
-SCREENSHOT_MAX_WIDTH = int(_cfg("vision", "screenshot_max_width", default=0))
+SCREENSHOT_MAX_WIDTH = int(_cfg("vision", "screenshot_max_width", default=1280))
 
 # Minimum free system RAM (GB) required before Aster launches its own browser.
-# Launching Chrome on top of llama-server's mmap'd MoE experts has OOM'd this box
+# Launching Chrome on top of the LLM engine's mmap'd MoE experts has OOM'd this box
 # (2026-09-28: 2.1 GB free, commit 41.9/47.5 GB) - fail closed with a readable
 # message instead of dying mid-turn.
 BROWSER_MIN_FREE_RAM_GB = float(_cfg("automation", "browser_min_free_ram_gb", default=1.5))
@@ -473,7 +472,7 @@ DISTRACTION_KEYWORDS = dict(_kw) if isinstance(_kw, dict) else {
 AWARENESS_INTERVAL          = int(_cfg("awareness", "interval", default=300))
 AWARENESS_ACTIVE            = bool(_cfg("daemons", "awareness_mode", default=True))
 
-# llama-server health watchdog — daemon pings localhost:8080/health every 30s;
+# PolyStrata health watchdog — daemon pings localhost:8080/health every 30s;
 # 3 consecutive failures → Telegram alert, and (when autorestart is on)
 # relaunches start.bat in a new console, capped at 2 restarts per rolling hour.
 # See tools/health_watchdog.py.
@@ -502,7 +501,7 @@ llm = None
 
 
 def load_engine():
-    """Verifies the llama-server instance is reachable at localhost:8080."""
+    """Verifies the PolyStrata (Strata) engine is reachable at localhost:8080."""
     try:
         import requests
         resp = requests.post(
@@ -511,7 +510,7 @@ def load_engine():
             timeout=10,
         )
         if resp.status_code == 200:
-            print("[Aster Engine] llama-server reachable at http://localhost:8080.")
+            print("[Aster Engine] PolyStrata engine reachable at http://localhost:8080.")
         else:
             print(f"[Aster Engine] WARNING: Server returned status {resp.status_code}")
     except Exception as e:

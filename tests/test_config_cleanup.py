@@ -3,7 +3,7 @@ Tests for the open-source config-cleanup pass: secrets.yaml/self_config.yaml
 externalization, graceful degradation on blank credentials, and removal of
 hardcoded owner-identity/contact data from core/brain.py and friends.
 
-No llama-server needed. Uses monkeypatch/tmp_path rather than touching the
+No LLM server needed. Uses monkeypatch/tmp_path rather than touching the
 real secrets.yaml / self_config.yaml (which hold this installation's real
 credentials).
 """

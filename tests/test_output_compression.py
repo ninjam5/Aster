@@ -1,4 +1,4 @@
-"""Tests for core.output_compression.compress_tool_output — no llama-server
+"""Tests for core.output_compression.compress_tool_output — no LLM server
 needed; the 'research' summarize path uses an injected fake summarizer."""
 import pytest
 
@@ -88,7 +88,7 @@ def test_research_summarize_uses_injected_summarizer():
 
 def test_research_summarize_falls_back_to_truncate_on_summarizer_error():
     def bad_summarizer(messages, temperature=None, n_predict=None):
-        raise RuntimeError("llama-server down")
+        raise RuntimeError("PolyStrata down")
 
     oc.set_summarizer(bad_summarizer)
     text = "long research material. " * 500

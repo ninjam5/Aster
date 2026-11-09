@@ -1,7 +1,7 @@
 """Tests for the structured tool-result envelope (core/tool_result.py +
 core.brain execute_tool_ex/_normalize_tool_result/execute_tool split).
 
-No llama-server needed."""
+No LLM server needed."""
 import pytest
 
 import config

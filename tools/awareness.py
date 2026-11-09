@@ -30,7 +30,7 @@ AWARENESS_ACTIVE = bool(getattr(config, "AWARENESS_ACTIVE", True))
 _lock = threading.Lock()
 
 # Brain-busy semaphore — the daemon defers its LLM call when the main brain
-# is mid-turn (prevents racing on the single llama-server instance).
+# is mid-turn (prevents racing on the single PolyStrata instance).
 _brain_busy = threading.Event()
 
 current_context: dict = {

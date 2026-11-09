@@ -55,7 +55,7 @@
     },
     "navigate_to_url": {
       "shortcut": "ctrl+l",
-      "primary": "press_key('ctrl+l') -> type_text(url) -> press_key('enter')",
+      "primary": "Chain in 1 round: [press_key('ctrl+l'), type_text(url, press_enter=true)]",
       "visual_fallback": "smart_type('address and search bar at top', url, submit=true)",
       "verify": "The browser navigates to the target URL or search query"
     },

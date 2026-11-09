@@ -53,8 +53,8 @@
     },
     "search": {
       "shortcut": "ctrl+k",
-      "primary": "press_key('ctrl+l') -> type_text(query) -> press_key('enter')",
-      "visual_fallback": "smart_type('What do you want to play search bar at top', query, submit=true)",
+      "primary": "Chain in 1 round: [press_key('ctrl+l'), type_text(query, press_enter=true)]",
+      "visual_fallback": "smart_type('What do you want to play?', query, submit=true)",
       "verify": "Search results for songs, artists, and playlists load in main pane"
     },
     "toggle_shuffle": {

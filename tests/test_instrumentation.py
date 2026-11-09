@@ -1,6 +1,6 @@
 """Tests for the reliability-campaign instrumentation logger (core.instrumentation).
 
-No llama-server required: this exercises the JSONL writer/reader in isolation.
+No LLM server required: this exercises the JSONL writer/reader in isolation.
 """
 import json
 import threading

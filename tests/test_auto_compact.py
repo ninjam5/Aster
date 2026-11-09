@@ -1,5 +1,5 @@
 """Tests for auto-compaction (core.brain._compact_context_locked + the
-auto-trigger inside process_user_input). Mocked LLM — no llama-server.
+auto-trigger inside process_user_input). Mocked LLM — no LLM server.
 """
 import json
 from unittest.mock import MagicMock, patch

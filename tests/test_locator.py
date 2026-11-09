@@ -7,7 +7,7 @@ Per-feature test classes (Mohamed's standing preference):
   Feature 3 — Qwen 3.6 native vision grounding pipeline (tools/vision)
 
 Run: pytest tests/test_locator.py -v
-No llama-server, no live screen interaction — screen capture and LLM completions are mocked.
+No LLM server, no live screen interaction — screen capture and LLM completions are mocked.
 """
 import os
 import sys
@@ -269,6 +269,87 @@ class TestQwenVisionGrounding:
             assert len(boxes) == 1
             assert boxes[0]["box"] == (100, 200, 120, 40)
             assert boxes[0]["text"] == "Submit Button"
+
+    def test_qwen_vision_locate_calls_capture_screen_with_default_args(self):
+        from tools import vision
+        import core.brain
+        import pyautogui
+
+        with patch.object(vision, "capture_screen_base64", return_value="fakeb64") as mock_cap, \
+             patch.object(pyautogui, "size", return_value=(1920, 1080)), \
+             patch.object(core.brain, "_execute_llm_completion",
+                          return_value={"content": '{"found": true, "point": [500, 500]}'}):
+            vision._qwen_vision_locate("search bar")
+            mock_cap.assert_called_once_with()
+
+    def test_qwen_vision_locate_boxes_calls_capture_screen_with_default_args(self):
+        from tools import vision
+        import core.brain
+
+        with patch.object(vision, "capture_screen_base64", return_value="fakeb64") as mock_cap, \
+             patch.object(core.brain, "_execute_llm_completion",
+                          return_value={"content": '[]'}):
+            vision._qwen_vision_locate_boxes("search bar")
+            mock_cap.assert_called_once_with()
+
+    def test_qwen_vision_locate_preserves_kv_prefix(self):
+        from tools import vision
+        import core.brain
+        import pyautogui
+
+        fake_system_msg = {"role": "system", "content": "System prompt prefix"}
+        with patch.object(vision, "capture_screen_base64", return_value="fakeb64"), \
+             patch.object(pyautogui, "size", return_value=(1920, 1080)), \
+             patch.object(core.brain, "messages", [fake_system_msg]), \
+             patch.object(core.brain, "_execute_llm_completion",
+                          return_value={"content": '{"found": true, "point": [500, 500]}'}) as mock_exec:
+            vision._qwen_vision_locate("search bar")
+            mock_exec.assert_called_once()
+            _, kwargs = mock_exec.call_args
+            assert kwargs.get("tools") == core.brain.ADMIN_TOOLS
+            msgs = kwargs.get("messages", [])
+            assert len(msgs) == 2
+            assert msgs[0] == fake_system_msg
+            assert msgs[1]["role"] == "user"
+            prompt_text = msgs[1]["content"][1]["text"]
+            assert "Do NOT call any tools — return ONLY the JSON output." in prompt_text
+
+    def test_qwen_vision_locate_boxes_preserves_kv_prefix(self):
+        from tools import vision
+        import core.brain
+
+        fake_system_msg = {"role": "system", "content": "System prompt prefix"}
+        with patch.object(vision, "capture_screen_base64", return_value="fakeb64"), \
+             patch.object(core.brain, "messages", [fake_system_msg]), \
+             patch.object(core.brain, "_execute_llm_completion",
+                          return_value={"content": '[]'}) as mock_exec:
+            vision._qwen_vision_locate_boxes("search bar")
+            mock_exec.assert_called_once()
+            _, kwargs = mock_exec.call_args
+            assert kwargs.get("tools") == core.brain.ADMIN_TOOLS
+            msgs = kwargs.get("messages", [])
+            assert len(msgs) == 2
+            assert msgs[0] == fake_system_msg
+            assert msgs[1]["role"] == "user"
+            prompt_text = msgs[1]["content"][1]["text"]
+            assert "Do NOT call any tools — return ONLY the JSON output." in prompt_text
+
+    def test_qwen_vision_locate_without_system_message(self):
+        from tools import vision
+        import core.brain
+        import pyautogui
+
+        with patch.object(vision, "capture_screen_base64", return_value="fakeb64"), \
+             patch.object(pyautogui, "size", return_value=(1920, 1080)), \
+             patch.object(core.brain, "messages", []), \
+             patch.object(core.brain, "_execute_llm_completion",
+                          return_value={"content": '{"found": true, "point": [500, 500]}'}) as mock_exec:
+            vision._qwen_vision_locate("search bar")
+            mock_exec.assert_called_once()
+            _, kwargs = mock_exec.call_args
+            msgs = kwargs.get("messages", [])
+            assert len(msgs) == 1
+            assert msgs[0]["role"] == "user"
 
     def test_invalidate_screen_cache_no_error(self):
         from tools import vision

@@ -5,7 +5,7 @@ conversation_testing.py — Aster speech-style sweep harness (gogi persona)
 Purpose
 -------
 Aster's *speaking style* is the thing under test, not his correctness. This
-script sweeps several llama-server sampling presets against a fixed battery of
+script sweeps several PolyStrata sampling presets against a fixed battery of
 conversation prompts designed around the `gogi.md` best-friend persona, so you
 can eyeball — side by side — which temperature / repeat_penalty / min_p combo
 makes him sound the most natural.
@@ -25,7 +25,7 @@ The dynamic context tags the live engine injects — `CURRENT CONTEXT`,
 
 Prerequisite
 ------------
-llama-server must already be running on localhost:8080 (start.bat), serving the
+PolyStrata must already be running on localhost:8080 (qwen3.6_polystrata_start.bat), serving the
 same model build Aster uses. No other Aster services are needed.
 
 Run
@@ -61,7 +61,7 @@ API_URL = "http://localhost:8080/v1/chat/completions"
 REQUEST_TIMEOUT = 120
 
 # --------------------------------------------------------------------------- #
-# Sampling presets — each is a full sampler config sent to llama-server.
+# Sampling presets — each is a full sampler config sent to PolyStrata.
 # `repeat_penalty` and `min_p` are NOT sent by the live engine today; they are
 # the main untested levers, so most presets exercise them. `baseline` reproduces
 # exactly what config.py sends right now (the control).
@@ -422,7 +422,7 @@ def main():
     try:
         requests.get("http://localhost:8080/health", timeout=5)
     except requests.exceptions.RequestException:
-        print("[warn] Could not reach llama-server /health on localhost:8080. "
+        print("[warn] Could not reach PolyStrata /health on localhost:8080. "
               "Make sure start.bat is running. Continuing anyway...")
 
     total = len(prompt_names) * len(preset_names)

@@ -23,14 +23,14 @@
   "actions": {
     "search_chat": {
       "shortcut": "ctrl+f",
-      "primary": "press_key('ctrl+f') -> type_text(contact_or_query) -> press_key('enter')",
+      "primary": "Chain in 1 round: [press_key('ctrl+f'), type_text(contact_or_query, press_enter=true)]",
       "visual_fallback": "smart_type('Search input at top-left', contact_or_query, submit=true)",
       "verify": "Left sidebar filters to matching chats and contacts"
     },
     "send_message": {
       "shortcut": "enter",
-      "primary": "smart_type('Write a message... input at bottom', message_text, submit=true)",
-      "visual_fallback": "smart_click('Write a message... at bottom') -> type_text(message_text) -> press_key('enter')",
+      "primary": "smart_type('Write a message...', message_text, submit=true)",
+      "visual_fallback": "smart_click('Write a message... at bottom') -> type_text(message_text, press_enter=true)",
       "verify": "Message bubble is sent and appears at bottom of conversation"
     },
     "close_or_back": {

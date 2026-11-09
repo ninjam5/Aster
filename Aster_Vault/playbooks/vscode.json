@@ -29,7 +29,7 @@
     },
     "quick_open_file": {
       "shortcut": "ctrl+p",
-      "primary": "press_key('ctrl+p') -> type_text(filename) -> press_key('enter')",
+      "primary": "Chain in 1 round: [press_key('ctrl+p'), type_text(filename, press_enter=true)]",
       "visual_fallback": "smart_click('search bar at top center')",
       "verify": "Quick Open file picker opens and loads the target file"
     },

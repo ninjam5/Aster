@@ -11,8 +11,7 @@ requiring a manual model choice and manual `start.bat` editing.
 
 ## Current state (as of 2026-07-03)
 
-- `start.bat` is static — it hardcodes the model path, mmproj path, and every
-  `llama-server` flag in one literal command line.
+- The backend startup script (`qwen3.6_polystrata_start.bat`) launches the PolyStrata (Strata) engine with Qwen 3.6 35B-A3B and mmproj on GPU.
 - `self_config.yaml`'s `runtime.llm_model` is descriptive only. Nothing reads
   it to actually select a model file at boot.
 - `llama-server/` is already a vendored, self-contained binary folder
@@ -50,8 +49,8 @@ polling are all nicer to write in Python than batch — that does, in order:
 3. Ensure the chosen `.gguf` (+ mmproj) is present in `Aster_Vault/Models/`,
    downloading via `huggingface_hub.hf_hub_download` if missing (resumable,
    cached — no new dependency).
-4. Launch `llama-server.exe` as a subprocess with the picked flags.
-5. Poll `llama-server`'s `/health` endpoint until it reports ready.
+4. Launch the LLM engine server as a subprocess with the picked flags.
+5. Poll the LLM engine's `/health` endpoint until it reports ready.
 6. Launch `main.py` (the brain).
 7. Launch the dashboard (`aster-face` and/or `Aster-UI`).
 
@@ -65,7 +64,7 @@ separate features.
   E2B/E4B/12B testing, not estimates.
 - Do the E2B and 12B QAT GGUFs ship their own `mmproj`, or share the one
   already in use for E4B? Needs checking against the actual Hugging Face repos.
-- Does the vendored `llama-server` binary actually fall back to CPU-only
+- Does the backend engine binary actually fall back to CPU-only
   cleanly with no NVIDIA GPU/driver, or hard-fail looking for CUDA? Determines
   whether "no GPU" is a real supported tier or needs a separate build.
 - Batch/PowerShell script vs. a Python launcher — leaning Python, not decided.
@@ -86,7 +85,7 @@ would additionally require bundling or auto-installing:
 
 Aster's Tauri apps (`aster-face`, `Aster-UI`) already produce native
 installers (`npm run tauri build`), and Tauri's `externalBin` sidecar
-mechanism could eventually bundle `llama-server` directly into that installer
+mechanism could eventually bundle the LLM engine server directly into that installer
 — this is the same shape LM Studio / Ollama / Jan / GPT4All already ship
 (native shell + bundled/managed llama.cpp-family server + models downloaded
 separately post-install). But freezing the Python ML stack with
