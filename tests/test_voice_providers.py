@@ -635,3 +635,32 @@ class TestOverhaulDevmodeSmallEnAndLocalWs:
         assert "speaking" in types_sent
         assert "clear_audio" in types_sent
         assert webrtc_bridge.call_is_active() is False
+
+    def test_local_ws_bridge_with_deepgram_stt_session_lifecycle(self, monkeypatch):
+        """Regression test: Deepgram STT outside LiveKit worker API must not crash on missing http session."""
+        import json
+        from livekit.plugins import deepgram
+
+        monkeypatch.setattr(config, "STT_PROVIDER", "deepgram")
+        monkeypatch.setattr(config, "TTS_PROVIDER", "deepgram")
+        monkeypatch.setattr(config, "DEEPGRAM_API_KEY", "mock-deepgram-key")
+        monkeypatch.setattr(config, "WAKE_WORD_ENABLED", False)
+
+        ws = _FakeWebSocket(
+            incoming=[
+                {"type": "websocket.receive", "text": json.dumps({"type": "hangup"})},
+            ]
+        )
+
+        async def _test():
+            bridge = webrtc_bridge.LocalWebSocketVoiceBridge(ws)
+            assert getattr(bridge, "_http_session", None) is not None
+            # Deepgram STT stream should not raise RuntimeError for missing http_context
+            if isinstance(bridge._streaming_stt, deepgram.STTv2):
+                stream = bridge._streaming_stt.stream()
+                assert stream is not None
+                await stream.aclose()
+            await bridge.aclose()
+            assert bridge._http_session.closed is True
+
+        asyncio.run(_test())

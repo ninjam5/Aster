@@ -1,3 +1,4 @@
+import aiohttp
 import asyncio
 import contextlib
 import os
@@ -56,7 +57,7 @@ _active_bridge: "ManualWebRTCBridge | None" = None
 _active_loop: asyncio.AbstractEventLoop | None = None
 
 
-def _build_stt():
+def _build_stt(http_session: Any = None, **kwargs: Any):
     """Pick the STT engine for a call. Returns (base_stt, vad, streaming_stt).
 
     local    → Faster-Whisper + Silero VAD wrapped in a StreamAdapter.
@@ -68,12 +69,15 @@ def _build_stt():
         if deepgram is None:
             print("[Aster Voice] ERROR: deepgram plugin missing — falling back to local STT.")
         else:
-            base = deepgram.STTv2(
-                model=_config.DEEPGRAM_STT_MODEL,
-                sample_rate=16000,
-                keyterm=list(_config.DEEPGRAM_STT_KEYTERMS),
-                api_key=_config.DEEPGRAM_API_KEY,
-            )
+            dg_kwargs: dict[str, Any] = {
+                "model": _config.DEEPGRAM_STT_MODEL,
+                "sample_rate": 16000,
+                "keyterm": list(_config.DEEPGRAM_STT_KEYTERMS),
+                "api_key": _config.DEEPGRAM_API_KEY,
+            }
+            if http_session is not None:
+                dg_kwargs["http_session"] = http_session
+            base = deepgram.STTv2(**dg_kwargs)
             print(f"[Aster Ears] STT: Deepgram Flux ({_config.DEEPGRAM_STT_MODEL}).")
             return base, None, base
     base = LocalWhisperSTT()
@@ -81,7 +85,7 @@ def _build_stt():
     return base, vad, stt.StreamAdapter(stt=base, vad=vad)
 
 
-def _build_tts():
+def _build_tts(http_session: Any = None, **kwargs: Any):
     """Pick the TTS engine for a call (local Kokoro or Deepgram Flux TTS)."""
     if _config.TTS_PROVIDER == "deepgram":
         try:
@@ -90,6 +94,7 @@ def _build_tts():
             return DeepgramFluxTTS(
                 model=_config.DEEPGRAM_TTS_MODEL,
                 api_key=_config.DEEPGRAM_API_KEY,
+                http_session=http_session,
             )
         except Exception as e:
             print(f"[Aster Voice] ERROR: Deepgram Flux TTS unavailable ({e}) — falling back to local TTS.")
@@ -105,8 +110,26 @@ class ManualWebRTCBridge:
         # STT/TTS engine selection (config.STT_PROVIDER/TTS_PROVIDER, resolved
         # fail-closed in config.py). "local" is byte-identical to the original
         # Whisper+Kokoro path; "deepgram" uses Deepgram Flux in the cloud.
-        self._base_stt, self._vad, self._streaming_stt = _build_stt()
-        self._tts = _build_tts()
+        try:
+            self._http_session = aiohttp.ClientSession()
+        except Exception:
+            self._http_session = None
+
+        try:
+            from livekit.agents import utils
+            utils.http_context._new_session_ctx()
+        except Exception:
+            pass
+
+        try:
+            self._base_stt, self._vad, self._streaming_stt = _build_stt(http_session=self._http_session)
+        except TypeError:
+            self._base_stt, self._vad, self._streaming_stt = _build_stt()
+
+        try:
+            self._tts = _build_tts(http_session=self._http_session)
+        except TypeError:
+            self._tts = _build_tts()
         # Snapshot the STT engine so teardown releases the right resources even
         # if config is mutated at runtime.
         self._stt_is_local = _config.STT_PROVIDER == "local"
@@ -199,6 +222,10 @@ class ManualWebRTCBridge:
                 await self._base_stt.aclose()
         with contextlib.suppress(Exception):
             await self._tts.aclose()
+
+        if getattr(self, "_http_session", None) is not None and not self._http_session.closed:
+            with contextlib.suppress(Exception):
+                await self._http_session.close()
 
         self._wake_detector = None
 
@@ -797,8 +824,26 @@ class LocalWebSocketVoiceBridge(ManualWebRTCBridge):
         self._ctx = None
         self._room = None
 
-        self._base_stt, self._vad, self._streaming_stt = _build_stt()
-        self._tts = _build_tts()
+        try:
+            self._http_session = aiohttp.ClientSession()
+        except Exception:
+            self._http_session = None
+
+        try:
+            from livekit.agents import utils
+            utils.http_context._new_session_ctx()
+        except Exception:
+            pass
+
+        try:
+            self._base_stt, self._vad, self._streaming_stt = _build_stt(http_session=self._http_session)
+        except TypeError:
+            self._base_stt, self._vad, self._streaming_stt = _build_stt()
+
+        try:
+            self._tts = _build_tts(http_session=self._http_session)
+        except TypeError:
+            self._tts = _build_tts()
         self._stt_is_local = _config.STT_PROVIDER == "local"
 
         self._audio_source = None
@@ -886,6 +931,14 @@ class LocalWebSocketVoiceBridge(ManualWebRTCBridge):
         await self._run_ws_pipeline()
 
     async def _run_ws_pipeline(self) -> None:
+        try:
+            from livekit.agents import utils
+            if utils.http_context._ContextVar.get(None) is None:
+                utils.http_context._new_session_ctx()
+        except Exception:
+            pass
+        if getattr(self._streaming_stt, "_session", None) is None and getattr(self, "_http_session", None) is not None:
+            self._streaming_stt._session = self._http_session
         recognize_stream = self._streaming_stt.stream(conn_options=STT_CONN_OPTIONS)
 
         async def _receive_ws_audio() -> None:
@@ -1047,6 +1100,10 @@ class LocalWebSocketVoiceBridge(ManualWebRTCBridge):
         self._base_stt = None
         self._vad = None
         self._tts = None
+
+        if getattr(self, "_http_session", None) is not None and not self._http_session.closed:
+            with contextlib.suppress(Exception):
+                await self._http_session.close()
 
         if self._stt_is_local:
             release_whisper_model()
