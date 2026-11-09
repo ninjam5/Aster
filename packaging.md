@@ -82,7 +82,7 @@ would additionally require bundling or auto-installing:
 - The Python backend's full dependency graph (335 packages currently
   installed — CUDA torch, SpeechBrain, MediaPipe, ONNX Runtime, ChromaDB,
   dlib-based `face_recognition`).
-- Tesseract OCR, which is a separate non-pip system installer today.
+- Legacy system dependencies: previously Tesseract OCR was required, but has been completely retired in favor of native Qwen 3.6 multimodal vision grounding (Track 0 UIA + Track 1 Direct Point Grounding).
 
 Aster's Tauri apps (`aster-face`, `Aster-UI`) already produce native
 installers (`npm run tauri build`), and Tauri's `externalBin` sidecar
