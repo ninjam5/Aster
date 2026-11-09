@@ -58,16 +58,16 @@ runtime:
   debug: false                       # when true, mirror all terminal stdout/stderr to date-stamped files in Aster_Vault/console-logs/
 
 voice:
-  # Which STT/TTS engine the LiveKit CALL path uses. "local" = Faster-Whisper
-  # (medium.en) + Kokoro, fully on-device. "deepgram" = Deepgram Flux cloud
-  # (STT flux-general-en; TTS flux-{voice}-en) — audio leaves the machine, and
-  # on-call voice-ID/mood tags + the cloned voice are not available. Requires a
-  # Deepgram key in secrets.yaml; without one the providers silently stay local.
-  # Telegram voice notes and the CLI always use local Whisper regardless.
+  # Which STT/TTS engine live voice calls use (both local WebSocket /api/voice/ws
+  # and the benched LiveKit bridge). "deepgram" = Deepgram Flux cloud (STT
+  # flux-general-en on /v2/listen; TTS flux-colin-en British Jarvis voice on /v2/speak).
+  # "local" = Faster-Whisper (small.en) + Kokoro TTS (82M), fully on-device.
+  # Editable at any time; requires deepgram.api_key in secrets.yaml (falls back to local
+  # if missing). Telegram voice notes and the CLI always use local Whisper regardless.
   transport: local_ws            # local_ws (direct local WebSocket on /api/voice/ws) | livekit (benched for future mobile app)
   whisper_model: small.en        # Faster-Whisper model size (small.en | medium.en)
-  stt_provider: local            # local | deepgram
-  tts_provider: local            # local | deepgram
+  stt_provider: local         # local | deepgram
+  tts_provider: local         # local | deepgram
   deepgram_stt_model: flux-general-en     # flux-general-en | flux-general-multi
   deepgram_stt_keyterms: ["Aster"]        # bias recognition toward names/jargon
   deepgram_tts_model: flux-colin-en       # flux-{voice}-{language}; Colin = British male

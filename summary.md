@@ -424,11 +424,11 @@ When the model claims to execute a tool ("Playing on Spotify", "Taking a screens
 
 
 
-### 2.4 WebRTC Audio Bridge (`webrtc_bridge.py`)
+### 2.4 Local WebSocket Audio Bridge & Voice Transport (`webrtc_bridge.py`)
 
 
 
-**Status:** Fully implemented; **benched by default** (`daemons.webrtc_bridge: disabled`, `voice.transport: local_ws`). Voice calls default to Direct Local WebSocket audio (`WS /api/voice/ws` on port 8000).
+**Status:** Live voice calls are handled via **Direct Local WebSocket (`WS /api/voice/ws` on port 8000)** via `LocalWebSocketVoiceBridge`. The LiveKit WebRTC bridge (`ManualWebRTCBridge`) is **benched by default** (`daemons.webrtc_bridge: disabled`, `voice.transport: local_ws`) and preserved for future mobile app support.
 
 
 

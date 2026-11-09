@@ -77,7 +77,7 @@ A single PolyStrata instance (Strata engine, Qwen 3.6 35B-A3B MoE, IQ4_XS, 128k 
 | Voice ID | SpeechBrain ECAPA-TDNN speaker embeddings |
 | Vision & Locator | Windows UI Automation (Track 0) + Direct Qwen 3.6 Vision Grounding (Track 1) for UI interaction, `face_recognition` for webcam identity |
 | Memory | ChromaDB (vector) + markdown (human-readable) dual write with atomic tool-pair pop trimming |
-| Voice transport | Direct Local WebSocket (`WS /api/voice/ws`) on port 8000; LiveKit Agents SDK (`devmode=False`) |
+| Voice transport | Direct Local WebSocket (`WS /api/voice/ws` on port 8000); LiveKit WebRTC is benched by default |
 | Desktop apps | Tauri 2 + React 19 + TypeScript + Vite + TailwindCSS (`aster-face` and `Aster-UI`) |
 | Bridges | Telegram (pyTelegramBotAPI), Discord (discord.py inbound listener; Option B desktop GUI automation for outbound) |
 
