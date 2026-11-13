@@ -73,6 +73,91 @@ class TestGoalParsingAndUIA:
         assert "EditControl" in EDITABLE_CONTROL_TYPES
         assert "DocumentControl" not in EDITABLE_CONTROL_TYPES  # documents are NOT Ctrl+A-safe
 
+    def test_desktop_goal_parsing_and_flag(self):
+        """parse_goal identifies desktop target queries."""
+        assert parse_goal("on the desktop click Chrome")["is_desktop"] is True
+        assert parse_goal("open Discord desktop icon")["is_desktop"] is True
+        assert parse_goal("League of Legends desktop shortcut")["is_desktop"] is True
+        assert parse_goal("change wallpaper")["is_desktop"] is True
+        assert parse_goal("File menu")["is_desktop"] is False
+
+    def test_score_text_desktop_prioritization_and_window_penalty(self):
+        """score_text boosts desktop sources and heavily penalizes window controls for desktop goals."""
+        goal = parse_goal("Discord desktop icon")
+        desk_score = score_text("Discord", goal, cand_type="ListItemControl", cand_source="desktop")
+        win_score = score_text("Discord", goal, cand_type="ListItemControl", cand_source="window")
+
+        assert desk_score >= 0.85
+        assert win_score <= 0.45
+        assert desk_score - win_score >= 0.40
+
+    def test_desktop_candidate_box_refinement_formula(self):
+        """_collect_desktop_candidates tightly refines the upper ~48px icon box and preserves full_rect."""
+        import tools.uia as uia
+
+        class MockRect:
+            def __init__(self, l, t, r, b):
+                self.left = l
+                self.top = t
+                self.right = r
+                self.bottom = b
+
+        class MockNode:
+            def __init__(self, name, type_name, class_name, rect, children=None):
+                self.Name = name
+                self.ControlTypeName = type_name
+                self.ClassName = class_name
+                self.BoundingRectangle = rect
+                self.IsOffscreen = False
+                self._children = children or []
+
+            def GetChildren(self):
+                return self._children
+
+        shortcut = MockNode("Recycle Bin", "ListItemControl", "", MockRect(0, 5, 75, 76))
+        sys_list = MockNode("FolderView", "ListControl", "SysListView32", MockRect(0, 0, 1920, 1080), children=[shortcut])
+        def_view = MockNode("", "PaneControl", "SHELLDLL_DefView", MockRect(0, 0, 1920, 1080), children=[sys_list])
+        progman = MockNode("Program Manager", "WindowControl", "Progman", MockRect(0, 0, 1920, 1080), children=[def_view])
+        root = MockNode("Desktop", "PaneControl", "", MockRect(0, 0, 1920, 1080), children=[progman])
+
+        cands = uia._collect_desktop_candidates(root, budget_s=1.0)
+        assert len(cands) == 1
+        cand = cands[0]
+        assert cand["name"] == "Recycle Bin"
+        assert cand["source"] == "desktop"
+        assert cand["full_rect"] == (0, 5, 75, 76)
+        # Expected refined rect: (0 + (75-48)//2, 5+2, 0 + (75+48)//2, 5+48) = (13, 7, 61, 53)
+        assert cand["rect"] == (13, 7, 61, 53)
+
+    def test_uia_locate_candidates_strictly_prioritizes_desktop(self):
+        """uia_locate_candidates prioritizes desktop sources over open application window controls."""
+        from tools.uia import uia_locate_candidates
+
+        candidates = [
+            {"name": "League of Legends", "type": "ButtonControl", "rect": (100, 100, 200, 150), "source": "window"},
+            {"name": "League of Legends", "type": "ListItemControl", "rect": (26, 22, 74, 68), "source": "desktop"},
+        ]
+        match = uia_locate_candidates("open League of Legends desktop shortcut", candidates, (1920, 1080))
+        assert match is not None
+        assert match["text"] == "League of Legends"
+        assert match["type"] == "ListItemControl"
+        assert match.get("node_source") == "desktop"
+
+    def test_uia_locate_candidates_rejects_window_control_when_desktop_queried(self):
+        """uia_locate_candidates returns None when open app window control has matching text but desktop was asked."""
+        from tools.uia import uia_locate_candidates
+
+        candidates = [
+            {"name": "Discord", "type": "ButtonControl", "rect": (100, 100, 200, 150), "source": "window"},
+        ]
+        match = uia_locate_candidates("Discord on desktop", candidates, (1920, 1080))
+        assert match is None
+
+    def test_desktop_budget_constant(self):
+        """_TASKBAR_BUDGET_S is increased to 2.0s so traversing 170+ desktop icons is never cut off."""
+        import tools.uia as uia
+        assert uia._TASKBAR_BUDGET_S >= 2.0
+
 
 # ============================================================================
 # Feature 2 — deterministic action verification
@@ -282,7 +367,7 @@ class TestQwenVisionGrounding:
             vision._qwen_vision_locate("search bar")
             mock_cap.assert_called_once_with()
 
-    def test_qwen_vision_locate_boxes_calls_capture_screen_with_default_args(self):
+    def test_qwen_vision_locate_boxes_calls_capture_screen_with_native_resolution(self):
         from tools import vision
         import core.brain
 
@@ -290,7 +375,7 @@ class TestQwenVisionGrounding:
              patch.object(core.brain, "_execute_llm_completion",
                           return_value={"content": '[]'}):
             vision._qwen_vision_locate_boxes("search bar")
-            mock_cap.assert_called_once_with()
+            mock_cap.assert_called_once_with(max_width=0)
 
     def test_qwen_vision_locate_preserves_kv_prefix(self):
         from tools import vision

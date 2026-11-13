@@ -60,6 +60,8 @@ python livekit_agent.py
 
 # Run the test suites (pytest, mocked LLM — no LLM server needed)
 
+pytest tests/test_overlay_and_motor.py -v # Companion overlay, motor & assist mode tests
+
 pytest tests/test_migration.py -v   # engine adapter + tool calling + failure guards
 
 pytest tests/ -v                    # full test suite (~900 tests)
@@ -479,6 +481,21 @@ Speaker identification via SpeechBrain ECAPA-TDNN (`speechbrain/spkrec-ecapa-vox
 - **In-Loop Screenshot Tombstoning (`_prune_in_turn_screenshots`):** Before appending a new post-action `ui_screenshot_b64` in `process_user_input`, older `"Tool Execution Result: ..."` image blocks from earlier rounds of the same turn are converted in-place to `[Previous screen archived]` text tombstones (with duplicate `[UI Playbook: ...]` blocks stripped), ensuring `mmproj` only encodes the single newest screenshot each round.
 - **Sequential GUI Action Chaining (`_extra_calls`):** When Qwen 3.6 emits multiple tool calls in a single turn (e.g., `open_application` + `smart_click`, or `smart_click` + `type_text`), `_extra_calls` executes them sequentially in one round, aborts subsequent GUI steps immediately if an earlier step fails or hits a confirmation gate, and attaches only the final screenshot at the end of the chain.
 
+### Clicky Companion Overlay & Humanized Motor (`tools/overlay.py`, `tools/overlay.qml`, `tools/motor.py`)
+
+Interactive companion UI overlay and humanized input synthesis:
+- **PySide6 + QML Fullscreen Click-Through Overlay:** Runs a transparent, frameless, layered window (`WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_NOACTIVATE`) that passes all clicks and input directly to underlying desktop windows without stealing focus. Configured with Windows API `WDA_EXCLUDEFROMCAPTURE` (`0x00000011`) via `ctypes.windll.user32.SetWindowDisplayAffinity` so screenshot captures taken for Qwen Vision Grounding and diffing never see overlay elements.
+- **Cross-Thread Signal Delivery (PySide6 <-> QML):** Qt matches signal handlers in QML `Connections` by capitalizing the signal name (`sigIslandState` -> `onSigIslandState`, `sig_island_state` -> `onSig_island_state`). `OverlayBridge` defines both CamelCase and snake_case aliases, and `overlay.qml` implements handlers for both to ensure robust cross-thread event delivery without silent signal loss.
+- **Top Dynamic Island:** Sleek Jarvis Cyan (`#00F0FF`) status pill anchored at the top-center of the screen. Displays real-time state icons and labels (`listening`, `thinking`, `locating`, `acting`, `speaking`, `assist`) with smooth size transitions. Stays docked as a sleek mini-pill (`✦ Aster` or `✦ Aster • ASSIST`) at `y: 10` by default; when Assist Mode is active, auto-hide is completely suppressed so guidance status is always visible.
+- **Assist Mode Prompt Laws & Immediate Execution:** When Mohamed asks to click, locate, or point to an item in Assist Mode, Aster invokes `smart_click` or `highlight_on_screen` immediately in that turn. Conversational hedging ("Shall I highlight it for you?", "Would you like me to point to it?") is forbidden — elements are highlighted directly with the Ghost Cursor on Mohamed's display.
+- **Assist Mode (`toggle_assist_mode`, `/assist on|off`, `config.ASSIST_MODE`):**
+  - When enabled (`ASSIST_MODE = True`), Aster acts strictly as an interactive visual Co-Pilot. Physical mouse clicks (`pyautogui.click`) and keyboard input (`pyautogui.press`, `pyautogui.write`, `pyperclip.copy`) are blocked.
+  - Instead, `smart_click`, `smart_type`, and `highlight_on_screen` smoothly glide the **Ghost Cursor** along a cubic Bezier curve to the target location and paint Jarvis Cyan bounding boxes with labels (`overlay.show_highlights`), guiding the user visually without taking over control.
+- **Drive Mode (`config.ASSIST_MODE = False`):**
+  - Full autonomous desktop execution with humanized input dynamics via `tools/motor.py`.
+  - **Smooth Mouse Trajectories (`human_move_to`, `human_click`):** Generates cubic Bezier curves (`bezier_curve_points`) with perpendicular arc offsets and ease-out cubic deceleration (`ease_out_cubic`) to simulate realistic human cursor motion, followed by a subtle target lock pulse.
+  - **Hybrid Cadence Typing (`human_type`, `should_use_cadence_typing`):** Short single-line ASCII strings (`<= 80` characters, no newlines, no emojis) type character-by-character with randomized inter-key delay cadence. Long blocks, multi-line text, or Unicode characters automatically fall back to atomic clipboard paste (`Ctrl+V`). Both paths support `press_enter=True`.
+
 
 
 ### Two-Tier UI Playbooks & Gemini 3.8 Flash Self-Healing (`tools/playbooks.py`, `Aster_Vault/playbooks/`)
@@ -777,6 +794,10 @@ Main thread runs the CLI loop. Daemon threads: Telegram `infinity_polling`, Disc
 
 | `tools/assist.py` | Assist Mode — stdlib-tkinter dim overlay (`highlight_regions()`) that highlights located screen elements; backed by `locate_ui_elements_boxed()` (`_qwen_vision_locate_boxes`) in `tools/vision.py` |
 
+| `tools/overlay.py` `tools/overlay.qml` | Clicky Companion Overlay — PySide6 + QML fullscreen click-through overlay (`WS_EX_TRANSPARENT`, `WDA_EXCLUDEFROMCAPTURE`), Top Dynamic Island, Ghost Cursor, Assist Mode visual highlights |
+
+| `tools/motor.py` | Humanized Motor — cubic Bezier mouse trajectories (`ease_out_cubic`, `bezier_curve_points`, `human_move_to`), hybrid cadence typing (`human_type`) |
+
 | `tools/playbooks.py` / `Aster_Vault/playbooks/*.yaml` | Two-Tier UI Playbook engine (Desktop Apps + Web Domains), active-window `[UI Playbook: ...]` hint formatter, `get_ui_playbook` tool, and Gemini 3.8 Flash (`gemini-3.8-flash`) dynamic playbook learning & multimodal self-healing |
 
 | `tools/discord_listener.py` `tools/discord_api.py` | Discord inbound / outbound |
@@ -808,4 +829,6 @@ Main thread runs the CLI loop. Daemon threads: Telegram `infinity_polling`, Disc
 | `tests/test_migration.py` | PyTest suite (mocked LLM) |
 
 | `tests/test_locator.py` | PyTest suite for GUI locator (UIA + Direct Qwen 3.6 Vision Grounding; mocked LLM, no LLM server) |
+
+| `tests/test_overlay_and_motor.py` | PyTest suite for companion overlay, humanized motor, Assist Mode vs Drive Mode dispatch, and QML validation |
 

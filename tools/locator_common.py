@@ -16,6 +16,8 @@ FILLER_WORDS = {
     "item", "element", "control", "text", "input", "area", "section",
     "screen", "window", "page", "side", "corner", "upper", "lower",
     "top", "bottom", "left", "right", "center", "middle",
+    "app", "application", "shortcut", "launcher", "desktop",
+    "open", "launch", "click", "find", "select", "press",
 }
 
 # Element-kind hints → UIA ControlTypeName(s) they correspond to.
@@ -29,6 +31,11 @@ TYPE_HINTS = {
     "bar": {"EditControl", "ComboBoxControl"},   # "search bar"
     "box": {"EditControl", "ComboBoxControl", "CheckBoxControl"},
     "input": {"EditControl", "ComboBoxControl"},
+    "icon": {"ListItemControl", "ButtonControl"},
+    "app": {"ListItemControl", "ButtonControl"},
+    "application": {"ListItemControl", "ButtonControl"},
+    "shortcut": {"ListItemControl", "ButtonControl"},
+    "launcher": {"ListItemControl", "ButtonControl"},
 }
 
 _SPATIAL_WORDS = {
@@ -61,20 +68,24 @@ def parse_goal(goal: str) -> dict:
     if not content:  # goal was ALL filler ("the top bar") — keep everything
         content = words
 
+    is_desktop = bool(re.search(r"\b(?:desktop|wallpaper)\b", raw))
+
     return {
         "raw": raw,
         "clean": " ".join(content),
         "tokens": set(content),
         "spatial": spatial,
         "type_hints": type_hints,
+        "is_desktop": is_desktop,
     }
 
 
-def score_text(candidate: str, parsed: dict, cand_type: str = "") -> float:
+def score_text(candidate: str, parsed: dict, cand_type: str = "", cand_source: str = "") -> float:
     """Fuzzy-match a candidate label against a parsed goal → 0.0-1.0.
 
     Scores candidate text against the filler-stripped goal. Uses strict token
     coverage so generic container labels never hijack goals that name a specific subject.
+    Prioritizes authentic desktop shortcuts and penalizes active window controls for desktop goals.
     """
     text = (candidate or "").lower().strip()
     if not text:
@@ -83,24 +94,27 @@ def score_text(candidate: str, parsed: dict, cand_type: str = "") -> float:
     clean = parsed.get("clean", "")
     tokens = parsed.get("tokens", set())
 
-    if text == clean:
+    cand_words_list = re.findall(r"[a-z0-9']+", text)
+    cand_clean = " ".join([w for w in cand_words_list if w not in FILLER_WORDS])
+
+    if text == clean or (cand_clean and cand_clean == clean):
         score = 1.0
     else:
-        cand_words = set(re.findall(r"[a-z0-9']+", text))
+        cand_words = set(cand_words_list)
         overlap = len(cand_words & tokens) / max(len(tokens), 1)
         seq = difflib.SequenceMatcher(None, text, clean).ratio()
 
         # Case 2: Entire goal contained in candidate (e.g. "save" in "save as", "ob" in "ob the_ob")
-        substr = 0.95 if (clean and clean in text) else 0.0
+        substr = 0.95 if (clean and (clean in text or clean in cand_clean)) else 0.0
 
         # Case 3: Candidate is a substring of goal (e.g. "Search" in "the search bar")
-        if text and text in clean and len(text) >= 2:
+        if (text and text in clean and len(text) >= 2) or (cand_clean and cand_clean in clean and len(cand_clean) >= 2):
             if overlap >= 0.75:
                 substr = max(substr, 0.90)
             else:
                 substr = 0.0
 
-        if overlap < 0.75 and not (clean and clean in text):
+        if overlap < 0.75 and not (clean and (clean in text or clean in cand_clean)):
             seq = min(seq, overlap * 0.70)
             token_score = overlap * 0.70
         else:
@@ -113,6 +127,33 @@ def score_text(candidate: str, parsed: dict, cand_type: str = "") -> float:
         parsed.get("type_hints") and cand_type in parsed["type_hints"]
     ):
         score = max(0.0, score - 0.30)
+
+    # Control Type Disambiguation: when goal names an 'icon', 'app', 'application',
+    # 'shortcut', 'launcher', or 'button', generic TextControl body text inside
+    # chat/document windows must be penalized (-0.45 or rejected) so passive text
+    # messages never outscore real launcher controls (ListItemControl on desktop,
+    # ButtonControl/ToolBarControl on taskbar).
+    raw_goal = parsed.get("raw", "")
+    goal_words = set(re.findall(r"[a-z0-9']+", raw_goal.lower())) if raw_goal else set()
+    if not goal_words:
+        goal_words = set(re.findall(r"[a-z0-9']+", parsed.get("clean", "").lower())) | set(parsed.get("tokens", set()))
+
+    disambig_words = {"icon", "app", "application", "shortcut", "launcher", "button"}
+    if cand_type in ("TextControl", "DocumentControl", "Text") and (goal_words & disambig_words):
+        score = max(0.0, score - 0.45)
+
+    # Desktop Target Prioritization: when goal queries a desktop icon ('desktop',
+    # 'on the desktop', 'desktop icon', 'desktop shortcut'), strictly prioritize
+    # candidates from source == 'desktop', and heavily penalize or exclude internal
+    # application window controls (such as Electron/Telegram chat text, buttons,
+    # and listitems from Antigravity/Chrome/Telegram) so open application windows
+    # cannot hijack desktop goals.
+    is_desktop = parsed.get("is_desktop") or bool(re.search(r"\b(?:desktop|wallpaper)\b", raw_goal))
+    if is_desktop:
+        if cand_source == "desktop":
+            score = min(1.0, score + 0.15)
+        elif cand_source in ("window", "app", "taskbar") or (cand_source and cand_source != "desktop"):
+            score = max(0.0, score - 0.60)
 
     return score
 

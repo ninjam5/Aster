@@ -103,11 +103,25 @@ def highlight_regions(boxes, duration=6.0):
     `boxes` is a list of dicts with a "box": (left, top, width, height) entry in
     logical screen pixels (as returned by vision.locate_ui_elements_boxed).
     Auto-dismisses after `duration`s or on any key/click. Any prior overlay is
-    replaced. A tkinter failure is logged and swallowed — never crashes callers.
+    replaced. A failure is logged and swallowed — never crashes callers.
     """
     if not boxes:
         return
-    # Replace any overlay currently on screen.
+
+    # 1. Prefer modern QML HUD Overlay if available & enabled
+    try:
+        import config
+        if getattr(config, "OVERLAY_ENABLED", True):
+            import tools.overlay as _overlay
+            if not _overlay.is_overlay_running():
+                _overlay.start_overlay_daemon()
+            if _overlay.is_overlay_running():
+                _overlay.show_highlights(boxes, duration=duration, move_ghost=True)
+                return
+    except Exception:
+        pass  # Fall through to legacy tkinter fallback
+
+    # 2. Legacy tkinter fallback
     with _lock:
         prior = _active_root
     if prior is not None:

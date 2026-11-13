@@ -53,6 +53,8 @@ livekit
 livekit-agents
 livekit-plugins-silero
 livekit-api
+# --- desktop companion overlay ---
+PySide6
 # --- automation / web ---
 playwright
 # --- agent kernel (System-1) ---

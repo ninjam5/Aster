@@ -403,6 +403,11 @@ class ManualWebRTCBridge:
                     # the brain mid-sentence. If Aster is already replying, barge-in.
                     self._cancel_debounce()
                     await self._cancel_active_response(reason="barge-in", clear_audio=True)
+                    try:
+                        from tools import overlay as _overlay
+                        _overlay.set_island_state("listening", "Listening...")
+                    except Exception:
+                        pass
                     continue
 
                 if speech_event.type != stt.SpeechEventType.FINAL_TRANSCRIPT:
@@ -488,6 +493,11 @@ class ManualWebRTCBridge:
                 pass
 
         try:
+            try:
+                from tools import overlay as _overlay
+                _overlay.set_island_state("thinking", f'"{transcript[:42]}"')
+            except Exception:
+                pass
             # Keep the synchronous orchestrator off the RTC loop thread.
             brain_task = asyncio.create_task(
                 asyncio.to_thread(process_user_input, transcript, _status_callback),
@@ -982,9 +992,21 @@ class LocalWebSocketVoiceBridge(ManualWebRTCBridge):
         async def _consume_stt_events() -> None:
             try:
                 async for speech_event in recognize_stream:
-                    if speech_event.type == stt.SpeechEventType.START_OF_SPEECH:
+                    _ev_type = getattr(speech_event, "type", None)
+                    _ev_str = str(_ev_type).lower()
+                    if (
+                        _ev_type == stt.SpeechEventType.START_OF_SPEECH
+                        or "start_of_speech" in _ev_str
+                        or "startofturn" in _ev_str
+                        or "start_of_turn" in _ev_str
+                    ):
                         self._cancel_debounce()
                         await self._cancel_active_response(reason="barge-in", clear_audio=True)
+                        try:
+                            from tools import overlay as _overlay
+                            _overlay.set_island_state("listening", "Listening...")
+                        except Exception:
+                            pass
                         continue
 
                     if speech_event.type != stt.SpeechEventType.FINAL_TRANSCRIPT:
@@ -1036,6 +1058,11 @@ class LocalWebSocketVoiceBridge(ManualWebRTCBridge):
         return tasks_to_wait
 
     async def _speak(self, text: str, response_epoch: int) -> None:
+        try:
+            from tools import overlay as _overlay
+            _overlay.set_island_state("speaking", "Speaking...")
+        except Exception:
+            pass
         _t_speak0 = time.monotonic()
         synth_stream = self._tts.synthesize(text, conn_options=TTS_CONN_OPTIONS)
         _first = True
@@ -1064,6 +1091,11 @@ class LocalWebSocketVoiceBridge(ManualWebRTCBridge):
                     remaining = self._playout_until - time.monotonic()
                     if remaining > 0:
                         await asyncio.sleep(remaining)
+                    try:
+                        from tools import overlay as _overlay
+                        _overlay.set_island_state("idle", "Aster", auto_idle_sec=3.5)
+                    except Exception:
+                        pass
         except asyncio.CancelledError:
             self._playout_until = 0.0
             await self._send_json({"type": "clear_audio"})
@@ -1079,6 +1111,11 @@ class LocalWebSocketVoiceBridge(ManualWebRTCBridge):
             return
         self._closed = True
         self._stop_event.set()
+        try:
+            from tools import overlay as _overlay
+            _overlay.set_island_state("idle", "Aster", auto_idle_sec=3.5)
+        except Exception:
+            pass
 
         await self._cancel_active_response(reason="shutdown", clear_audio=False)
 

@@ -4,6 +4,7 @@ import re
 import json
 import difflib
 import time
+from typing import Optional, Any
 import requests
 import pyautogui
 import pyperclip
@@ -32,6 +33,10 @@ from tools.vision import (
 )
 from tools.uia import get_foreground_window_title, focused_control_type, EDITABLE_CONTROL_TYPES
 from tools.assist import highlight_regions
+try:
+    from tools import overlay
+except Exception:
+    overlay = None
 from tools.discord_api import (
     contact_names, laya_pick_contact, looks_like_contact, resolve_contact,
     resolve_typo, send_discord_message,
@@ -1180,10 +1185,12 @@ ADMIN_TOOLS = [
         "function": {
             "name": "smart_click",
             "description": (
-                "Clicks a UI element on screen. "
-                "Pass a natural language description of the element to click. "
+                "Clicks a UI element on screen. In Assist Mode (config.ASSIST_MODE is True), "
+                "smart_click automatically glides the Jarvis Cyan Ghost Cursor to the target and highlights "
+                "it on Mohamed's screen without touching the physical mouse or clicking. "
+                "Pass a natural language description of the element to click or point to. "
                 "Works on buttons, links, menu items, icons, input fields, and checkboxes. "
-                "Call smart_click directly when asked to click, open, or interact with a known button, icon, or menu item — do NOT call look_at_screen first. "
+                "Call smart_click directly when asked to click, open, point to, or interact with a known button, icon, or menu item — do NOT call look_at_screen first. "
                 "Set clicks=2 for double-clicking desktop icons or files. "
                 "Do NOT use for keyboard keys (Enter, Tab, Escape, etc.) — use press_key instead. "
                 "The result reports how the element was matched and the foreground window; "
@@ -1404,10 +1411,13 @@ ADMIN_TOOLS = [
         "function": {
             "name": "highlight_on_screen",
             "description": (
-                "Assist Mode — visually point something out on screen. Dims the entire screen "
-                "and highlights every on-screen match for the requested item with a bright box. "
-                "Use this whenever the user asks WHERE something is ('where is X', 'find X on my "
-                "screen', 'point me to X'). Does NOT click anything — it only highlights."
+                "Assist Mode — visually point something out on screen. Highlights every on-screen "
+                "match for the requested item with neon cyan laser boxes and glides the Ghost Cursor "
+                "to the primary match on Mohamed's display. Use this whenever the user asks WHERE "
+                "something is or to locate/point to elements ('where is X', 'find X on my screen', "
+                "'point me to X', 'locate the X icons'). Does NOT physically click anything — "
+                "it renders immediately on screen. Never ask permission to highlight — invoke this "
+                "tool immediately and inform Mohamed where they are."
             ),
             "parameters": {
                 "type": "object",
@@ -1421,6 +1431,32 @@ ADMIN_TOOLS = [
                     }
                 },
                 "required": ["goal"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "toggle_assist_mode",
+            "description": (
+                "Turns Assist Mode (Clicky Co-Pilot mode) on or off. When Assist Mode is ON, "
+                "Aster NEVER physically clicks the mouse or types on the keyboard — instead, "
+                "Aster summons the Jarvis Cyan Ghost Cursor to point at and highlight UI "
+                "elements on screen to guide the user visually. When OFF (Drive Mode), Aster "
+                "physically moves the mouse, clicks, and types to automate tasks."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "state": {
+                        "type": "boolean",
+                        "description": (
+                            "True to enable Assist Mode (point and highlight only), False "
+                            "to return to Drive Mode (autonomous clicking and typing)."
+                        )
+                    }
+                },
+                "required": ["state"]
             }
         }
     },
@@ -1860,6 +1896,65 @@ def _get_ui_guide(screen_description: str) -> str:
     return ""
 
 
+def _emit_overlay_state(state: str, text: str = "", subtext: str = "", auto_idle_sec: float = 0.0) -> None:
+    """Best-effort helper to update the Top Dynamic Island overlay state."""
+    try:
+        from tools import overlay as _overlay
+        if hasattr(_overlay, "set_island_state"):
+            _overlay.set_island_state(state, text=text, subtext=subtext, auto_idle_sec=auto_idle_sec)
+    except Exception:
+        pass
+
+
+def _friendly_tool_overlay_label(tool_name: str, args: dict) -> tuple[str, str]:
+    """Map tool calls to crisp human-readable status texts for the Dynamic Island."""
+    args = args or {}
+    assist_active = getattr(config, "ASSIST_MODE", False)
+    if tool_name == "open_application":
+        return ("acting", f"Opening {args.get('app_name', 'app')}...")
+    if tool_name == "smart_click":
+        prefix = "Pointing to" if assist_active else "Clicking"
+        return ("assist" if assist_active else "acting", f"{prefix} '{str(args.get('goal', ''))[:32]}'")
+    if tool_name == "smart_type":
+        prefix = "Highlighting" if assist_active else "Typing in"
+        return ("assist" if assist_active else "acting", f"{prefix} '{str(args.get('goal', ''))[:28]}'")
+    if tool_name == "type_text":
+        return ("acting", f"Typing '{str(args.get('text', ''))[:25]}...'")
+    if tool_name == "press_key":
+        return ("acting", f"Pressing {str(args.get('key', '')).upper()}")
+    if tool_name == "highlight_on_screen":
+        return ("assist", f"Highlighting '{str(args.get('goal', ''))[:30]}'")
+    if tool_name == "look_at_screen":
+        return ("locating", "Inspecting screen...")
+    if tool_name == "zoom_and_read":
+        return ("locating", f"Zooming into '{str(args.get('region', ''))[:28]}'")
+    if tool_name in ("research", "browse_web"):
+        query = args.get("topic") or args.get("query") or args.get("url") or ""
+        return ("thinking", f"Researching '{str(query)[:30]}'")
+    if tool_name == "toggle_assist_mode":
+        target_state = _as_bool(args.get("state", False))
+        return ("assist" if target_state else "idle", f"{'Enabling' if target_state else 'Disabling'} Assist Mode...")
+    return ("acting", f"Running {tool_name}...")
+
+
+def set_assist_mode(state: bool) -> str:
+    """Set Assist Mode state, reliably updating config, overlay badge, and Dynamic Island."""
+    state = bool(state)
+    config.ASSIST_MODE = state
+    try:
+        from tools import overlay as _overlay
+        _overlay.set_assist_mode_badge(state)
+        if state:
+            _overlay.set_island_state("assist", "Assist Mode Active", "Point & Highlight Only", auto_idle_sec=3.5)
+        else:
+            _overlay.set_island_state("idle", "Drive Mode Active", auto_idle_sec=3.0)
+            _overlay.clear_highlights()
+    except Exception:
+        pass
+    mode_str = "ENABLED (Co-Pilot: Ghost Cursor pointing & highlighting only; physical mouse/keyboard actions disabled)" if state else "DISABLED (Drive Mode: full physical mouse & keyboard automation active)"
+    return f"[Assist Mode: {mode_str}]"
+
+
 # ============================================================================
 # TOOL ROUTING MAP: Maps function names to actual Python callables
 # ============================================================================
@@ -2168,7 +2263,7 @@ def _execute_tool_impl(tool_name, arguments):
         }
         if goal.strip().lower() in _KEY_NAMES:
             return f'Error: Use press_key("{goal.lower()}") to press keyboard keys, not smart_click.'
-        if config.USE_DOM_MOTOR:
+        if config.USE_DOM_MOTOR and not getattr(config, "ASSIST_MODE", False):
             try:
                 from tools.dom import web_click
                 dom_result = web_click(
@@ -2178,25 +2273,30 @@ def _execute_tool_impl(tool_name, arguments):
                     return dom_result
             except Exception as e:
                 print(f"[DOM] web click path failed: {e}")
-        fg_before = (get_foreground_window_title() or "").strip()
-        if "aster_local" in fg_before.lower():
-            return tool_fail(
-                f"FAILED — BLOCKED — The active foreground window is currently {fg_before!r} "
-                f"(your own Telegram control chat). Typing here would send a message to yourself! "
-                f"Call open_application('<target_app>') or smart_click the target window first "
-                f"before calling smart_type."
-            )
-        if _as_bool(arguments.get("_unfocused_turn_start")):
-            return tool_fail(
-                f"FAILED — BLOCKED — You called smart_type at the start of a new turn before "
-                f"focusing or clicking any target window (foreground window is currently {fg_before!r}). "
-                f"Because the user just switched windows to send you this command, you MUST call "
-                f"open_application('<app>') or smart_click the target input box in THIS turn before calling smart_type."
-            )
         loc = locate_ui_element_ex(goal)
         if not loc:
             return tool_fail(f'FAILED — could not locate "{goal}" on screen. Nothing was clicked. '
                              f'Try a more specific or differently-worded description, or use look_at_screen first.')
+        if getattr(config, "ASSIST_MODE", False):
+            box = loc.get("box") or (max(0, loc["x"] - 45), max(0, loc["y"] - 22), 90, 44)
+            highlight_item = [{"box": box, "text": goal, "score": loc.get("score", 0.9)}]
+            try:
+                from tools import overlay as _overlay
+                _overlay.show_highlights(highlight_item, duration=6.0, move_ghost=True)
+                if hasattr(_overlay, "move_ghost_cursor"):
+                    _overlay.move_ghost_cursor(loc["x"], loc["y"], label=goal)
+            except Exception:
+                try:
+                    highlight_regions(highlight_item, duration=6.0)
+                except Exception:
+                    pass
+            return _attach_action_screenshot(
+                f"[Assist Mode] Pointed Ghost Cursor and highlighted '{goal}' at ({loc['x']}, {loc['y']}) for the user. "
+                f"(Assist Mode is ON — physical clicking is disabled; only pointing and highlighting are allowed. "
+                f"State clearly to Mohamed that you have pointed to and highlighted '{goal}' for him on screen. "
+                f"Do NOT ask if you should highlight it or click it.)",
+                action="smart_click"
+            )
         # ID 17 (QA round 3): the send/destructive gate now covers the NATIVE path too.
         # It was enforced only inside the web DOM path, so a native app's Delete / Send /
         # Buy control was clicked silently. Same policy and same `confirm_send` escape
@@ -2226,7 +2326,11 @@ def _execute_tool_impl(tool_name, arguments):
             button = "left"
         coords = (loc["x"], loc["y"])
         pre_frame = capture_screen_small_gray()
-        pyautogui.click(coords[0], coords[1], clicks=clicks, button=button)
+        try:
+            from tools import motor as _motor
+            _motor.human_click(coords[0], coords[1], clicks=clicks, button=button, label=goal)
+        except Exception:
+            pyautogui.click(coords[0], coords[1], clicks=clicks, button=button)
         invalidate_screen_cache()
         time.sleep(0.8)
         changed = screens_differ(pre_frame, capture_screen_small_gray())
@@ -2276,7 +2380,7 @@ def _execute_tool_impl(tool_name, arguments):
                     return tool_fail(
                         f'FAILED — BLOCKED — could not verify that submitting "{goal}" is safe '
                         f'(the check errored). Re-call with confirm_send=true.')
-        if config.USE_DOM_MOTOR:
+        if config.USE_DOM_MOTOR and not getattr(config, "ASSIST_MODE", False):
             try:
                 from tools.dom import web_type
                 dom_result = web_type(goal, text, submit=submit,
@@ -2285,6 +2389,27 @@ def _execute_tool_impl(tool_name, arguments):
                     return dom_result
             except Exception as e:
                 print(f"[DOM] web type path failed: {e}")
+        if getattr(config, "ASSIST_MODE", False):
+            loc = locate_ui_element_ex(goal)
+            if not loc:
+                return tool_fail(f'FAILED — could not locate "{goal}" on screen. Nothing was typed. '
+                                 f'Try a different description, or use look_at_screen first.')
+            box = (max(0, loc["x"] - 60), max(0, loc["y"] - 22), 120, 44)
+            label = f"{goal} → Type: {text[:30]}"
+            highlight_item = [{"box": box, "text": label, "score": loc.get("score", 0.9)}]
+            try:
+                from tools import overlay as _overlay
+                _overlay.show_highlights(highlight_item, duration=6.0, move_ghost=True)
+            except Exception:
+                try:
+                    highlight_regions(highlight_item, duration=6.0)
+                except Exception:
+                    pass
+            return _attach_action_screenshot(
+                f"[Assist Mode] Pointed Ghost Cursor and highlighted '{goal}' at ({loc['x']}, {loc['y']}) — guiding user to type {text!r}. "
+                f"(Assist Mode is ON — physical typing is disabled.)",
+                action="smart_type"
+            )
         fg_before = (get_foreground_window_title() or "").strip()
         if "aster_local" in fg_before.lower():
             return tool_fail(
@@ -2323,7 +2448,11 @@ def _execute_tool_impl(tool_name, arguments):
                     f'FAILED — BLOCKED — could not verify that "{goal}" is safe to click '
                     f'(the send/destructive check errored). Re-call with confirm_send=true.')
         coords = (loc["x"], loc["y"])
-        pyautogui.click(coords[0], coords[1])
+        try:
+            from tools import motor as _motor
+            _motor.human_click(coords[0], coords[1], label=goal)
+        except Exception:
+            pyautogui.click(coords[0], coords[1])
         invalidate_screen_cache()
         time.sleep(0.25)
         # Focus safety: Ctrl+A-then-paste into the WRONG element (an open
@@ -2342,11 +2471,15 @@ def _execute_tool_impl(tool_name, arguments):
             return tool_fail(f'FAILED — clicked "{goal}" at {coords} but keyboard focus landed on a '
                              f'{ftype}, not a text field. Nothing was typed. Locate the correct '
                              f'input field and try again.')
-        pyperclip.copy(text)
-        pyautogui.hotkey("ctrl", "v")
-        if submit:
-            time.sleep(0.2)
-            pyautogui.press("enter")  # run the search / submit the form
+        try:
+            from tools import motor as _motor
+            _motor.human_type(text, press_enter=submit)
+        except Exception:
+            pyperclip.copy(text)
+            pyautogui.hotkey("ctrl", "v")
+            if submit:
+                time.sleep(0.2)
+                pyautogui.press("enter")  # run the search / submit the form
         invalidate_screen_cache()
         time.sleep(0.3)
         fg_title = get_foreground_window_title()
@@ -2361,6 +2494,13 @@ def _execute_tool_impl(tool_name, arguments):
         if not text:
             return "Error: text parameter is required."
         press_enter = _as_bool(arguments.get("press_enter", False))
+        if getattr(config, "ASSIST_MODE", False):
+            try:
+                from tools import overlay as _overlay
+                _overlay.set_island_state("assist", f"Type: {text[:32]}", "Assist Mode", auto_idle_sec=5.0)
+            except Exception:
+                pass
+            return f"[Assist Mode] Displayed typing guidance for {text!r} on the Top Island. (Assist Mode is ON — physical typing is disabled; use highlight_on_screen or smart_click to point at elements.)"
         # QA round 7: pasting multi-line text into a focused terminal EXECUTES it (each
         # newline is a command). Gate it like the other destructive actions.
         if ("\n" in text or "\r" in text) and not _as_bool(arguments.get("confirm_send")):
@@ -2383,11 +2523,15 @@ def _execute_tool_impl(tool_name, arguments):
                 f"Because the user just switched windows to send you this command, you MUST call "
                 f"open_application('<app>') or smart_click the target input box in THIS turn before calling type_text."
             )
-        pyperclip.copy(text)
-        pyautogui.hotkey("ctrl", "v")
-        if press_enter:
-            time.sleep(0.40)
-            pyautogui.press("enter")
+        try:
+            from tools import motor as _motor
+            _motor.human_type(text, press_enter=press_enter)
+        except Exception:
+            pyperclip.copy(text)
+            pyautogui.hotkey("ctrl", "v")
+            if press_enter:
+                time.sleep(0.40)
+                pyautogui.press("enter")
         invalidate_screen_cache()
         time.sleep(0.3)
         fg_title = get_foreground_window_title()
@@ -2399,6 +2543,25 @@ def _execute_tool_impl(tool_name, arguments):
         key = str(arguments.get("key", "")).strip().lower()
         if not key:
             return "Error: key parameter is required."
+        if getattr(config, "ASSIST_MODE", False):
+            norm_key = key.replace(" ", "").lower()
+            _WINDOW_MANIP_KEYS = (
+                "win+d", "win+down", "alt+space", "win+m", "win+up", "win+left",
+                "win+right", "alt+f4", "alt+tab", "win+tab", "win+shift+m",
+                "win+shift+down", "windows+d", "windows+down", "windows+m",
+            )
+            if norm_key in _WINDOW_MANIP_KEYS or any(k in norm_key for k in ("win+d", "win+down", "alt+space", "win+m")):
+                return (
+                    "[Assist Mode] Physical window manipulation and key presses are disabled in Assist Mode. "
+                    "Do NOT attempt to minimize windows or manipulate the OS. "
+                    "Your role is strictly to guide Mohamed with the Ghost Cursor. Conclude your turn now."
+                )
+            try:
+                from tools import overlay as _overlay
+                _overlay.set_island_state("assist", f"Press Key: {key.upper()}", "Assist Mode", auto_idle_sec=5.0)
+            except Exception:
+                pass
+            return f"[Assist Mode] Displayed key guidance 'Press {key.upper()}' on the Top Island. (Assist Mode is ON — physical key presses are disabled.)"
         # QA round 9: "del" is a valid pyautogui alias for Delete and was slipping past.
         # Delete/Backspace are destructive regardless of the window, so they do NOT get
         # the search-like exemption (which exists for submit-ish keys).
@@ -2439,6 +2602,9 @@ def _execute_tool_impl(tool_name, arguments):
         task = str(arguments.get("task", "") or "").strip()
         failed_step = str(arguments.get("failed_step", "") or "").strip()
         return get_ui_playbook(app_or_site=app_or_site, task=task, failed_step=failed_step)
+    elif tool_name == "toggle_assist_mode":
+        state = _as_bool(arguments.get("state", False))
+        return set_assist_mode(state)
     elif tool_name == "highlight_on_screen":
         goal = arguments.get("goal", "")
         if not goal:
@@ -2446,8 +2612,27 @@ def _execute_tool_impl(tool_name, arguments):
         matches = locate_ui_elements_boxed(goal)
         if not matches:
             return tool_fail(f'FAILED — could not locate "{goal}" on screen. Nothing was highlighted.')
-        highlight_regions(matches)
-        return f'Highlighting {len(matches)} match(es) for "{goal}" on screen.'
+        try:
+            from tools import overlay as _overlay
+            _overlay.show_highlights(matches, duration=6.0, move_ghost=True)
+        except Exception:
+            highlight_regions(matches)
+        coords_summary = []
+        for idx, m in enumerate(matches[:3]):
+            b = m.get("box", (0, 0, 0, 0))
+            cx = b[0] + b[2] // 2
+            cy = b[1] + b[3] // 2
+            lbl = m.get("text") or m.get("label") or goal
+            coords_summary.append(f"#{idx+1} at ({cx},{cy}) [{lbl}]")
+        summary_str = "; ".join(coords_summary)
+        result_msg = (
+            f"[Assist Mode] Highlighted {len(matches)} match(es) for '{goal}' on screen with laser boxes and "
+            f"glided the Ghost Cursor to the primary target ({summary_str}). "
+            f"These visual highlights are actively displayed on Mohamed's screen right now. "
+            f"State clearly to Mohamed that they are highlighted and point out where they are on screen. "
+            f"Do NOT ask if you should highlight them — they are ALREADY highlighted."
+        )
+        return result_msg
     elif tool_name == "smart_scroll":
         direction = arguments.get("direction", "down")
         clicks = int(arguments.get("clicks", 3))
@@ -2468,6 +2653,27 @@ def _execute_tool_impl(tool_name, arguments):
         goal = arguments.get("goal", "")
         if not goal:
             return "Error: goal parameter is required."
+        if getattr(config, "ASSIST_MODE", False):
+            loc = locate_ui_element_ex(goal)
+            if not loc:
+                return tool_fail(f'FAILED — could not locate "{goal}" to hover over.')
+            box = loc.get("box") or (max(0, loc["x"] - 45), max(0, loc["y"] - 22), 90, 44)
+            highlight_item = [{"box": box, "text": f"Hover: {goal}", "score": loc.get("score", 0.9)}]
+            try:
+                from tools import overlay as _overlay
+                _overlay.show_highlights(highlight_item, duration=6.0, move_ghost=True)
+                if hasattr(_overlay, "move_ghost_cursor"):
+                    _overlay.move_ghost_cursor(loc["x"], loc["y"])
+            except Exception:
+                try:
+                    highlight_regions(highlight_item, duration=6.0)
+                except Exception:
+                    pass
+            return _attach_action_screenshot(
+                f"[Assist Mode] Pointed Ghost Cursor and highlighted '{goal}' at ({loc['x']}, {loc['y']}) for hover. "
+                f"(Assist Mode is ON — physical mouse movement is disabled.)",
+                action="mouse_hover"
+            )
         loc = hover_ui_element(goal)
         if not loc:
             return tool_fail(f'FAILED — could not locate "{goal}" to hover over.')
@@ -2478,6 +2684,38 @@ def _execute_tool_impl(tool_name, arguments):
         if not source or not target:
             return "Error: source and target parameters are required."
         duration = float(arguments.get("duration", 0.5))
+        if getattr(config, "ASSIST_MODE", False):
+            loc_src = locate_ui_element_ex(source)
+            if not loc_src:
+                return tool_fail(f'FAILED — could not locate source element "{source}".')
+            loc_dst = locate_ui_element_ex(target)
+            if not loc_dst:
+                return tool_fail(f'FAILED — could not locate target element "{target}".')
+            box_src = loc_src.get("box") or (max(0, loc_src["x"] - 45), max(0, loc_src["y"] - 22), 90, 44)
+            box_dst = loc_dst.get("box") or (max(0, loc_dst["x"] - 45), max(0, loc_dst["y"] - 22), 90, 44)
+            highlight_items = [
+                {"box": box_src, "text": f"1. Drag from: {source}", "score": loc_src.get("score", 0.9)},
+                {"box": box_dst, "text": f"2. Drop at: {target}", "score": loc_dst.get("score", 0.9)},
+            ]
+            try:
+                from tools import overlay as _overlay
+                _overlay.show_highlights(highlight_items, duration=6.0, move_ghost=False)
+                if hasattr(_overlay, "glide_ghost_cursor"):
+                    _overlay.glide_ghost_cursor(loc_src["x"], loc_src["y"], loc_dst["x"], loc_dst["y"], duration=duration)
+                elif hasattr(_overlay, "move_ghost_cursor"):
+                    _overlay.move_ghost_cursor(loc_src["x"], loc_src["y"], label=f"Drag: {source}", duration_ms=250)
+                    time.sleep(0.2)
+                    _overlay.move_ghost_cursor(loc_dst["x"], loc_dst["y"], label=f"Drop: {target}", duration_ms=int(duration * 1000))
+            except Exception:
+                try:
+                    highlight_regions(highlight_items, duration=6.0)
+                except Exception:
+                    pass
+            return _attach_action_screenshot(
+                f"[Assist Mode] Pointed Ghost Cursor and highlighted drag path: '{source}' ({loc_src['x']}, {loc_src['y']}) → '{target}' ({loc_dst['x']}, {loc_dst['y']}). "
+                f"(Assist Mode is ON — physical dragging is disabled.)",
+                action="drag_and_drop"
+            )
         loc_src, loc_dst = drag_and_drop_ui_elements(source, target, duration=duration)
         if not loc_src:
             return tool_fail(f'FAILED — could not locate source element "{source}".')
@@ -2491,6 +2729,23 @@ def _execute_tool_impl(tool_name, arguments):
             return "Error: x and y coordinates are required."
         clicks = int(arguments.get("clicks", 1))
         button = str(arguments.get("button", "left")).lower()
+        if getattr(config, "ASSIST_MODE", False):
+            bx = max(0, int(x) - 40)
+            by = max(0, int(y) - 22)
+            highlight_item = [{"box": (bx, by, 80, 44), "text": f"Click ({x}, {y})", "score": 1.0}]
+            try:
+                from tools import overlay as _overlay
+                _overlay.show_highlights(highlight_item, duration=6.0, move_ghost=True)
+            except Exception:
+                try:
+                    highlight_regions(highlight_item, duration=6.0)
+                except Exception:
+                    pass
+            return _attach_action_screenshot(
+                f"[Assist Mode] Pointed Ghost Cursor and highlighted coordinates ({x}, {y}) [button={button}, clicks={clicks}]. "
+                f"(Assist Mode is ON — physical clicking is disabled.)",
+                action="click_at"
+            )
         click_at_coordinates(x, y, clicks=clicks, button=button)
         return _attach_action_screenshot(f"Clicked directly at ({x}, {y}) [button={button}, clicks={clicks}].", action="click_at")
     elif tool_name == "zoom_and_read":
@@ -3741,6 +3996,117 @@ def _compact_context_locked(trigger: str = "manual") -> str:
     return "[Aster: Compaction complete. I remembered all the important stuff, but my RAM is breathing again.]"
 
 
+def _resolve_assist_mode_intent(text: str) -> Optional[Any]:
+    """Resolve user intent to toggle Assist Mode (Co-Pilot mode).
+
+    Returns:
+        True: enable Assist Mode
+        False: disable Assist Mode (Drive Mode)
+        "TOGGLE": toggle current Assist Mode state (for bare /assist command)
+        None: not an assist mode toggle request
+    """
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+
+    # Slash command: /assist [on|off|enable|disable|toggle|1|0|true|false]
+    slash_match = re.match(
+        r"^/assist(?:\s+(on|off|enable|disable|toggle|1|0|true|false))?\s*$",
+        raw,
+        re.IGNORECASE,
+    )
+    if slash_match:
+        arg = (slash_match.group(1) or "").lower()
+        if arg in ("on", "enable", "1", "true"):
+            return True
+        elif arg in ("off", "disable", "0", "false"):
+            return False
+        else:
+            return "TOGGLE"
+
+    # Normalize: strip punctuation except spaces, lowercase
+    norm = re.sub(r"[^a-z0-9\s]", " ", raw.lower())
+    norm = re.sub(r"\s+", " ", norm).strip()
+
+    # Strip conversational filler prefixes/suffixes (e.g. "please", "can you", "aster")
+    norm = re.sub(r"^(?:aster\s+)?(?:please\s+)?(?:can\s+you\s+|could\s+you\s+)?", "", norm).strip()
+    norm = re.sub(r"\s+please\s*$", "", norm).strip()
+
+    # Normalize common phonetic / typing misspellings of 'mode' (e.g. "mide", "mod", "mde")
+    norm = re.sub(r"\b(?:mide|mod|mde|moe)\b", "mode", norm)
+
+    on_patterns = {
+        "turn on assist mode",
+        "turn on the assist mode",
+        "turn assist mode on",
+        "enable assist mode",
+        "enable the assist mode",
+        "assist mode on",
+        "turn on assist",
+        "enable assist",
+        "activate assist",
+        "assist on",
+        "switch on assist mode",
+        "switch on the assist mode",
+        "switch assist mode on",
+        "switch to assist mode",
+        "switch to the assist mode",
+        "activate assist mode",
+        "activate the assist mode",
+        "start assist mode",
+        "assist mode",
+        "turn on copilot mode",
+        "turn on co pilot mode",
+        "turn on co pilot",
+        "turn on copilot",
+        "copilot mode on",
+        "co pilot mode on",
+        "enable copilot mode",
+        "enable co pilot mode",
+        "switch to copilot mode",
+        "switch to co pilot mode",
+    }
+    if norm in on_patterns:
+        return True
+
+    off_patterns = {
+        "turn off assist mode",
+        "turn off the assist mode",
+        "turn assist mode off",
+        "disable assist mode",
+        "disable the assist mode",
+        "assist mode off",
+        "turn off assist",
+        "disable assist",
+        "deactivate assist",
+        "assist off",
+        "switch off assist mode",
+        "switch off the assist mode",
+        "switch assist mode off",
+        "deactivate assist mode",
+        "deactivate the assist mode",
+        "stop assist mode",
+        "turn off copilot mode",
+        "turn off co pilot mode",
+        "turn off co pilot",
+        "turn off copilot",
+        "copilot mode off",
+        "co pilot mode off",
+        "disable copilot mode",
+        "disable co pilot mode",
+        "switch to drive mode",
+        "switch to the drive mode",
+        "turn on drive mode",
+        "activate drive mode",
+        "drive mode on",
+        "drive mode",
+    }
+    if norm in off_patterns:
+        return False
+
+    return None
+
+
 def process_user_input(user_text, status_callback=None):
     global messages, _turn_count
     _raw_user_text_for_log = user_text  # pristine snapshot, before mood tags/offers mutate it
@@ -3776,11 +4142,41 @@ def process_user_input(user_text, status_callback=None):
             print("[Aster Internal: Consolidation complete.]")
         return "[Aster: bet. i just scanned our whole chat and locked any new facts about u into my long-term memory vault. what are we doing next? \U0001F440]"
 
+    # Deterministic Assist Mode fast-path interception
+    assist_intent = _resolve_assist_mode_intent(str(user_text))
+    if assist_intent is not None:
+        if assist_intent == "TOGGLE":
+            assist_target = not bool(getattr(config, "ASSIST_MODE", False))
+        else:
+            assist_target = bool(assist_intent)
+        set_assist_mode(assist_target)
+        if assist_target:
+            resolution = (
+                "Assist Mode is now enabled, Sir. The Jarvis Cyan Ghost Cursor is at your service. "
+                "(Co-Pilot active: pointing & highlighting only; physical mouse and keyboard actions are disabled.)"
+            )
+        else:
+            resolution = (
+                "Assist Mode is now disabled, Sir. Switched back to Drive Mode — "
+                "full physical mouse and keyboard automation are active."
+            )
+        with config.brain_lock:
+            messages.append({"role": "user", "content": user_text})
+            messages.append({"role": "assistant", "content": resolution})
+            messages = trim_memory(messages)
+        log_raw_turn(_raw_user_text_for_log, resolution)
+        return resolution
+
     # Count real user turns (not system nudges or slash commands).
     if not str(user_text).startswith("[System Internal"):
         _turn_count += 1
 
     _lower_user = str(user_text).lower()
+    if "assist mode" in _lower_user or "/assist" in _lower_user or "copilot mode" in _lower_user or "drive mode" in _lower_user:
+        if re.search(r"\b(?:turn\s+on|enable|activate|start)\s+(?:the\s+)?(?:assist|copilot|co\s+pilot)\s+mode\b", _lower_user) or re.search(r"\b(?:assist|copilot|co\s+pilot)\s+mode\s+on\b", _lower_user):
+            set_assist_mode(True)
+        elif re.search(r"\b(?:turn\s+off|disable|deactivate|stop)\s+(?:the\s+)?(?:assist|copilot|co\s+pilot)\s+mode\b", _lower_user) or re.search(r"\b(?:assist|copilot|co\s+pilot)\s+mode\s+off\b", _lower_user) or "switch to drive mode" in _lower_user:
+            set_assist_mode(False)
 
     # [ARCHIVED/DISABLED OUTBOUND BOT RELAY - OPTION B]
     # All outbound Discord messaging is handled via desktop GUI. Inbound DM listener remains active.
@@ -3966,6 +4362,7 @@ def process_user_input(user_text, status_callback=None):
                             f'mentioning the gist ({_relay_payload!r}). If he confirms, call '
                             f'send_discord_message with target_name="{_relay_target}" and confirm=true.'
                         )})
+                _emit_overlay_state("thinking", "Thinking...")
                 response_msg = _execute_llm_completion(
                     messages=eval_msgs,
                     temperature=config.LLM_TOOL_TEMPERATURE,
@@ -4082,6 +4479,7 @@ def process_user_input(user_text, status_callback=None):
                                 f"[SYS] Executing {tool_name} {_stream_preview(args_preview, max_len=140)}"
                             )
                             publish_sentiment("working")
+                            _emit_overlay_state(*_friendly_tool_overlay_label(tool_name, tool_arguments))
                             tools_executed = True
                             if tool_name in ("research", "browse_web"):
                                 research_executed = True
@@ -4089,7 +4487,7 @@ def process_user_input(user_text, status_callback=None):
                             if _is_explicit_send_command(user_text) and tool_name in ("press_key", "smart_type", "smart_click", "type_text"):
                                 if not _as_bool(tool_arguments.get("confirm_send")):
                                     tool_arguments["confirm_send"] = True
-                            if tool_name in ("type_text", "smart_type", "smart_click") and not _gui_window_focused_this_turn:
+                            if tool_name in ("type_text", "smart_type") and not _gui_window_focused_this_turn:
                                 tool_arguments["_unfocused_turn_start"] = True
                             print(f'[TOOL DEBUG] Executing tool: {tool_name}')
                             print(f'[TOOL DEBUG] Tool arguments: {tool_arguments}')
@@ -4267,6 +4665,7 @@ def process_user_input(user_text, status_callback=None):
                             _ex_ok = True
                             _lg_block_count += 1
                         else:
+                            _emit_overlay_state(*_friendly_tool_overlay_label(_ex_name, _ex_args))
                             tools_executed = True
                             if _ex_name in ("research", "browse_web"):
                                 research_executed = True
@@ -4275,7 +4674,7 @@ def process_user_input(user_text, status_callback=None):
                             if _is_explicit_send_command(user_text) and _ex_name in ("press_key", "smart_type", "smart_click", "type_text"):
                                 if not _as_bool(_ex_args.get("confirm_send")):
                                     _ex_args["confirm_send"] = True
-                            if _ex_name in ("type_text", "smart_type", "smart_click") and not _gui_window_focused_this_turn:
+                            if _ex_name in ("type_text", "smart_type") and not _gui_window_focused_this_turn:
                                 _ex_args["_unfocused_turn_start"] = True
 
                             print(f'[TOOL DEBUG] Executing chained tool: {_ex_name}')
@@ -4566,6 +4965,10 @@ def process_user_input(user_text, status_callback=None):
             final_response = f"Error: {e}"
             _turn_outcome = "error"
         finally:
+            if getattr(config, "ASSIST_MODE", False):
+                _emit_overlay_state("assist", "✦ Aster • ASSIST", "Assist Mode Active")
+            else:
+                _emit_overlay_state("idle", "Aster")
             awareness.release_brain()
             awareness.mark_observations_surfaced()
             try:

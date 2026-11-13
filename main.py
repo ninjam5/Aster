@@ -436,6 +436,36 @@ if config.bot:
         result = _awareness.set_initiative(args[1])
         config.bot.reply_to(message, result)
 
+    @config.bot.message_handler(commands=['assist'])
+    def handle_assist_command(message):
+        if message.chat.id != config.AUTHORIZED_CHAT_ID:
+            config.bot.reply_to(message, "Unauthorized user. Access denied.")
+            return
+        args = message.text.split()
+        if len(args) > 1 and args[1].lower() == "on":
+            config.ASSIST_MODE = True
+            try:
+                from tools import overlay as _overlay
+                _overlay.set_assist_mode_badge(True)
+                _overlay.set_island_state("assist", "Assist Mode Active", "Point & Highlight Only", auto_idle_sec=3.5)
+            except Exception:
+                pass
+            config.bot.reply_to(message, "[Aster Assist Mode: ACTIVE. Co-Pilot Ghost Cursor will point and highlight without touching your mouse or keyboard.]")
+        elif len(args) > 1 and args[1].lower() == "off":
+            config.ASSIST_MODE = False
+            try:
+                from tools import overlay as _overlay
+                _overlay.set_assist_mode_badge(False)
+                _overlay.set_island_state("idle", "Drive Mode Active", auto_idle_sec=3.0)
+                _overlay.clear_highlights()
+            except Exception:
+                pass
+            config.bot.reply_to(message, "[Aster Assist Mode: INACTIVE. Returned to autonomous Drive Mode.]")
+        else:
+            current = getattr(config, "ASSIST_MODE", False)
+            status_str = "ACTIVE" if current else "INACTIVE"
+            config.bot.reply_to(message, f"[Aster Assist Mode: {status_str}. Usage: /assist <on|off>]")
+
     @config.bot.message_handler(commands=['note'])
     def handle_note_command(message):
         if message.chat.id != config.AUTHORIZED_CHAT_ID:
@@ -458,9 +488,31 @@ if config.bot:
             config.bot.reply_to(message, "[Aster: Usage: /find <thing on screen>]")
             return
         goal = parts[1].strip()
-        from tools.vision import locate_ui_elements_boxed
+        from tools.vision import (
+            locate_ui_elements_boxed,
+            _qwen_vision_locate_boxes,
+            AUTHENTIC_LAUNCHER_TYPES,
+            STATIC_TEXT_TYPES,
+            is_launcher_or_desktop_target,
+        )
         from tools.assist import highlight_regions
+
         matches = locate_ui_elements_boxed(goal)
+
+        # Fall through to vision grounding when searching for desktop/screen elements
+        # if UIA returned zero authentic launcher controls or only static chat/document text
+        is_screen_search = is_launcher_or_desktop_target(goal)
+        if matches and (is_screen_search or all(m.get("type") in STATIC_TEXT_TYPES for m in matches)):
+            has_launcher = any(
+                m.get("type") in AUTHENTIC_LAUNCHER_TYPES or m.get("source") == "qwen-vision"
+                for m in matches
+            )
+            if not has_launcher:
+                print(f"[Find] /find '{goal}': UIA returned non-launcher/static text; falling through to Qwen vision boxes.")
+                vision_matches = _qwen_vision_locate_boxes(goal)
+                if vision_matches:
+                    matches = vision_matches
+
         if not matches:
             config.bot.reply_to(message, f'[Aster: Could not find "{goal}" on screen.]')
             return
@@ -667,6 +719,14 @@ def start_background_services():
     # Start PolyStrata health watchdog (alerts + capped auto-restart)
     from tools import health_watchdog as _health_watchdog
     threading.Thread(target=_health_watchdog.health_watchdog_daemon, daemon=True, name="health-watchdog").start()
+
+    # Start Overlay daemon (Top Dynamic Island + Ghost Cursor)
+    if getattr(config, "OVERLAY_ENABLED", True):
+        try:
+            from tools import overlay as _overlay
+            _overlay.start_overlay_daemon()
+        except Exception as _ov_err:
+            print(f"[Aster Overlay] Daemon failed to start: {_ov_err}")
 
     # Start Aster-UI Vite dev server (http://localhost:5173)
     _ui_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Aster-UI")

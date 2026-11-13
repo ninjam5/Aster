@@ -346,13 +346,16 @@ def test_type_text_blocks_telegram_self_chat_and_unfocused_turn_start(monkeypatc
     assert copied == ["aloha bald human"]
 
 
-def test_smart_type_and_smart_click_block_telegram_self_chat_and_unfocused_turn_start(monkeypatch):
-    """Verify smart_type and smart_click block execution when Aster_Local control chat is foreground or when called unfocused at turn start."""
+def test_smart_type_blocks_telegram_self_chat_and_smart_click_unblocked(monkeypatch):
+    """Verify smart_type blocks execution when Aster_Local is foreground or unfocused, but smart_click is unblocked."""
     import core.brain as brain
     clicks = []
     monkeypatch.setattr(brain.pyautogui, "click", lambda *a, **kw: clicks.append(a))
     monkeypatch.setattr(brain, "invalidate_screen_cache", lambda: None)
     monkeypatch.setattr(brain, "locate_ui_element_ex", lambda g: {"x": 100, "y": 100, "source": "test", "text": g, "score": 1.0})
+    monkeypatch.setattr(brain, "capture_screen_small_gray", lambda: b"gray")
+    monkeypatch.setattr(brain, "screens_differ", lambda a, b: False)
+    monkeypatch.setattr(brain, "_attach_action_screenshot", lambda text, action="": text)
 
     # 1. smart_type blocked when Aster_Local is foreground
     monkeypatch.setattr(brain, "get_foreground_window_title", lambda: "Aster_Local")
@@ -368,19 +371,19 @@ def test_smart_type_and_smart_click_block_telegram_self_chat_and_unfocused_turn_
     assert "start of a new turn before focusing" in str(res2)
     assert not clicks
 
-    # 3. smart_click blocked when Aster_Local is foreground
+    # 3. smart_click is NOT blocked when Aster_Local is foreground (allows focusing target app via click)
     monkeypatch.setattr(brain, "get_foreground_window_title", lambda: "Aster_Local")
-    res3 = brain.execute_tool("smart_click", {"goal": "submit button"})
-    assert "FAILED — BLOCKED" in str(res3)
-    assert "your own Telegram control chat" in str(res3)
-    assert not clicks
+    clicks.clear()
+    res3 = brain.execute_tool("smart_click", {"goal": "settings icon"})
+    assert "FAILED — BLOCKED" not in str(res3)
+    assert len(clicks) == 1
 
-    # 4. smart_click blocked when _unfocused_turn_start=True
+    # 4. smart_click is NOT blocked when _unfocused_turn_start=True
     monkeypatch.setattr(brain, "get_foreground_window_title", lambda: "Discord")
-    res4 = brain.execute_tool("smart_click", {"goal": "submit button", "_unfocused_turn_start": True})
-    assert "FAILED — BLOCKED" in str(res4)
-    assert "start of a new turn before focusing" in str(res4)
-    assert not clicks
+    clicks.clear()
+    res4 = brain.execute_tool("smart_click", {"goal": "settings icon", "_unfocused_turn_start": True})
+    assert "FAILED — BLOCKED" not in str(res4)
+    assert len(clicks) == 1
 
 
 # ============================================================================

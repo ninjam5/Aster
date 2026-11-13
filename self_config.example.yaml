@@ -121,6 +121,22 @@ vision:
   # Max width (px) for screenshots sent to the vision model; 0 = full resolution.
   screenshot_max_width: 1280
 
+overlay:
+  # Desktop Companion Overlay & Humanized Motor (Clicky Integration)
+  # Renders an always-on-top, click-through HUD companion with a glowing Jarvis Cyan (#00F0FF) palette.
+  enabled: true                  # Master switch for companion overlay and visual feedback
+  assist_mode: false             # Assist mode: dims screen and highlights located bounding boxes for human guidance
+  top_island: true               # Dynamic top island bar showing Aster's live status/activity
+  idle_auto_hide: false          # Automatically fade out the top island when Aster is idle (false keeps sleek mini-pill docked)
+  idle_hide_seconds: 15.0        # Seconds of idle inactivity before fading out (if idle_auto_hide is true)
+  ghost_cursor: true             # Show an animated ghost cursor indicating Aster's current focal point
+  exclude_from_capture: true     # Exclude overlay window from screen capture/screenshots (WDA_EXCLUDEFROMCAPTURE)
+  accent_color: "#00F0FF"        # Signature Jarvis Cyan glow color
+  smooth_mouse: true             # Humanized smooth mouse trajectories via cubic ease-out Bezier arcs
+  smooth_mouse_duration: 0.28    # Baseline duration (seconds) for mouse flight (~400px nominal)
+  human_typing: true             # Hybrid natural typing: human cadence typing for short ASCII text, clipboard paste for large/unicode
+  human_typing_max_chars: 80     # Max character count for cadence typing; longer strings paste instantly
+
 integrations:
   # Intended state. Live availability is reported by tools/self_knowledge.py
   # (which reads SPOTIFY_AVAILABLE / TELEGRAM_AVAILABLE / etc. from config).

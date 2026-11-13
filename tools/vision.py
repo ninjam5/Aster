@@ -671,7 +671,7 @@ def _qwen_vision_locate_boxes(goal: str, b64_img: str | None = None) -> list[dic
     """Locate all visible instances of `goal` on screen as logical-pixel boxes."""
     try:
         if b64_img is None:
-            b64_img = capture_screen_base64()
+            b64_img = capture_screen_base64(max_width=0)
         if not b64_img:
             return []
 
@@ -807,6 +807,95 @@ def _qwen_vision_locate_boxes(goal: str, b64_img: str | None = None) -> list[dic
         return []
 
 
+AUTHENTIC_LAUNCHER_TYPES = {
+    "ListItemControl",
+    "ButtonControl",
+    "ToolBarControl",
+    "MenuItemControl",
+    "HyperlinkControl",
+    "ImageControl",
+    "TreeItemControl",
+}
+
+STATIC_TEXT_TYPES = {
+    "TextControl",
+    "StaticText",
+    "DocumentControl",
+}
+
+LAUNCHER_TARGET_KEYWORDS = {
+    "icon", "app", "application", "shortcut", "launcher", "desktop", "screen"
+}
+
+DESKTOP_TARGET_KEYWORDS = {"desktop", "wallpaper"}
+DESKTOP_TARGET_PHRASES = ("on desktop", "on the desktop", "desktop icon", "desktop shortcut", "desktop app")
+
+
+def is_desktop_target(goal: str) -> bool:
+    """Return True if goal specifically targets the Windows desktop or wallpaper."""
+    if not goal:
+        return False
+    g = goal.lower()
+    if any(p in g for p in DESKTOP_TARGET_PHRASES):
+        return True
+    words = set(re.findall(r"[a-z0-9']+", g))
+    return bool(words & DESKTOP_TARGET_KEYWORDS)
+
+
+TASKBAR_TARGET_PHRASES = (
+    "taskbar", "task bar", "system tray", "systray", "tray",
+    "start button", "start menu", "notification area", "action center", "clock",
+)
+TASKBAR_TARGET_KEYWORDS = {"taskbar", "systray"}
+
+
+def is_taskbar_target(goal: str) -> bool:
+    """Return True if goal targets the Windows taskbar, start button, or system tray."""
+    if not goal:
+        return False
+    g = goal.lower()
+    if any(p in g for p in TASKBAR_TARGET_PHRASES):
+        return True
+    words = set(re.findall(r"[a-z0-9']+", g))
+    return bool(words & TASKBAR_TARGET_KEYWORDS) or ("start" in words and "button" in words)
+
+
+def is_launcher_or_desktop_target(goal: str) -> bool:
+    """Return True if goal asks for an icon, app, shortcut, launcher, desktop, or screen element."""
+    if not goal:
+        return False
+    words = set(re.findall(r"[a-z0-9']+", goal.lower()))
+    return bool(words & LAUNCHER_TARGET_KEYWORDS)
+
+
+def _is_acceptable_uia_result(result: dict | None, goal: str) -> bool:
+    """Validate whether a UIA match is trustworthy or should fall through to Qwen Vision Grounding.
+
+    Fallthrough conditions:
+    1. If a desktop target is requested and control_source is explicitly from an active window (not desktop).
+    2. If an icon/app/desktop target is requested and the match is NOT an authentic OS launcher control
+       (e.g., UIA returned static text or chat bubbles).
+    3. If the match is static text with low confidence (score < 0.85).
+    """
+    if not result:
+        return False
+    res_type = result.get("type", "")
+    score = float(result.get("score", 0.0))
+    ctrl_source = result.get("control_source") or result.get("source", "uia")
+
+    if is_desktop_target(goal) and ctrl_source in ("window", "active_window", "foreground", "telegram"):
+        return False
+
+    is_launcher_req = is_launcher_or_desktop_target(goal)
+    if is_launcher_req and res_type not in AUTHENTIC_LAUNCHER_TYPES:
+        return False
+
+    if res_type in STATIC_TEXT_TYPES and score < 0.85:
+        return False
+
+    return True
+
+
 def locate_ui_element_ex(goal: str) -> dict | None:
     """Locate a UI element by natural language description — DOM, UIA, or Qwen Vision Grounding.
 
@@ -817,6 +906,12 @@ def locate_ui_element_ex(goal: str) -> dict | None:
     Returns {"x", "y", "source", "text", "score", ...} in logical pixels, or None.
     `source` is one of dom-win | uia | qwen-vision.
     """
+    try:
+        from tools import overlay as _overlay
+        _overlay.set_island_state("locating", f"Locating '{goal[:34]}'...")
+    except Exception:
+        pass
+
     # Track -1 (DOM motor, Stage 1): role-aware UIA shortlist + exact-match
     # fallback over ONE shared walk. Off by default; on a miss the exact-match
     # pass reuses the same candidates so Track 0 never walks the tree twice.
@@ -826,12 +921,12 @@ def locate_ui_element_ex(goal: str) -> dict | None:
         if getattr(_config, "USE_DOM_MOTOR", False):
             from tools.dom import windows_locate_cached
             result, raw_nodes, desk = windows_locate_cached(goal)
-            if result:
+            if result and _is_acceptable_uia_result(result, goal):
                 return result
             try:
                 from tools.uia import uia_locate_candidates
                 result = uia_locate_candidates(goal, raw_nodes, desk)
-                if result:
+                if result and _is_acceptable_uia_result(result, goal):
                     return result
                 if raw_nodes or desk:
                     uia_done = True  # the tree was already walked this call
@@ -846,7 +941,11 @@ def locate_ui_element_ex(goal: str) -> dict | None:
             from tools.uia import uia_locate
             result = uia_locate(goal)
             if result:
-                return result
+                if _is_acceptable_uia_result(result, goal):
+                    return result
+                print(f"[Locator] UIA match {result.get('text')!r} [{result.get('type')}] "
+                      f"rejected for goal {goal!r} (low-confidence static text or zero authentic launcher controls); "
+                      f"falling through to Qwen vision.")
         except Exception as e:
             print(f'[Locator] UIA track unavailable: {e}')
 
@@ -868,6 +967,12 @@ def locate_ui_elements_boxed(goal: str, threshold: float = 0.5) -> list[dict]:
     to Direct Qwen 3.6 Vision Grounding (`_qwen_vision_locate_boxes`).
     Returns [{"box": (left, top, width, height), "score": ..., "text": ...}, ...].
     """
+    try:
+        from tools import overlay as _overlay
+        _overlay.set_island_state("locating", f"Locating '{goal[:34]}'...")
+    except Exception:
+        pass
+
     # Track 0: Check Windows UIA accessibility tree for exact OS rectangles first
     try:
         from tools.uia import uia_nodes
@@ -880,14 +985,38 @@ def locate_ui_elements_boxed(goal: str, threshold: float = 0.5) -> list[dict]:
             scale_y = logical_h / desk_h if desk_h else 1.0
             parsed = parse_goal(goal)
             uia_threshold = max(0.75, float(threshold))
+
+            is_desktop_req = is_desktop_target(goal)
+            is_taskbar_req = is_taskbar_target(goal)
+            has_desktop_source = any(c.get("source") == "desktop" for c in candidates)
+
             uia_matches: list[dict] = []
             for cand in candidates:
-                score = score_text(cand.get("name", ""), parsed, cand.get("type", ""))
-                if parsed["type_hints"] and cand.get("type") in parsed["type_hints"]:
+                cand_source = cand.get("source", "uia")
+                # When goal is a desktop target, strictly accept only candidates from desktop listview
+                if is_desktop_req:
+                    if has_desktop_source and cand_source != "desktop":
+                        continue
+                    if not has_desktop_source and cand_source in ("window", "active_window", "foreground", "telegram"):
+                        continue
+
+                cand_type = cand.get("type", "")
+                score = score_text(cand.get("name", ""), parsed, cand_type)
+                if parsed["type_hints"] and cand_type in parsed["type_hints"]:
                     score = min(1.0, score + 0.05)
                 x1, y1, x2, y2 = cand["rect"]
                 cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
                 score *= spatial_weight(cx, cy, desk_w, desk_h, parsed["spatial"])
+
+                # Check if candidate is from taskbar (Shell_TrayWnd)
+                is_taskbar_cand = (
+                    cand_source == "taskbar"
+                    or cand.get("window") == "Shell_TrayWnd"
+                    or (desk_h > 0 and y1 >= desk_h - 60)
+                )
+                if is_taskbar_req and is_taskbar_cand:
+                    score = min(1.0, score + 0.25)
+
                 if score < uia_threshold:
                     continue
                 left = int(x1 * scale_x)
@@ -902,7 +1031,51 @@ def locate_ui_elements_boxed(goal: str, threshold: float = 0.5) -> list[dict]:
                     "score": round(score, 2),
                     "text": cand.get("name", goal),
                     "source": "uia",
+                    "control_source": cand_source,
+                    "type": cand_type,
+                    "is_taskbar": is_taskbar_cand,
                 })
+
+            if uia_matches:
+                if is_desktop_req:
+                    # Strict filtering for desktop listview candidates; prune internal window controls
+                    if has_desktop_source:
+                        desktop_matches = [m for m in uia_matches if m.get("control_source") == "desktop"]
+                        if not desktop_matches:
+                            print(f"[Locator] boxed (UIA): zero desktop candidates for {goal!r} "
+                                  f"(pruned {len(uia_matches)} internal application controls); "
+                                  f"falling through to Qwen vision.")
+                            uia_matches = []
+                        else:
+                            uia_matches = desktop_matches
+
+            if uia_matches and is_taskbar_req:
+                # Prioritize taskbar controls from Shell_TrayWnd
+                taskbar_matches = [m for m in uia_matches if m.get("control_source") == "taskbar" or m.get("is_taskbar")]
+                if taskbar_matches:
+                    uia_matches = taskbar_matches
+
+            if uia_matches:
+                is_launcher_req = is_launcher_or_desktop_target(goal)
+                if is_launcher_req:
+                    # Demand authentic OS launcher controls; prune any passive/static text
+                    authentic = [m for m in uia_matches if m.get("type") in AUTHENTIC_LAUNCHER_TYPES]
+                    if not authentic:
+                        print(f"[Locator] boxed (UIA): zero authentic launcher controls for {goal!r} "
+                              f"(found {len(uia_matches)} static/non-launcher matches); falling through to Qwen vision.")
+                        uia_matches = []
+                    else:
+                        uia_matches = authentic
+                else:
+                    # Prune low-confidence static text (< 0.85)
+                    uia_matches = [
+                        m for m in uia_matches
+                        if not (m.get("type") in STATIC_TEXT_TYPES and m.get("score", 0.0) < 0.85)
+                    ]
+                    if not uia_matches:
+                        print(f"[Locator] boxed (UIA): only low-confidence static text for {goal!r}; "
+                              f"falling through to Qwen vision.")
+
             if uia_matches:
                 uia_matches.sort(key=lambda m: m["score"], reverse=True)
                 deduped_uia: list[dict] = []
@@ -972,7 +1145,11 @@ def hover_ui_element(goal: str) -> dict | None:
     loc = locate_ui_element_ex(goal)
     if not loc:
         return None
-    pyautogui.moveTo(loc["x"], loc["y"], duration=0.2)
+    try:
+        from tools import motor as _motor
+        _motor.human_move_to(loc["x"], loc["y"])
+    except Exception:
+        pyautogui.moveTo(loc["x"], loc["y"], duration=0.2)
     time.sleep(0.3)
     return loc
 
@@ -985,11 +1162,19 @@ def drag_and_drop_ui_elements(source_goal: str, target_goal: str, duration: floa
     loc_dst = locate_ui_element_ex(target_goal)
     if not loc_dst:
         return loc_src, None
-    pyautogui.moveTo(loc_src["x"], loc_src["y"], duration=0.2)
+    try:
+        from tools import motor as _motor
+        _motor.human_move_to(loc_src["x"], loc_src["y"])
+    except Exception:
+        pyautogui.moveTo(loc_src["x"], loc_src["y"], duration=0.2)
     time.sleep(0.1)
     pyautogui.mouseDown(button="left")
     time.sleep(0.1)
-    pyautogui.moveTo(loc_dst["x"], loc_dst["y"], duration=max(0.2, duration))
+    try:
+        from tools import motor as _motor
+        _motor.human_move_to(loc_dst["x"], loc_dst["y"], duration=max(0.2, duration))
+    except Exception:
+        pyautogui.moveTo(loc_dst["x"], loc_dst["y"], duration=max(0.2, duration))
     time.sleep(0.1)
     pyautogui.mouseUp(button="left")
     time.sleep(0.3)
@@ -1003,7 +1188,11 @@ def click_at_coordinates(x: int, y: int, clicks: int = 1, button: str = "left") 
     cx = max(0, min(logical_w, int(x)))
     cy = max(0, min(logical_h, int(y)))
     btn = button.lower() if button.lower() in ("left", "right", "middle") else "left"
-    pyautogui.click(cx, cy, clicks=max(1, clicks), button=btn)
+    try:
+        from tools import motor as _motor
+        _motor.human_click(cx, cy, clicks=max(1, clicks), button=btn)
+    except Exception:
+        pyautogui.click(cx, cy, clicks=max(1, clicks), button=btn)
     invalidate_screen_cache()
     return True
 

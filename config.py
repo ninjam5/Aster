@@ -598,6 +598,22 @@ EMAIL_CHECKIN_COOLDOWN  = float(_cfg("integrations","google", "email_checkin", "
 # ============================================================================
 SYSTEM_PROMPT = str(_cfg("persona", "system_prompt", default="jarvis"))
 
+# ============================================================================
+# OVERLAY & HUMANIZED MOTOR (Clicky Integration)
+# ============================================================================
+OVERLAY_ENABLED = _is_enabled(_cfg("overlay", "enabled", default=True), default=True)
+ASSIST_MODE = _is_enabled(_cfg("overlay", "assist_mode", default=False), default=False)
+OVERLAY_TOP_ISLAND = _is_enabled(_cfg("overlay", "top_island", default=True), default=True)
+OVERLAY_IDLE_HIDE = _is_enabled(_cfg("overlay", "idle_auto_hide", default=False), default=False)
+OVERLAY_IDLE_HIDE_SECONDS = float(_cfg("overlay", "idle_hide_seconds", default=15.0))
+OVERLAY_GHOST_CURSOR = _is_enabled(_cfg("overlay", "ghost_cursor", default=True), default=True)
+OVERLAY_EXCLUDE_CAPTURE = _is_enabled(_cfg("overlay", "exclude_from_capture", default=True), default=True)
+OVERLAY_ACCENT_COLOR = str(_cfg("overlay", "accent_color", default="#00F0FF"))
+SMOOTH_MOUSE_ENABLED = _is_enabled(_cfg("overlay", "smooth_mouse", default=True), default=True)
+SMOOTH_MOUSE_DURATION = float(_cfg("overlay", "smooth_mouse_duration", default=0.28))
+HUMAN_TYPING_ENABLED = _is_enabled(_cfg("overlay", "human_typing", default=True), default=True)
+HUMAN_TYPING_MAX_CHARS = int(_cfg("overlay", "human_typing_max_chars", default=80))
+
 if not os.path.exists(VAULT_DIR):
     os.makedirs(VAULT_DIR)
 os.makedirs(VOICES_DIR, exist_ok=True)

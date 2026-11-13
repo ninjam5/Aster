@@ -3,8 +3,17 @@
   "tier": "desktop",
   "name": "Google Chrome",
   "match": {
-    "process_names": ["chrome.exe", "msedge.exe", "brave.exe"],
-    "title_keywords": ["google chrome", "chrome", "microsoft edge", "brave"],
+    "process_names": [
+      "chrome.exe",
+      "msedge.exe",
+      "brave.exe"
+    ],
+    "title_keywords": [
+      "google chrome",
+      "chrome",
+      "microsoft edge",
+      "brave"
+    ],
     "domains": []
   },
   "metadata": {
@@ -13,13 +22,14 @@
     "created_at": "2026-11-06",
     "last_verified": "2026-11-06",
     "consecutive_failures": 0,
-    "usage_count": 0
+    "usage_count": 1
   },
   "layout_summary": "Top strip: open tabs with '+' button immediately to the right of the last tab. Below tabs: Back, Forward, Refresh, centered Address/URL bar, extensions, and three-dots menu at far right.",
   "avoid_traps": [
     "Do NOT click the three vertical dots (kebab menu) at top-right to open a new tab — use press_key('ctrl+t') or click the '+' button on the tab bar.",
     "Do NOT click the current tab title to type a URL — use press_key('ctrl+l') to focus the address bar.",
     "When Chrome opens to the 'Who\\'s using Chrome?' profile picker, always click 'Mohamed Saeed'. Do not click guest or other user profiles.",
+    "When searching or navigating in Chrome, always use press_key('ctrl+l') then type_text(query, press_enter=true) — do NOT click 'Ask AI Mode' or buttons inside the webpage.",
     "When driving a visible desktop browser task, do NOT switch to browse_web — continue driving the active window with press_key/smart_click."
   ],
   "actions": {
